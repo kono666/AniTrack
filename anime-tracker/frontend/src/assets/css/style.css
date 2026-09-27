@@ -1,0 +1,37 @@
+/* ============================================================
+   🎬 AniTrack — Design System Entry Point
+   ============================================================
+
+   Layer cascade (first declared = lowest priority):
+     tokens → base → layout → components → utilities
+
+   Scoped component styles (unlayered) always override layers.
+   ============================================================ */
+
+@layer tokens, base, layout, components, utilities;
+
+/* ── Foundation ── */
+@import './tokens.css' layer(tokens);
+@import './base.css' layer(base);
+@import './layout.css' layer(layout);
+
+/* ── Component Patterns ── */
+@import './navbar.css' layer(components);
+@import './tab.css' layer(components);
+@import './anime-card.css' layer(components);
+@import './detail-hero.css' layer(components);
+@import './search-bar.css' layer(components);
+@import './track-buttons.css' layer(components);
+@import './episode-grid.css' layer(components);
+@import './stats.css' layer(components);
+@import './reviews.css' layer(components);
+@import './auth.css' layer(components);
+@import './empty-loading.css' layer(components);
+@import './pagination.css' layer(components);
+@import './tag-filter.css' layer(components);
+@import './admin.css' layer(components);
+@import './assistant.css' layer(components);
+
+/* ── Utilities (highest layered priority) ── */
+@import './interactions.css' layer(utilities);
+@import './skeleton.css' layer(utilities);

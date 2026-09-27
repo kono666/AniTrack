@@ -1,0 +1,8 @@
+/* ============================================================
+   🎬 AniTrack — Empty State & Loading
+   ============================================================ */
+
+.empty-state { text-align:center; padding:60px 20px; color:var(--text-muted); }
+.empty-state .icon { font-size:56px; margin-bottom:10px; }
+.empty-state p { font-size:15px; }
+.loading { text-align:center; padding:40px; color:var(--text-secondary); font-size:14px; }

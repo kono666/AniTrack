@@ -1,0 +1,27 @@
+# Anime Tracker - 生产环境 PostgreSQL
+# 启动: docker-compose up -d
+# 然后: mvn spring-boot:run -Dspring-boot.run.profiles=postgres
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: anitrack-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: anitrack
+      POSTGRES_USER: anitrack
+      POSTGRES_PASSWORD: anitrack
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anitrack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

@@ -1,0 +1,12 @@
+/* ============================================================
+   🎬 AniTrack — Track Status Buttons
+   ============================================================ */
+
+.track-status-btns { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+.track-status-btn {
+  padding:8px 18px; border:1.5px solid var(--border); border-radius:var(--radius-sm);
+  background:var(--card); cursor:pointer; font-size:13px; font-weight:500;
+  color:var(--text-secondary); transition:all var(--transition);
+}
+.track-status-btn:hover { border-color: var(--primary); color: var(--primary); }
+.track-status-btn.active { background:var(--primary); color:#fff; border-color:var(--primary); }

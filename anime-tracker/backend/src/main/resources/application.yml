@@ -1,0 +1,136 @@
+# ============================================================
+# Anime Tracker - 开发环境配置 (默认)
+# 启动方式: mvn spring-boot:run
+# 切换生产: mvn spring-boot:run -Dspring-boot.run.profiles=postgres
+# ============================================================
+server:
+  port: 8080
+  tomcat:
+    uri-encoding: UTF-8
+
+spring:
+  profiles:
+    active: dev
+
+---
+# ============================================================
+# DEV Profile: H2 文件数据库
+# ============================================================
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:h2:file:./data/anitrack;DB_CLOSE_DELAY=-1;MODE=MySQL;FILE_LOCK=NO
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+      connection-timeout: 10000
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+---
+# ============================================================
+# PROD Profile: PostgreSQL
+# 环境变量: DB_URL, DB_USER, DB_PASS
+# 启动: docker-compose up -d  (启动 PostgreSQL)
+#       mvn spring-boot:run -Dspring-boot.run.profiles=postgres
+# 首次运行后可将 ddl-auto 改为 validate 防止误操作
+# ============================================================
+spring:
+  config:
+    activate:
+      on-profile: postgres
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/anitrack}
+    username: ${DB_USER:anitrack}
+    password: ${DB_PASS:anitrack}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update  # 首次部署后可改为 validate
+    show-sql: false
+  h2:
+    console:
+      enabled: false
+
+---
+# ============================================================
+# 公共配置 (所有 profile 生效)
+# ============================================================
+jwt:
+  secret: ${JWT_SECRET:AniTrack-Dev-Only-Secret-Change-In-Production!!}
+
+bangumi:
+  api:
+    base-url: https://api.bgm.tv
+    user-agent: AniTrack/1.0 (https://github.com/anitrack)
+    subject-cache-hours: 24
+    episode-cache-hours: 24
+    search-cache-hours: 1
+    calendar-cache-hours: 1
+
+# ============================================================
+# 大模型接入 (AI 助手)
+# 密钥只从环境变量读取, 绝不写进代码库.
+#
+#   LLM_PROVIDER  anthropic | openai-compat | mock
+#   LLM_API_KEY   各厂商控制台申请
+#   LLM_BASE_URL  DeepSeek -> https://api.deepseek.com
+#                 Claude   -> https://api.anthropic.com
+#   LLM_MODEL     DeepSeek -> deepseek-chat
+#                 Claude   -> claude-sonnet-5
+#
+# 未配置密钥时应用仍可正常启动, 仅 AI 助手会提示需要配置.
+# ============================================================
+llm:
+  provider: ${LLM_PROVIDER:openai-compat}
+  base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+  api-key: ${LLM_API_KEY:}
+  model: ${LLM_MODEL:deepseek-chat}
+
+  # 单次回复最大 token
+  max-tokens: 2048
+  temperature: 0.7
+
+  # 单次对话最多工具调用轮数 (防死循环烧钱)
+  max-tool-rounds: 6
+
+  # 带入上下文的历史消息条数上限
+  history-limit: 20
+
+  # 单用户每分钟提问次数上限
+  rate-limit-per-minute: 10
+
+  # 全站每日模型调用次数上限 (0 = 不限).
+  # 公网 Demo 靠它兜住账单: 按人限流挡不住「很多人同时各问几次」.
+  # 一次提问最多触发 max-tool-rounds 次模型调用, 所以这个数字要按轮数算.
+  daily-call-budget: ${LLM_DAILY_BUDGET_CALLS:500}
+
+  # 单次提问最大字符数
+  max-input-length: 1000
+
+  # 单个工具返回结果的最大字符数 (超出截断, 防 token 爆炸)
+  max-tool-result-chars: 6000
+
+  connect-timeout: 10000
+  read-timeout: 90000

@@ -1,0 +1,28 @@
+{
+  "name": "anime-tracker-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fontsource/geist-sans": "^5.2.5",
+    "@phosphor-icons/vue": "^2.2.1",
+    "axios": "^1.6.2",
+    "pinia": "^2.1.7",
+    "vue": "^3.3.13",
+    "vue-router": "^4.2.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^4.5.2",
+    "@vue/test-utils": "^2.4.11",
+    "jsdom": "^29.1.1",
+    "vite": "^5.0.10",
+    "vitest": "^4.1.10"
+  }
+}

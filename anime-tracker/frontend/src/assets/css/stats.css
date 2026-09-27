@@ -1,0 +1,18 @@
+/* ============================================================
+   🎬 AniTrack — Stats Cards
+   ============================================================ */
+
+.stats-row { display:flex; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+.stat-card {
+  flex:1; min-width:120px; background:var(--card); padding:20px;
+  border-radius:var(--radius); text-align:center;
+  border:1px solid var(--card-border); transition:border-color var(--transition);
+}
+.stat-card:hover { border-color: var(--primary); }
+.stat-num { font-size:30px; font-weight:800; background:linear-gradient(135deg,var(--primary),var(--accent)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.stat-label { font-size:12px; color:var(--text-secondary); margin-top:4px; }
+
+@media (max-width: 768px) {
+  .stat-card { min-width:80px; padding:14px; }
+  .stat-num { font-size:22px; }
+}

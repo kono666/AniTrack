@@ -1,0 +1,67 @@
+/* ============================================================
+   🎬 AniTrack — Navbar (Glass)
+   ============================================================ */
+
+.navbar {
+  background: var(--navbar-bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--border);
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+.navbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.navbar-links { display: flex; gap: 4px; align-items: center; }
+.navbar-links a, .navbar-links button {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition);
+  border: none;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.navbar-links a:hover, .navbar-links button:hover,
+.navbar-links a.router-link-active { color: var(--text); background: var(--card-hover); }
+.nav-user { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--text); }
+
+.nav-btn {
+  padding: 8px 20px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+.nav-btn:hover { border-color: var(--primary); color: var(--primary); }
+.nav-btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.nav-btn.primary:hover { background: var(--primary-hover); }
+
+@media (max-width: 768px) {
+  .navbar { padding:0 16px; }
+  .navbar-links a, .navbar-links button { font-size:12px; padding:6px 10px; }
+}
+@media (max-width: 480px) {
+  .navbar-brand { font-size:16px; }
+}

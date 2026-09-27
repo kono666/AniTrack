@@ -1,0 +1,18 @@
+/* ============================================================
+   🎬 AniTrack — Tabs
+   ============================================================ */
+
+.tabs { display:flex; gap:2px; margin-bottom:24px; background:var(--card); border-radius:var(--radius); padding:4px; border:1px solid var(--card-border); }
+.tab {
+  flex:1; text-align:center; padding:10px 16px; cursor:pointer;
+  font-size:13px; font-weight:500; color:var(--text-secondary);
+  border-radius:calc(var(--radius) - 4px); transition:all var(--transition);
+  white-space:nowrap; border:none; background:none;
+}
+.tab:hover { color: var(--text); }
+.tab.active { background: var(--primary); color: #fff; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+
+@media (max-width: 768px) {
+  .tabs { flex-wrap:wrap; }
+  .tab { font-size:12px; padding:8px 10px; }
+}

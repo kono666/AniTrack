@@ -1,0 +1,12 @@
+/* ============================================================
+   🎬 AniTrack — Tag Filter
+   ============================================================ */
+
+.tag-filter { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:18px; }
+.tag-chip {
+  padding:6px 14px; border-radius:20px; font-size:12px; font-weight:500;
+  cursor:pointer; transition:all var(--transition);
+  background:var(--card); color:var(--text-secondary); border:1px solid var(--border);
+}
+.tag-chip:hover { border-color:var(--primary); color:var(--primary); }
+.tag-chip.active { background:var(--primary); color:#fff; border-color:var(--primary); }
