@@ -20,19 +20,35 @@ DROP TABLE IF EXISTS anime;
 DROP TABLE IF EXISTS `user`;
 
 CREATE TABLE `user` (
-    id          BIGINT          AUTO_INCREMENT  PRIMARY KEY,
-    username    VARCHAR(50)     NOT NULL UNIQUE  COMMENT '用户名',
-    password    VARCHAR(100)    NOT NULL         COMMENT '密码',
-    email       VARCHAR(100)    NULL             COMMENT '邮箱',
-    avatar      VARCHAR(255)    NULL             COMMENT '头像URL',
-    role        VARCHAR(10)     NOT NULL DEFAULT 'USER' COMMENT '角色: USER/ADMIN',
-    status      VARCHAR(10)     NOT NULL DEFAULT 'ACTIVE' COMMENT '状态: ACTIVE/DISABLED',
-    created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间'
+    id              BIGINT          AUTO_INCREMENT  PRIMARY KEY,
+    username        VARCHAR(50)     NOT NULL UNIQUE  COMMENT '用户名',
+    password        VARCHAR(100)    NOT NULL         COMMENT '密码 (BCrypt 哈希, 长度恒为 60)',
+    email           VARCHAR(100)    NULL UNIQUE      COMMENT '邮箱. 唯一; 允许 NULL 是为了兼容老数据',
+    avatar          VARCHAR(255)    NULL             COMMENT '头像URL',
+    role            VARCHAR(10)     NOT NULL DEFAULT 'USER' COMMENT '角色: USER/ADMIN',
+    status          VARCHAR(10)     NOT NULL DEFAULT 'ACTIVE' COMMENT '状态: ACTIVE/DISABLED',
+    failed_attempts INT             NULL             COMMENT '连续登录失败次数, 成功登录后清零',
+    locked_until    DATETIME        NULL             COMMENT '锁定截止时间, NULL 表示未锁定',
+    created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 
--- 初始管理员账号: admin / admin123
-INSERT INTO `user` (username, password, email, role, status) VALUES
-('admin', 'admin123', 'admin@anitrack.com', 'ADMIN', 'ACTIVE');
+-- 关于 email 的两个细节, 与实体类 User 上的注释一致:
+--   1. 唯一, 但不加 NOT NULL —— 表里存在历史空邮箱数据, 加非空约束会让迁移失败.
+--      「注册必须填邮箱」由 RegisterRequest 的 @NotBlank 在接口层保证.
+--   2. MySQL / PostgreSQL / H2 的唯一索引都不约束 NULL, 多个 NULL 可以共存.
+--
+-- 注意: 这里刻意不再提供 INSERT 初始管理员的语句.
+-- 曾经的写法是 INSERT ... ('admin', 'admin123', ...) —— 那有两个问题:
+--   一是密码在库里是明文, 而登录时用的是 BCrypt 比对, 这样插进去的账号根本登不进去;
+--   二是把一个默认密码写进了仓库.
+-- 现在的做法是应用启动时读 ADMIN_USERNAME / ADMIN_PASSWORD 自动创建 (见 DataInitializer),
+-- 密码经 BCrypt 哈希后入库, 且只在库里没有任何管理员时执行一次.
+
+-- 已存在的老库如何补上本轮新增的列与约束 (由 JPA 的 ddl-auto=update 自动完成列的部分,
+-- 但实测 update 模式**不会**补建 email 的唯一约束, 需要手工执行):
+--   ALTER TABLE `user` ADD COLUMN failed_attempts INT NULL;
+--   ALTER TABLE `user` ADD COLUMN locked_until DATETIME NULL;
+--   ALTER TABLE `user` ADD CONSTRAINT uk_user_email UNIQUE (email);
 
 -- 番剧表
 CREATE TABLE anime (

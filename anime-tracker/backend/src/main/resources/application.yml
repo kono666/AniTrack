@@ -49,6 +49,30 @@ spring:
       hibernate:
         format_sql: true
 
+# JWT 密钥 —— 开发环境兜底值.
+#
+# 这个字符串是公开写在仓库里的, 所以 JwtUtil 里配了一条硬校验:
+# 只要在非 dev profile 下检测到它, 应用会直接启动失败.
+#
+# 要防的不是「本地懒得配」, 而是「部署时忘了配 JWT_SECRET」——
+# 那种情况下服务会照常启动、功能一切正常, 但任何人都能用这个公开字符串
+# 伪造出管理员 token. 报错要留在启动时, 而不是留到被人打穿之后.
+jwt:
+  secret: ${JWT_SECRET:AniTrack-Dev-Only-Secret-Change-In-Production!!}
+
+# 首次启动的账号引导 (开发环境).
+#
+# 兜底值是为了满足「clone 下来直接就能跑」. 这些凭据是公开的, 所以只能出现在
+# 本地 —— 生产环境不提供任何兜底密码, 没配 ADMIN_PASSWORD 且库里还没有管理员
+# 时, 应用会拒绝启动.
+app:
+  bootstrap:
+    admin-username: ${ADMIN_USERNAME:admin}
+    admin-password: ${ADMIN_PASSWORD:admin123}
+    admin-email: ${ADMIN_EMAIL:}
+    # 演示账号 test 的密码公开写在 README 里, 只有本地才该存在
+    demo-user-enabled: true
+
 ---
 # ============================================================
 # PROD Profile: PostgreSQL
@@ -81,12 +105,83 @@ spring:
     console:
       enabled: false
 
+# JWT 密钥 —— 生产环境.
+#
+# 刻意不给任何兜底值: 没配 JWT_SECRET 时这里解析为空字符串,
+# JwtUtil 会直接抛异常让应用启动失败.
+# 宁可起不来, 也不要拿一个公开的密钥上线 ——
+# 「启动失败」是可恢复的故障, 「密钥泄露」不是.
+jwt:
+  secret: ${JWT_SECRET:}
+
+# 首次启动的账号引导 (生产环境).
+#
+# 刻意不给密码兜底值: 没配 ADMIN_PASSWORD 且库里还没有管理员时,
+# DataInitializer 会让应用直接启动失败 —— 一个公开的默认管理员密码
+# 比「起不来」危险得多.
+# 只在第一次部署 (库里还没有管理员) 时需要提供, 之后重启不再要求.
+#
+# 这里把四个值都重写了一遍, 而不是只写与 dev 不同的两个: 安全配置宁可
+# 重复也不要依赖继承 —— 继承关系一旦被改动, 「生产悄悄用上了开发密码」
+# 这种事不会报错, 只会静默发生, 正是这次要消灭的故障模式.
+app:
+  bootstrap:
+    admin-username: ${ADMIN_USERNAME:admin}
+    admin-password: ${ADMIN_PASSWORD:}
+    admin-email: ${ADMIN_EMAIL:}
+    # 演示账号的密码是公开的, 不该出现在生产
+    demo-user-enabled: false
+
 ---
 # ============================================================
 # 公共配置 (所有 profile 生效)
 # ============================================================
 jwt:
-  secret: ${JWT_SECRET:AniTrack-Dev-Only-Secret-Change-In-Production!!}
+  # 密钥有效期 (毫秒), 默认 7 天. 密钥本身在各 profile 内定义 (见上),
+  # 因为「开发可以兜底、生产必须显式提供」这个差异只能按环境表达.
+  expiration: 604800000
+
+# ============================================================
+# 跨域访问白名单
+#
+# 默认留空 —— 本项目按同源部署设计, 本来就不需要 CORS:
+#   开发: Vite 把 /api 代理给后端, 浏览器只跟 5173 说话
+#   生产: nginx 把 /api 反代给后端, 前后端同域
+# 白名单为空时后端完全不注册 CORS 过滤器, 少一层就少一处边界情况.
+#
+# 只有「前端确实要部署在另一个域名下」时才需要填, 例如:
+#   CORS_ALLOWED_ORIGINS=https://anitrack.example.com,https://www.anitrack.example.com
+#
+# 填之前请先确认前端也改了 —— 现在前端的 API 地址是写死的相对路径 /api,
+# 光配后端跨域是跑不通的, 必须先把前端改成可配置的绝对地址.
+#
+# 这里不给任何兜底值, 也不写成 * : 一个公开仓库里写死的 * 会让任何网站
+# 都能跨域调用本 API, 而它看起来只是行无害的配置.
+# ============================================================
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+  # ============================================================
+  # 登录爆破防护
+  #
+  # 连续失败 max-failures 次后锁定账号 lock-minutes 分钟; 中间成功登录一次即清零.
+  # 锁定期内即使密码正确也拒绝, 否则锁定就只是限速, 不是锁定.
+  #
+  # 为什么是「限时锁定」而不是「永久锁定」:
+  # 本项目没有找回密码、没有邮箱验证, 永久锁定意味着任何人只要知道你的用户名,
+  # 连试 5 次就能让你永久登不进来 —— 那是拒绝服务, 不是防护.
+  #
+  # 留成环境变量是为了公网部署时能收紧 (比如 3 次 / 60 分钟),
+  # 而本地开发想放宽时不用改代码重新打包.
+  #
+  #   LOGIN_MAX_FAILURES  默认 5
+  #   LOGIN_LOCK_MINUTES  默认 15
+  # ============================================================
+  security:
+    login:
+      max-failures: ${LOGIN_MAX_FAILURES:5}
+      lock-minutes: ${LOGIN_LOCK_MINUTES:15}
 
 bangumi:
   api:
