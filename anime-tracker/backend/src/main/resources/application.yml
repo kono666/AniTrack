@@ -21,7 +21,15 @@ spring:
     activate:
       on-profile: dev
   datasource:
-    url: jdbc:h2:file:./data/anitrack;DB_CLOSE_DELAY=-1;MODE=MySQL;FILE_LOCK=NO
+    # FILE_LOCK=NO 曾经写在这一行, 现已删除 —— 它在 MVStore 引擎 (H2 1.4+ 的默认引擎) 下
+    # 是个彻头彻尾的空操作. MVStore 在打开文件时就以排他模式加锁, 完全不受 FILE_LOCK 影响
+    # (官方 MVStore 文档原话: "When opening a store, the file is locked in exclusive mode,
+    # so that the file can only be changed from within one process"). 留着它反而给人
+    # 「这个库能被多个进程同时打开」的错觉, 而第二个进程实际只会撞上
+    # MVStoreException: The file is locked —— 我们在 data/anitrack.trace.db 里就抓到过这条.
+    # 真需要多进程访问应当改用 AUTO_SERVER=TRUE, 但 H2 官方不建议在生产用它,
+    # 本项目开发时也不需要 (内置的 /h2-console 走的是同一个连接池, 不是第二个进程).
+    url: jdbc:h2:file:./data/anitrack;DB_CLOSE_DELAY=-1;MODE=MySQL
     username: sa
     password:
     driver-class-name: org.h2.Driver
