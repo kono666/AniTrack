@@ -275,6 +275,24 @@ app:
     login:
       max-failures: ${LOGIN_MAX_FAILURES:5}
       lock-minutes: ${LOGIN_LOCK_MINUTES:15}
+    # ------------------------------------------------------------
+    # 注册 / 登录的按 IP 限流 (见 AuthRateLimiter).
+    #
+    # 上面那个 login.* 是**按账号**的纵向防护(盯着一个账号猛试会被锁);
+    # 这一节是**按 IP** 的横向防护 —— 拿一份用户名字典每个账号只试一次,
+    # 谁也锁不上, 只有按来源限流拦得住. 同时它也是 CPU 兜底: 每次登录
+    # 都要跑一次 BCrypt(约 100ms), 没有这一层, 一个脚本就能把 CPU 打满.
+    #
+    # 注意是「每个 IP」: NAT 后面的用户共享同一个出口 IP, 配额是大家一起用的,
+    # 所以数字给得比「一个人能试几次」宽. 公网部署若出现误伤, 调这两个环境变量
+    # 即可, 不必改代码重新打包.
+    #
+    #   REGISTER_RATE_LIMIT_PER_MINUTE  默认 5
+    #   LOGIN_RATE_LIMIT_PER_MINUTE     默认 10
+    # ------------------------------------------------------------
+    rate-limit:
+      register-per-minute: ${REGISTER_RATE_LIMIT_PER_MINUTE:5}
+      login-per-minute: ${LOGIN_RATE_LIMIT_PER_MINUTE:10}
 
 bangumi:
   api:
