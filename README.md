@@ -157,6 +157,7 @@ AniTrack-作品集/
 │   │   │   └── util/                  # 标签中英转换等工具
 │   │   ├── src/main/resources/
 │   │   │   ├── application.yml        # 多 profile 配置（dev / postgres）
+│   │   │   ├── db/migration/          # 表结构迁移脚本（h2 / postgres 两套方言，见设计要点 12）
 │   │   │   └── prompts/               # 各人格的系统提示词
 │   │   └── src/test/java/             # 单元与集成测试
 │   ├── frontend/                      # Vue 3 前端
@@ -166,7 +167,6 @@ AniTrack-作品集/
 │   │       ├── api/                   # 接口封装（含手写 SSE 流式解析）
 │   │       ├── stores/                # Pinia 状态
 │   │       └── router/                # 路由与权限守卫
-│   ├── database/                      # 建表脚本
 │   └── scripts/                       # 种子数据脚本与端到端验证脚本
 ├── .env.example                       # 环境变量模板（含大模型配置）
 ├── docker-compose.yml                 # PostgreSQL 服务
@@ -256,7 +256,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 ## 测试
 
 ```bash
-# 后端：单元测试 + 集成测试（161 个）
+# 后端：单元测试 + 集成测试（164 个）
 cd anime-tracker/backend
 mvn test
 
@@ -343,6 +343,30 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 
 邮箱改为**必填且唯一**，唯一性有两道关卡：`UserService.register()` 先查 `existsByEmail` 给出友好提示，数据库的 `UNIQUE` 索引才是并发下的最终防线——两个请求同时通过检查时只有一侧能写成功，另一侧撞上约束后被翻译成同一个 400 提示。邮箱在入库前统一 `trim` 并转小写，避免 `A@x.com` 与 `a@x.com` 绕过唯一性检查。
 
+**12. 表结构交给迁移脚本，启动时立刻校验**
+
+`ddl-auto` 已从 `update` 改成 `validate`：Hibernate 不再动表，只在启动时核对实体与库对不对得上，对不上就直接启动失败。表结构的唯一真相来源是 `backend/src/main/resources/db/migration/` 下的编号脚本，启动时由 Flyway 执行。
+
+这么改的原因很具体：`update` 只会加表、加列，**既不会加约束、也不会改已有列的类型**。「邮箱必填唯一」那次就是这样漏的——实体上加了 `unique = true`，代码全绿、服务照常启动，而库里的 `email` 上什么都没有，直到有人真去查库才发现。换成 `validate` 之后，同一类问题会在下一次启动时大声报错。
+
+| 决定 | 为什么 |
+| --- | --- |
+| H2 与 PG 各一套脚本，而不是一份通用 SQL | 方言差异都藏在细节里：无限长文本在 H2 是 `VARCHAR`、在 PG 是 `text`；`"user"` 是保留字必须加引号；时间精度与自增写法也各有讲究。写一份「两边都能跑」的脚本，结果往往是两边都别扭 |
+| 老库不重跑 V1，只记一条基线 | `baseline-on-migrate` + `baseline-version: 1`：Flyway 遇到「有表、但没有迁移历史」的库，只写一条「已到 1」的记录然后从 V2 开始跑；全新的空库才从 V1 老老实实建表。一套配置同时照顾新老库 |
+| V2 是「对齐老库」的收口脚本 | 里面每一步都写成可重复执行：给 `email` 补唯一约束、把 `rating` 的类型拼写改掉（见下）。新库也会执行到这里，所以幂等是硬要求 |
+| 约束与索引一律用可读名字 | 不再沿用 Hibernate 生成的 `UK_SB8BBOUER5WAK8VYIIY4PF2BX` 这类哈希名。`validate` 只比对表与列、不看约束名，改名是安全的，而排障时可读名字值千金 |
+
+**一个只有实测才会发现的坑**：`rating` 这一列，`DECIMAL(3,1)` 和 `NUMERIC(3,1)` 在 SQL 里是同一个类型，但两个驱动会**照着声明的名字**报 JDBC 类型码——H2 把 `DECIMAL(3,1)` 报成 3、把 `NUMERIC(3,1)` 报成 2，PostgreSQL 无论怎么写都报 2。Hibernate 的 `validate` 恰恰是拿类型码比对的，所以实体与两套脚本必须统一写成 `NUMERIC(3,1)`：写成 `DECIMAL` 会让开发库通过、生产库启动失败，正好是最难在本地发现的那类问题。
+
+另外两件维护时才需要知道的事：
+
+- **删掉或改名迁移脚本之后要 `mvn clean`**。Flyway 扫的是 classpath，`target/classes` 里的旧脚本还在，于是启动时报 `Found more than one migration with version N`——这条信息里没有任何线索指向「构建残留」，自己踩过一次。
+- Flyway 的版本跟着 Spring Boot 走（3.2.0 → 9.22.3），它声明支持到 H2 2.2.220 与 PostgreSQL 15，而本项目用的是 H2 2.2.224 与 PG 16：实测都能跑通，只是每次启动会打一条 `Flyway upgrade recommended`，升到 Spring Boot 3.3（带 Flyway 10）后消失。
+
+`MigrationScriptPairTest` 把「两套脚本必须成对」钉住了：校验文件名、版本号连续性、命名规则，并要求脚本只能放在方言子目录里（放在根目录会被静默忽略）。每加一列要写两遍，靠这条测试防止漏写一边。
+
+顺带删掉了 `database/schema.sql`：它是早期手写的 **MySQL 方言**建表脚本，项目实际只用 H2 与 PostgreSQL，留着就是第二个真相来源、而且会越差越远。原先写在里面的「老库请手工执行 ALTER TABLE」也随之作废——V2 已经把它自动化了。
+
 ---
 
 ## 已知限制
@@ -354,4 +378,4 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - 没有接入向量检索，助手回答依据的是数据库查询结果，不做相似度召回。
 - 关注、私信、动态等社交功能尚未实现。
 - 没有邮箱验证与找回密码流程，注册时填的邮箱目前只作为账号标识，尚不能用来收信。
-- **没有数据库迁移工具**：目前靠 JPA 的 `ddl-auto=update` 自动改表。它只在**新建表**时创建约束，对**已存在的表只补列、不补唯一索引**——本次给 `email` 加唯一约束时就撞上了这一点：迁移后的库里只有主键和 `username` 的唯一索引，`email` 上什么都没有。老库需要按 `database/schema.sql` 末尾的说明手工执行一次 `ALTER TABLE`。在引入 Flyway / Liquibase 之前，这类「代码改完了、库没跟上」的问题只能靠人工核对。
+- **表结构变更已交给 Flyway**（见设计要点 12）：脚本在 `db/migration/{h2,postgres}` 下，启动时自动执行并校验，`ddl-auto` 已从 `update` 改成 `validate`。仍然存在的限制：Flyway 版本跟着 Spring Boot 走（3.2.0 → 9.22.3），它声明支持的 H2 版本到 2.2.220、PostgreSQL 到 15，而本项目用的是 H2 2.2.224 与 PG 16——实测正常，只是每次启动会打一条「upgrade recommended」，升级 Spring Boot 后自然消失。
