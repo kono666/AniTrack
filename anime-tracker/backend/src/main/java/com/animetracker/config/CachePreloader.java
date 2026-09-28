@@ -1,7 +1,6 @@
 package com.animetracker.config;
 
 import com.animetracker.dto.BangumiDTO.*;
-import com.animetracker.entity.Anime;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.service.AnimeService;
 import com.animetracker.service.BangumiApiClient;
@@ -11,14 +10,15 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
-import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
 /**
  * 启动后静默从 Bangumi 拉取动漫数据到本地缓存。
  * 策略：用常见搜索词分批搜索，积累足够数据后首页即可走本地。
+ *
+ * <p>落库统一走 {@link AnimeService#upsertAnime}：这里原本有一份自己的
+ * {@code toAnime} 映射副本，与 {@code AnimeService} / {@code DataRefreshService}
+ * 里的那两份各不相同，season/status/rank 三个字段就是因为"要改四处"而一处都没改。
  */
 @Component
 public class CachePreloader {
@@ -68,7 +68,7 @@ public class CachePreloader {
                     if (resp != null && resp.getData() != null) {
                         for (SubjectDTO dto : resp.getData()) {
                             if (!animeRepo.existsById(dto.getId())) {
-                                animeService.saveAnimeWithTags(toAnime(dto));
+                                animeService.upsertAnime(dto);
                                 added++;
                             }
                         }
@@ -89,7 +89,7 @@ public class CachePreloader {
                     if (rankResp != null && rankResp.getData() != null) {
                         for (SubjectDTO dto : rankResp.getData()) {
                             if (!animeRepo.existsById(dto.getId())) {
-                                animeService.saveAnimeWithTags(toAnime(dto));
+                                animeService.upsertAnime(dto);
                                 added++;
                                 batchAdded++;
                             }
@@ -116,7 +116,7 @@ public class CachePreloader {
 
                     for (SubjectDTO dto : resp.getData()) {
                         if (!animeRepo.existsById(dto.getId())) {
-                            animeService.saveAnimeWithTags(toAnime(dto));
+                            animeService.upsertAnime(dto);
                             added++;
                         }
                     }
@@ -135,29 +135,4 @@ public class CachePreloader {
         });
     }
 
-    private Anime toAnime(SubjectDTO dto) {
-        Anime a = Anime.builder().id(dto.getId()).build();
-        a.setTitle(dto.getName());
-        a.setTitleCn(dto.getNameCn());
-        a.setSummary(dto.getSummary());
-        if (dto.getImages() != null) {
-            a.setCoverUrl(dto.getImages().getLarge() != null
-                    ? dto.getImages().getLarge()
-                    : dto.getImages().getCommon());
-        }
-        a.setDate(dto.getDate());
-        a.setPlatform(dto.getPlatform());
-        a.setTotalEpisodes(dto.getTotalEpisodes());
-        if (dto.getRating() != null) {
-            a.setRating(dto.getRating().getScore());
-            a.setRatingCount(dto.getRating().getTotal());
-        }
-        if (dto.getTags() != null) {
-            a.setTags(dto.getTags().stream()
-                    .map(TagDTO::getName)
-                    .collect(Collectors.joining(",")));
-        }
-        a.setCacheUpdatedAt(LocalDateTime.now());
-        return a;
-    }
 }

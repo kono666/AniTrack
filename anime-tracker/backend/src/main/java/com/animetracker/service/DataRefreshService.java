@@ -1,7 +1,6 @@
 package com.animetracker.service;
 
 import com.animetracker.dto.BangumiDTO.*;
-import com.animetracker.entity.Anime;
 import com.animetracker.repository.AnimeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,9 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 定时增量刷新动漫数据.
@@ -23,6 +20,12 @@ import java.util.stream.Collectors;
  *   3. 正在放送的番剧更新
  *
  * 所有操作仅追加/更新，不删除已有数据。
+ *
+ * <p>这里原本还有一份自己的 {@code toAnime} / {@code mergeUpdate} 映射副本,
+ * 现在全部改走 {@link AnimeService#upsertAnime} —— 落库映射只留一处.
+ * 原因见那个方法的注释: season/status/rank 三个字段正是因为映射有四份、
+ * 要改四处而一处都没改, 结果 470 行数据全是 NULL, 而按这三个字段筛选的
+ * 接口一直对外开着, 谁都不报错.
  */
 @Service
 public class DataRefreshService {
@@ -60,18 +63,11 @@ public class DataRefreshService {
                 if (resp != null && resp.getData() != null) {
                     for (SubjectDTO dto : resp.getData()) {
                         if (dto.getId() == null) continue;
-                        if (animeRepo.existsById(dto.getId())) {
-                            // 更新已有记录
-                            Anime existing = animeRepo.findById(dto.getId()).orElse(null);
-                            if (existing != null) {
-                                mergeUpdate(existing, dto);
-                                animeService.saveAnimeWithTags(existing);
-                                updated++;
-                            }
-                        } else {
-                            animeService.saveAnimeWithTags(toAnime(dto));
-                            added++;
-                        }
+                        // 先记下有没有, 只为了统计新增/更新这两个计数 ——
+                        // 落库本身统一走 upsertAnime (见该类顶部注释)
+                        boolean existed = animeRepo.existsById(dto.getId());
+                        animeService.upsertAnime(dto);
+                        if (existed) updated++; else added++;
                     }
                 }
                 Thread.sleep(400);
@@ -85,10 +81,12 @@ public class DataRefreshService {
                 if (rankResp != null && rankResp.getData() != null) {
                     for (SubjectDTO dto : rankResp.getData()) {
                         if (dto.getId() == null) continue;
-                        if (!animeRepo.existsById(dto.getId())) {
-                            animeService.saveAnimeWithTags(toAnime(dto));
-                            added++;
-                        }
+                        // 这一趟是"按名次浏览", 返回的 rating.rank 就是真实的榜单名次,
+                        // 也是 rank 这一列唯一的数据来源 —— 所以这里对已存在的行
+                        // 也要刷新(以前只插新的, 老数据的 rank 永远是 null).
+                        boolean existed = animeRepo.existsById(dto.getId());
+                        animeService.upsertAnime(dto);
+                        if (existed) updated++; else added++;
                     }
                     if (rankResp.getData().size() < 20) break;
                 }
@@ -105,14 +103,25 @@ public class DataRefreshService {
                     if (day.getItems() == null) continue;
                     for (var item : day.getItems()) {
                         try {
-                            if (!animeRepo.existsById(item.getId())) {
+                            if (animeRepo.existsById(item.getId())) {
+                                // 已有的行: 只用日历这一条记录刷新(air_date / rank /
+                                // "正在播"状态). 以前这里是直接跳过, 代价是老数据
+                                // 永远停在什么都没有的状态 —— 实测线上 470 行里
+                                // 145 行的 date 是 NULL, 而 date 为空会让 season 和
+                                // status 一起推不出来.
+                                animeService.upsertCalendarItem(item);
+                                updated++;
+                            } else {
+                                // 新条目先取一次详情(要简介、集数、标签这些日历不给的字段),
+                                // 再用日历条目的权威在播标记覆盖一次 status
                                 var detail = apiClient.getSubjectDetail(item.getId());
                                 if (detail != null && detail.getId() != null) {
-                                    animeService.saveAnimeWithTags(toAnime(detail));
+                                    animeService.upsertAnime(detail);
+                                    animeService.upsertCalendarItem(item);
                                     added++; calAdded++;
                                 }
+                                Thread.sleep(300); // 礼貌限速
                             }
-                            Thread.sleep(300); // 礼貌限速
                         } catch (Exception ex) { /* skip single item */ }
                     }
                 }
@@ -137,10 +146,9 @@ public class DataRefreshService {
                 if (resp == null || resp.getData() == null || resp.getData().isEmpty()) break;
                 for (SubjectDTO dto : resp.getData()) {
                     if (dto.getId() == null) continue;
-                    if (!animeRepo.existsById(dto.getId())) {
-                        animeService.saveAnimeWithTags(toAnime(dto));
-                        added++;
-                    }
+                    boolean existed = animeRepo.existsById(dto.getId());
+                    animeService.upsertAnime(dto);
+                    if (!existed) added++;
                 }
                 Thread.sleep(600);
             } catch (Exception e) { break; }
@@ -167,43 +175,4 @@ public class DataRefreshService {
         return kws.toArray(new String[0]);
     }
 
-    private void mergeUpdate(Anime a, SubjectDTO dto) {
-        a.setTitle(dto.getName());
-        if (dto.getNameCn() != null) a.setTitleCn(dto.getNameCn());
-        if (dto.getSummary() != null) a.setSummary(dto.getSummary());
-        if (dto.getDate() != null) a.setDate(dto.getDate());
-        if (dto.getPlatform() != null) a.setPlatform(dto.getPlatform());
-        if (dto.getTotalEpisodes() != null) a.setTotalEpisodes(dto.getTotalEpisodes());
-        if (dto.getRating() != null) {
-            a.setRating(dto.getRating().getScore());
-            a.setRatingCount(dto.getRating().getTotal());
-        }
-        if (dto.getTags() != null) {
-            a.setTags(dto.getTags().stream().map(TagDTO::getName).collect(Collectors.joining(",")));
-        }
-        a.setCacheUpdatedAt(LocalDateTime.now());
-    }
-
-    private Anime toAnime(SubjectDTO dto) {
-        Anime a = Anime.builder().id(dto.getId()).build();
-        a.setTitle(dto.getName());
-        a.setTitleCn(dto.getNameCn());
-        a.setSummary(dto.getSummary());
-        if (dto.getImages() != null) {
-            a.setCoverUrl(dto.getImages().getLarge() != null
-                    ? dto.getImages().getLarge() : dto.getImages().getCommon());
-        }
-        a.setDate(dto.getDate());
-        a.setPlatform(dto.getPlatform());
-        a.setTotalEpisodes(dto.getTotalEpisodes());
-        if (dto.getRating() != null) {
-            a.setRating(dto.getRating().getScore());
-            a.setRatingCount(dto.getRating().getTotal());
-        }
-        if (dto.getTags() != null) {
-            a.setTags(dto.getTags().stream().map(TagDTO::getName).collect(Collectors.joining(",")));
-        }
-        a.setCacheUpdatedAt(LocalDateTime.now());
-        return a;
-    }
 }

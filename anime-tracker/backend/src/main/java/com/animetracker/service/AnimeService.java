@@ -17,7 +17,9 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import com.animetracker.util.AnimeFields;
 import com.animetracker.util.TagTranslationUtil;
 
 import java.util.*;
@@ -142,7 +144,7 @@ public class AnimeService {
                 if (day.getItems() != null) {
                     for (CalendarItem item : day.getItems()) {
                         try {
-                            cacheCalendarItem(item);
+                            upsertCalendarItem(item);
                         } catch (Exception ignored) {}
                     }
                 }
@@ -159,12 +161,12 @@ public class AnimeService {
         if (cached.isPresent()) {
             return cached.get();
         }
-        // 本地没有，调 API
+        // 本地没有，调 API.
+        // 走 upsertAnime 而不是自己 save: 顺手把标签也写进 anime_tag
+        // (以前这条路径只存主表, 于是"点开过的番剧"在标签索引里是缺的).
         SubjectDTO dto = bangumiApiClient.getSubjectDetail(subjectId);
         if (dto != null) {
-            Anime anime = toAnimeEntity(dto);
-            anime.setCacheUpdatedAt(LocalDateTime.now());
-            return animeRepository.save(anime);
+            return upsertAnime(dto);
         }
         return null;
     }
@@ -232,12 +234,28 @@ public class AnimeService {
                         || season.equals(a.getSeason()))
                 .filter(a -> status == null || status.isEmpty()
                         || status.equals(a.getStatus()))
-                .sorted((a, b) -> "date".equals(sort)
-                        ? Comparator.<String>nullsLast(Comparator.naturalOrder())
-                        .compare(b.getDate(), a.getDate())
-                        : Integer.compare(
-                        a.getRank() != null ? a.getRank() : 9999,
-                        b.getRank() != null ? b.getRank() : 9999))
+                .sorted((a, b) -> {
+                    if ("date".equals(sort)) {
+                        String da = a.getDate();
+                        String db = b.getDate();
+                        // 缺播出日的排最后, 与下面 rank 的 9999 兜底同一个口径:
+                        // 「这个值不知道」不该排到「知道且最大」的前面.
+                        //
+                        // 这里原本是 nullsLast(...).compare(b, a) —— 内外两次"反过来"
+                        // 叠在一起, 净效果成了**缺日期的排最前**, 正好与意图相反.
+                        // 首页"最近更新"打开就是一屏没有日期的番.
+                        // 也刻意不写成 nullsLast().reversed(): reversed() 会把 null 的
+                        // 处理一起翻过去, 同一个坑再踩一遍. 写法与 getByTags 里那份
+                        // 保持一致, 免得两处口径再次分叉.
+                        if (da == null && db == null) return 0;
+                        if (da == null) return 1;
+                        if (db == null) return -1;
+                        return db.compareTo(da);
+                    }
+                    return Integer.compare(
+                            a.getRank() != null ? a.getRank() : 9999,
+                            b.getRank() != null ? b.getRank() : 9999);
+                })
                 .collect(Collectors.toList());
     }
 
@@ -344,55 +362,162 @@ public class AnimeService {
     private void cacheAll(List<SubjectDTO> dtos) {
         for (SubjectDTO dto : dtos) {
             if (dto.getId() == null) continue;
-            Anime entity = toAnimeEntity(dto);
-            saveAnimeWithTags(entity);
+            upsertAnime(dto);
         }
     }
 
-    private void cacheCalendarItem(CalendarItem item) {
-        if (!animeRepository.existsById(item.getId())) {
-            Anime a = Anime.builder().id(item.getId()).build();
-            a.setTitle(item.getName());
-            a.setTitleCn(item.getNameCn());
-            if (item.getImages() != null) {
-                a.setCoverUrl(item.getImages().getLarge() != null
-                        ? item.getImages().getLarge()
-                        : item.getImages().getCommon());
-            }
-            if (item.getRating() != null) {
-                a.setRating(item.getRating().getScore());
-                a.setRatingCount(item.getRating().getTotal());
-            }
-            a.setCacheUpdatedAt(LocalDateTime.now());
-            animeRepository.save(a);
-        }
-    }
-
-    private Anime toAnimeEntity(SubjectDTO dto) {
+    /**
+     * 把一个 Bangumi 条目写进本地库: 有就刷新, 没有就新建.
+     *
+     * <p>这是**唯一**一处 Anime ←→ DTO 的映射. 在这之前它有四份副本
+     * ({@code toAnimeEntity}、{@code CachePreloader.toAnime}、
+     * {@code DataRefreshService.toAnime} 和 {@code mergeUpdate}), 后果不是"代码重复"
+     * 这么抽象 —— season/status/rank 三个字段就是因为要改四处而一处都没改,
+     * 470 行数据全是 NULL, 而按这三个字段筛选的接口一直对外开着.
+     * 收敛成一处之后, 再加字段只有这一个地方要动.
+     *
+     * <p>更新走的是"先 findById 拿到受管实体再改", 不是"造一个带 id 的游离实体
+     * 丢给 save": 后者在 id 非空时走 merge, 会把实体上**没有赋值**的字段
+     * 一并写成 null(merge 拷贝全部映射字段, 包括 null), 于是一次按关键词的搜索
+     * 同步就能把之前辛苦填上的 season/status 抹掉. 这类问题不会报错, 只会
+     * 让字段过一阵子又变回 NULL.
+     */
+    @Transactional
+    public Anime upsertAnime(SubjectDTO dto) {
         Anime a = animeRepository.findById(dto.getId())
                 .orElse(Anime.builder().id(dto.getId()).build());
+        applySubject(a, dto);
+        saveAnimeWithTags(a);
+        return a;
+    }
 
-        a.setTitle(dto.getName());
-        a.setTitleCn(dto.getNameCn());
-        a.setSummary(dto.getSummary());
+    /**
+     * 把 DTO 上的字段拷到实体上. 每个字段都"有值才覆盖" ——
+     * Bangumi 的搜索结果与详情接口返回的字段并不一致(搜索不带部分字段),
+     * 无条件覆盖会在每次同步时把之前拿到的值清成 null.
+     *
+     * <p>末尾三个是算出来的字段, 它们不来自 DTO 的任何直接字段:
+     * season 从 date 推, status 从 date + 总集数 + 今天推, rank 从 rating.rank 取
+     * (0 = 未上榜, 转成 null). 推导口径见 {@link AnimeFields}.
+     */
+    private void applySubject(Anime a, SubjectDTO dto) {
+        if (dto.getName() != null) a.setTitle(dto.getName());
+        if (dto.getNameCn() != null) a.setTitleCn(dto.getNameCn());
+        if (dto.getSummary() != null) a.setSummary(dto.getSummary());
         if (dto.getImages() != null) {
-            a.setCoverUrl(dto.getImages().getLarge() != null
+            String cover = dto.getImages().getLarge() != null
                     ? dto.getImages().getLarge()
-                    : dto.getImages().getCommon());
+                    : dto.getImages().getCommon();
+            if (cover != null) a.setCoverUrl(cover);
         }
-        a.setDate(dto.getDate());
-        a.setPlatform(dto.getPlatform());
-        a.setTotalEpisodes(dto.getTotalEpisodes());
+        if (dto.getDate() != null) a.setDate(dto.getDate());
+        if (dto.getPlatform() != null) a.setPlatform(dto.getPlatform());
+        if (dto.getTotalEpisodes() != null) a.setTotalEpisodes(dto.getTotalEpisodes());
         if (dto.getRating() != null) {
-            a.setRating(dto.getRating().getScore());
-            a.setRatingCount(dto.getRating().getTotal());
+            if (dto.getRating().getScore() != null) a.setRating(dto.getRating().getScore());
+            if (dto.getRating().getTotal() != null) a.setRatingCount(dto.getRating().getTotal());
+            a.setRank(AnimeFields.rankOf(dto.getRating().getRank()));
         }
         if (dto.getTags() != null) {
             a.setTags(dto.getTags().stream()
                     .map(TagDTO::getName)
                     .collect(Collectors.joining(",")));
         }
+        applyDerivedFields(a, LocalDate.now());
+    }
+
+    /**
+     * 重算 season/status. rank 不在这里 —— 它不是算出来的, 只能从 Bangumi 拿.
+     *
+     * <p>抽出来是为了让"补齐存量数据"和"同步新数据"走同一套口径:
+     * 两边各写一份的话, 补出来的值和之后同步进去的值会慢慢对不上.
+     */
+    private void applyDerivedFields(Anime a, LocalDate today) {
+        a.setSeason(AnimeFields.seasonOf(a.getDate()));
+        a.setStatus(AnimeFields.statusOf(a.getDate(), a.getTotalEpisodes(), today));
+    }
+
+    /**
+     * 日历条目落库. 日历是"当前在播"的**权威**清单, 所以它比推导更可信:
+     * 长连载(总集数未知)靠 date + 集数估出来会是"早已完结", 而它出现在日历里
+     * 就说明还在播 —— 这里把 status 直接定成 airing.
+     *
+     * <p>同样修掉了另外两个被丢掉的字段: {@code air_date} 和 {@code rank}.
+     * 这两个字段以前既没读也没写, 结果是所有从日历来的番剧 date 都是 NULL
+     * (实测线上 470 行里有 145 行), 而 date 为空意味着 season 和 status
+     * 都推不出来 —— 一个字段没写, 连带两个字段一起废掉.
+     *
+     * <p>已存在的行也会被刷新(以前是 {@code if (!existsById)} 直接跳过):
+     * 跳过的代价是老数据永远停在"什么都没有"的状态, 只能等它碰巧被别的同步路径
+     * 再捞一次.
+     */
+    @Transactional
+    public Anime upsertCalendarItem(CalendarItem item) {
+        if (item == null || item.getId() == null) {
+            return null;
+        }
+        Anime a = animeRepository.findById(item.getId())
+                .orElse(Anime.builder().id(item.getId()).build());
+
+        if (item.getName() != null) a.setTitle(item.getName());
+        if (item.getNameCn() != null) a.setTitleCn(item.getNameCn());
+        if (item.getImages() != null) {
+            String cover = item.getImages().getLarge() != null
+                    ? item.getImages().getLarge()
+                    : item.getImages().getCommon();
+            if (cover != null) a.setCoverUrl(cover);
+        }
+        if (item.getRating() != null) {
+            if (item.getRating().getScore() != null) a.setRating(item.getRating().getScore());
+            if (item.getRating().getTotal() != null) a.setRatingCount(item.getRating().getTotal());
+        }
+        if (item.getAirDate() != null) a.setDate(item.getAirDate());
+        // 只在日历真的给了这个字段时才动 rank: 日历条目有时不带 rank,
+        // 那种情况是"不知道", 不是"没有排名" —— 无条件写会把上一次从详情接口
+        // 拿到的名次抹成 null.
+        if (item.getRank() != null) a.setRank(AnimeFields.rankOf(item.getRank()));
+
+        applyDerivedFields(a, LocalDate.now());
+        a.setStatus(AnimeFields.STATUS_AIRING);   // 在日历里 = 正在播, 覆盖推导结果
+
+        saveAnimeWithTags(a);
         return a;
+    }
+
+    /**
+     * 给存量数据补齐 season/status.
+     *
+     * <p>为什么需要它: 推导只在同步路径上跑, 而库里的老数据不会自己再被同步一次
+     * —— 470 行里 325 行有 date, 光靠"下次同步时会填上"是等不到的.
+     *
+     * <p>**只读本地列, 不联外网**: season 和 status 都能从已有的 date / 总集数
+     * 算出来. rank 算不出来(那是 Bangumi 的榜单名次), 只能靠同步时从
+     * {@code rating.rank} 带回来 —— 所以这个方法不碰 rank, 不假装能补.
+     *
+     * <p>每次启动重算全部行, 而不是只补 NULL 的那些: status 会随时间变化
+     * ("放送中"过几个月就该变成"已完结"), 只补 NULL 的话这些值会永远停在
+     * 第一次算出来的那一刻. 重算是幂等的, 且只在值真的变了的时候才会发 UPDATE
+     * (走受管实体的脏检查).
+     *
+     * @return 实际发生变化的行数
+     */
+    @Transactional
+    public int backfillDerivedFields() {
+        List<Anime> all = animeRepository.findAll();
+        LocalDate today = LocalDate.now();
+        int changed = 0;
+        for (Anime a : all) {
+            String season = AnimeFields.seasonOf(a.getDate());
+            String status = AnimeFields.statusOf(a.getDate(), a.getTotalEpisodes(), today);
+            if (Objects.equals(season, a.getSeason()) && Objects.equals(status, a.getStatus())) {
+                continue;
+            }
+            a.setSeason(season);
+            a.setStatus(status);
+            changed++;
+        }
+        log.info("补齐推导字段: 扫描 {} 行, 变更 {} 行", all.size(), changed);
+        return changed;
     }
 
     private Episode toEpisodeEntity(EpisodeDTO dto, Anime anime) {
