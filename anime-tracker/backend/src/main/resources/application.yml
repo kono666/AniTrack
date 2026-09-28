@@ -8,6 +8,44 @@ server:
   tomcat:
     uri-encoding: UTF-8
 
+  # 反向代理后还原真实访客 IP.
+  #
+  # 项目里有两处按 IP 的限流(登录/注册见 AuthRateLimiter, AI 提问的访客见
+  # AgentController.rateLimitKey), 取的都必须是**客户端**的 IP. 直连部署时
+  # getRemoteAddr() 本来就是对的; 但放到 nginx 后面之后, 直连的那一方成了 nginx,
+  # getRemoteAddr() 会给所有访客返回同一个地址, 限流退化成「全网共用一份配额」——
+  # 一个人刷满, 别人全被挡在外面.
+  #
+  # 打开这个开关后, Tomcat 会在进入应用之前按 X-Forwarded-For 改写
+  # getRemoteAddr() 的返回值, 上面那两处不用动就拿到了真实 IP.
+  #
+  # 为什么是 native 而不是 framework:
+  #   native    = Tomcat 自带的 RemoteIpValve. 它**只在直连对端是可信代理时才认这个头**
+  #               (默认可信范围 server.tomcat.remoteip.internal-proxies = 内网段 + 回环:
+  #                10/8、172.16/12、192.168/16、169.254/16、127/8、::1).
+  #               公网来的直连请求对端不在这个范围内, 它带的 X-Forwarded-For 会被
+  #               原样忽略 —— 也就是「伪造请求头绕限流」在这条路上行不通.
+  #   framework = Spring 的 ForwardedHeaderFilter. 它相信**任何**对端发来的这个头.
+  #               一旦 8080 端口直接暴露在公网(或者被别的方式绕过 nginx), 攻击者
+  #               每次请求换一个 X-Forwarded-For 就能拿到无限配额, 限流形同虚设.
+  #   代价是 native 只认 Tomcat 自己那套配置, 不像 framework 那样与容器解耦 ——
+  #   而这里本来就只有 Tomcat 一种部署方式, 换来的可信对端校验更值.
+  #
+  # 直连部署时这个配置意味着什么(要如实知道, 不是「没影响」):
+  #   - 从公网直连 8080: 对端不在可信范围, X-Forwarded-For 被忽略, getRemoteAddr()
+  #     仍然是对方的真实 IP. 限流按真实 IP 分桶, 且无法伪造;
+  #   - 从本机或内网直连(此时对端是 127.0.0.1 或内网地址, **在**可信范围内):
+  #     这个头会被采信. 能这么发请求的人本来就已经在机器/内网里了, 不是这个开关
+  #     引入的新风险, 但也正是「8080 端口不该直接对公网暴露」的又一条理由 ——
+  #     用 nginx 挡在前面, 并且让它**覆盖**这个头(见下).
+  #
+  # nginx 侧必须覆盖而不是追加: proxy_set_header X-Forwarded-For $remote_addr;
+  # 追加($proxy_add_x_forwarded_for)会把客户端自己编的那一段也带上; Tomcat 的取值
+  # 方向是从右往左找第一个不可信地址, 这种写法下它取到的仍是真实客户端, 但把
+  # 「哪一段可信」这件事押在了 Tomcat 的实现细节上, 不如在 nginx 就掐掉. 落地位置
+  # 是批次 7 的 nginx 配置.
+  forward-headers-strategy: native
+
 spring:
   profiles:
     active: dev

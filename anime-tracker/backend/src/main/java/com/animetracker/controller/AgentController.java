@@ -310,9 +310,14 @@ public class AgentController {
     /**
      * 限流维度: 登录用户按用户 id, 访客按来源 IP.
      *
-     * 注意 getRemoteAddr 在反向代理后面拿到的是代理 IP, 那样所有访客会共用一份配额.
-     * 部署到网关后面时需要改成读代理链上的 X-Forwarded-For —— 但也不能无条件相信它,
-     * 否则伪造一个请求头就能绕过限流. 这里的取法是「拿不到真实来源就先不信任代理头」.
+     * 这里**不该**自己去读 X-Forwarded-For: 那个头是客户端可以随便写的, 只有先确认
+     * 「直连的那一方是我自己的代理」才有资格采信, 而这个判断在应用层做不了 ——
+     * 应用看到的对端就是代理本身. 正确的做法是交给容器(它能拿到连接层面的对端地址),
+     * 由它决定认不认这个头, 于是这里 getRemoteAddr() 拿到的已经是还原后的真实 IP.
+     *
+     * 这就是 server.forward-headers-strategy: native 那一段(见 application.yml 的
+     * server 块, 连同「为什么是 native 不是 framework」「直连部署时是什么含义」).
+     * 换句话说: 反向代理的适配在配置里, 不在这行代码里.
      */
     private String rateLimitKey(User user, HttpServletRequest http) {
         if (user != null && user.getId() != null) {

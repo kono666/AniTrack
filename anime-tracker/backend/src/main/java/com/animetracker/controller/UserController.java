@@ -31,9 +31,11 @@ public class UserController {
      * 「请求体不合法」的请求不会被计入配额. 只有真的会走到 BCrypt 的请求才消耗它,
      * 理由详见 {@link AuthRateLimiter} 的类注释.
      *
-     * <p>这里用的是 getRemoteAddr(): 它拿到的是「直连的那一方」. 反向代理后面
-     * 那是代理的 IP, 所有访客会共用一份配额 —— 真实访客 IP 要靠 server 的
-     * forward-headers-strategy 还原, 那是部署侧的事, 这一层判断不了.
+     * <p>这里用的是 getRemoteAddr(): 反向代理后面要拿到真实访客 IP, 靠的是
+     * server.forward-headers-strategy: native(见 application.yml 的 server 块),
+     * 由 Tomcat 在进应用之前按 X-Forwarded-For 改写这个返回值. 也就是说
+     * 「代理的头可不可信」由容器判断, 这一层只管取用 —— 自己读 X-Forwarded-For
+     * 是错的, 那个头客户端随便就能写.
      */
     @PostMapping("/register")
     public ApiResponse<Map<String, Object>> register(@Valid @RequestBody RegisterRequest req,
