@@ -43,14 +43,38 @@ public class RequestDTO {
 
     @Data
     public static class TrackRequest {
+
+        /**
+         * 合法的追番状态, 正则是唯一的源头.
+         *
+         * 写成字面量而不是用 String.join 从列表拼出来, 是因为 @Pattern 的 regexp
+         * 必须是**编译期常量**, 拼出来的不算. 于是反过来让正则当源头, STATUSES 从它
+         * 切出来 —— 两处各写一份的话迟早会有一边被改漏, 而漏掉的表现是
+         * 「接口放行了一个统计口径和 Agent 都不认的状态」: 数据存进去了,
+         * 但 getUserStats 的五个计数里一个都不含它, 用户看到的是「追番了但总数没变」.
+         *
+         * 以前这份清单只存在于 Agent 工具里(TrackingTools), 网页接口这一侧完全没有 ——
+         * 也就是说同一个非法值走 Agent 会被拒、走 HTTP 会被收下.
+         */
+        public static final String STATUS_REGEX = "want_to_watch|watching|watched|on_hold|dropped";
+
+        public static final List<String> STATUSES = List.of(STATUS_REGEX.split("\\|"));
+
         @NotNull(message = "缺少番剧 id")
         private Integer subjectId;
+
         @NotBlank(message = "缺少追番状态")
-        private String status;          // want_to_watch / watching / watched / on_hold / dropped
+        @Pattern(regexp = STATUS_REGEX, message = "追番状态不在允许的取值里")
+        private String status;
+
+        @Min(value = 0, message = "观看进度不能为负数")
         private Integer progress;       // 当前观看进度(集数)
+
         @Min(value = 0, message = "评分不能低于 0")
         @Max(value = 10, message = "评分不能高于 10")
         private Integer score;          // 个人评分
+
+        @Size(max = 2000, message = "备注不能超过 2000 个字符")
         private String notes;           // 备注
     }
 
@@ -62,6 +86,12 @@ public class RequestDTO {
         @Min(value = 1, message = "评分不能低于 1")
         @Max(value = 10, message = "评分不能高于 10")
         private Integer rating;
+
+        /**
+         * 上限按数据库那一列的类型给: content 是 TEXT/VARCHAR 无界, 不限的话
+         * 一次请求就能塞进任意大的字符串, 直接进库、进列表接口、进 Agent 上下文.
+         */
+        @Size(max = 5000, message = "评论内容不能超过 5000 个字符")
         private String content;
     }
 

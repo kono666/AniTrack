@@ -2,6 +2,8 @@ package com.animetracker.dto;
 
 import com.animetracker.dto.RequestDTO.LoginRequest;
 import com.animetracker.dto.RequestDTO.RegisterRequest;
+import com.animetracker.dto.RequestDTO.ReviewRequest;
+import com.animetracker.dto.RequestDTO.TrackRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -216,5 +218,148 @@ class RequestDTOValidationTest {
 
         assertThat(messagesOn(req, "username")).contains("请输入用户名");
         assertThat(messagesOn(req, "password")).contains("请输入密码");
+    }
+
+    // ========== 追番状态白名单 ==========
+    //
+    // 这一组的存在理由: 状态值以前只在 Agent 工具里校验, 网页接口这一侧完全没有.
+    // 于是同一个非法值走 Agent 被拒、走 HTTP 被原样收下, 存进库之后
+    // getUserStats 的五个计数里一个都不含它 —— 用户看到的是「追番了但总数没变」,
+    // 没有任何一处会报错.
+
+    private static TrackRequest track(Integer subjectId, String status) {
+        TrackRequest req = new TrackRequest();
+        req.setSubjectId(subjectId);
+        req.setStatus(status);
+        return req;
+    }
+
+    @Test
+    @DisplayName("五个合法状态原样通过, 且不多不少")
+    void acceptsExactlyTheFiveKnownStatuses() {
+        // 断言写死字面量而不是引用常量: 常量一改测试跟着改就等于没测.
+        // 少一个值意味着「某个状态再也存不进去」, 多一个值意味着
+        // 「一个统计口径不认的状态能存进去」, 两者都要在这里拦住.
+        assertThat(TrackRequest.STATUSES)
+                .containsExactlyInAnyOrder("want_to_watch", "watching", "watched", "on_hold", "dropped");
+
+        for (String status : TrackRequest.STATUSES) {
+            assertThat(messagesOn(track(1, status), "status"))
+                    .as("状态 %s 应当通过", status)
+                    .isEmpty();
+        }
+    }
+
+    @ParameterizedTest(name = "非法状态被拒: {0}")
+    @ValueSource(strings = {
+            "WATCHING",          // 大小写不同就是另一个字符串, 统计口径认的是小写字面量
+            "want-to-watch",     // 连字符写成分隔号
+            "want to watch",
+            "want_to_watch ",    // 尾部空格
+            " want_to_watch",
+            "watchedX",          // 前缀对了但后面多了东西
+            "Xwatched",
+            "finished",          // 语义相近但不在口径里
+            "0",
+    })
+    @DisplayName("白名单之外的状态一律拒绝, 而不是原样落库")
+    void rejectsUnknownStatuses(String bogus) {
+        assertThat(messagesOn(track(1, bogus), "status"))
+                .as("状态 %s 不该通过", bogus)
+                .contains("追番状态不在允许的取值里");
+    }
+
+    /**
+     * 前缀/后缀多出字符必须被拒.
+     *
+     * <p>这条专门盯 @Pattern 的匹配语义: 它要求**整个**字符串匹配正则.
+     * 哪天有人把正则写成 ".*want_to_watch.*" 或者改成 find() 语义,
+     * 白名单就静默失效了 —— 其它用例仍然全绿, 只有这一条会响.
+     */
+    @Test
+    @DisplayName("状态必须整体匹配, 前后多一个字符都不算白名单内")
+    void statusMustMatchTheWholeString() {
+        assertThat(messagesOn(track(1, "xwatched"), "status")).isNotEmpty();
+        assertThat(messagesOn(track(1, "watchedx"), "status")).isNotEmpty();
+        assertThat(messagesOn(track(1, "watchedwatched"), "status")).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("状态为空或 null 时给出可读提示, 而不是把 null 写进 NOT NULL 的列")
+    void rejectsMissingStatus() {
+        for (String blank : new String[]{null, "", "   "}) {
+            assertThat(messagesOn(track(1, blank), "status"))
+                    .as("status = %s 应当被拒", blank)
+                    .contains("缺少追番状态");
+        }
+    }
+
+    // ========== 追番进度 ==========
+
+    @Test
+    @DisplayName("进度不能为负, 但 0 是合法的(还没开始看)")
+    void validatesProgress() {
+        TrackRequest req = track(1, "watching");
+
+        req.setProgress(-1);
+        assertThat(messagesOn(req, "progress")).contains("观看进度不能为负数");
+
+        req.setProgress(0);
+        assertThat(messagesOn(req, "progress")).isEmpty();
+
+        req.setProgress(null);
+        assertThat(messagesOn(req, "progress")).as("不传进度表示保持不变").isEmpty();
+    }
+
+    // ========== 备注长度 ==========
+
+    /**
+     * 上限对应数据库那一列的类型. 不封顶的话一次请求就能塞进任意大的字符串,
+     * 直接进库、进列表接口、再进 Agent 的上下文窗口.
+     */
+    @Test
+    @DisplayName("备注超过 2000 字符时拒绝, 刚好 2000 通过")
+    void validatesNotesLength() {
+        TrackRequest req = track(1, "watching");
+
+        req.setNotes("备".repeat(2000));
+        assertThat(messagesOn(req, "notes")).isEmpty();
+
+        req.setNotes("备".repeat(2001));
+        assertThat(messagesOn(req, "notes")).contains("备注不能超过 2000 个字符");
+
+        req.setNotes(null);
+        assertThat(messagesOn(req, "notes")).as("备注是选填的").isEmpty();
+    }
+
+    // ========== 评论内容长度 ==========
+
+    private static ReviewRequest review(Integer subjectId, Integer rating, String content) {
+        ReviewRequest req = new ReviewRequest();
+        req.setSubjectId(subjectId);
+        req.setRating(rating);
+        req.setContent(content);
+        return req;
+    }
+
+    @Test
+    @DisplayName("评论正文超过 5000 字符时拒绝, 刚好 5000 通过")
+    void validatesReviewContentLength() {
+        assertThat(messagesOn(review(1, 8, "评".repeat(5000)), "content")).isEmpty();
+        assertThat(messagesOn(review(1, 8, "评".repeat(5001)), "content"))
+                .contains("评论内容不能超过 5000 个字符");
+        assertThat(messagesOn(review(1, 8, null), "content"))
+                .as("只打分不写正文是允许的")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("评分必须在 1-10 之间, 且必填")
+    void validatesReviewRating() {
+        assertThat(messagesOn(review(1, 0, "x"), "rating")).contains("评分不能低于 1");
+        assertThat(messagesOn(review(1, 11, "x"), "rating")).contains("评分不能高于 10");
+        assertThat(messagesOn(review(1, null, "x"), "rating")).contains("请先评分");
+        assertThat(messagesOn(review(1, 10, "x"), "rating")).isEmpty();
+        assertThat(messagesOn(review(1, 1, "x"), "rating")).isEmpty();
     }
 }

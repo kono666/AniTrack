@@ -21,8 +21,14 @@ import java.util.Map;
 @Component
 public class TrackingTools implements ToolProvider {
 
-    private static final List<String> STATUSES =
-            List.of("want_to_watch", "watching", "watched", "on_hold", "dropped");
+    /**
+     * 这份清单不再在这里维护, 直接引用 TrackRequest 那一份.
+     *
+     * <p>网页接口和 Agent 工具认的必须是同一组状态: 两个地方各存一份的话,
+     * 迟早有一边被改漏, 表现是「同一个值走 Agent 被拒、走 HTTP 收下」(或反过来),
+     * 存进去的数据统计口径对不上, 而且不会有任何一处报错.
+     */
+    private static final List<String> STATUSES = TrackRequest.STATUSES;
 
     private final TrackService trackService;
     private final StatsService statsService;
@@ -58,8 +64,7 @@ public class TrackingTools implements ToolProvider {
                         + "调用前必须先用 search_anime 确认是哪一部作品，同名番剧很常见，不要凭猜测传 id。")
                 .access(Access.USER)
                 .intParam("subjectId", "番剧 id，必须来自 search_anime 等工具的返回结果", true)
-                .enumParam("status", "追番状态", true,
-                        "want_to_watch", "watching", "watched", "on_hold", "dropped")
+                .enumParam("status", "追番状态", true, STATUSES.toArray(String[]::new))
                 .intParam("progress", "已看到第几集。不填则保持原值", false)
                 .intParam("score", "个人评分 1-10。不填则不评分", false)
                 .stringParam("notes", "个人备注。不填则保持原值", false)

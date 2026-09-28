@@ -413,14 +413,25 @@ public class AnimeService {
 
     private Map<String, Object> buildSearchResult(List<Anime> list, int page, int limit) {
         int total = list.size();
-        int start = (page - 1) * limit;
-        int end = Math.min(start + limit, total);
+
+        // 越界的分页参数在这里夹回合法区间, 目的是不让它走到 subList 去抛越界.
+        // 控制器那层已经有 @Min/@Max, 拦的是网页来的请求; 这里管的是绕过控制器的
+        // 调用方(Agent 工具、内部直接调用). 对它们来说, 一个越界的分页参数应该
+        // 退化成「第一页」, 而不是把整条调用链炸成 500.
+        int safePage = Math.max(page, 1);
+        int safeLimit = Math.max(limit, 1);
+        // 起点用 long 算: page 只封了下界, page=Integer.MAX_VALUE 时
+        // (page-1)*limit 会溢出成负数, 于是又绕回 subList(负, 正) 的那个越界.
+        long startL = (long) (safePage - 1) * safeLimit;
+        int start = startL >= total ? total : (int) startL;
+        int end = (int) Math.min(startL + safeLimit, total);
         List<Anime> pageList = start < total ? list.subList(start, end) : Collections.emptyList();
 
         Map<String, Object> data = new HashMap<>();
         data.put("list", pageList);
         data.put("total", total);
-        data.put("page", page);
+        // 回报夹过之后的值: 调用方拿到的这一页确实来自 safePage 页
+        data.put("page", safePage);
         return data;
     }
 }

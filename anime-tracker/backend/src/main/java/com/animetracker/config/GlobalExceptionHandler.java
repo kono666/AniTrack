@@ -2,6 +2,8 @@ package com.animetracker.config;
 
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.exception.BusinessException;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -97,6 +99,27 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ResponseEntity<ApiResponse<Void>> handleMissingParameter(MissingServletRequestParameterException e) {
         return badRequest("缺少必填参数: " + e.getParameterName());
+    }
+
+    /**
+     * 查询参数上的校验没通过, 例如 /api/bangumi/search?page=0.
+     *
+     * <p>和上面那条 MethodArgumentNotValidException 是两回事: 那条管的是
+     * @RequestBody 里的字段, 这条管的是 @RequestParam / @PathVariable 上的注解.
+     * 两者抛的异常类型不同, 少登记一条, 校验失败就会被兜底处理器接走变成 500 ——
+     * 那正是这次给 BangumiController 加 @Validated 之前先补上这条的原因.
+     *
+     * <p>取值方式和上面保持一致: 只取注解里写的中文 message, 不拼字段名.
+     * 如果哪天新加的注解忘了写 message, 这里会退化成「参数校验失败」而不是漏英文.
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConstraintViolation(ConstraintViolationException e) {
+        String msg = e.getConstraintViolations().stream()
+                .map(ConstraintViolation::getMessage)
+                .filter(m -> m != null && !m.isBlank())
+                .distinct()
+                .collect(Collectors.joining("；"));
+        return badRequest(msg.isEmpty() ? "参数校验失败" : msg);
     }
 
     /** 参数值类型不对, 例如 ?animeId=abc */

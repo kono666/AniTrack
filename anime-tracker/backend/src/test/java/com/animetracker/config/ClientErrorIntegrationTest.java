@@ -92,4 +92,67 @@ class ClientErrorIntegrationTest {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data").isArray());
     }
+
+    // ── 分页参数越界 ────────────────────────────────────────────
+    //
+    // 这一组要证明的是「@Validated 真的挂上了」. 查询参数上的注解没有类级
+    // @Validated 会被**静默忽略** —— 注解写得再全, 校验一次都不跑,
+    // 结果和改动前一模一样. 单元测试直接调 Validator 是测不出这一点的.
+
+    @Test
+    @DisplayName("page=0 -> 400 而不是 500（改动前 subList(-20, 0) 越界）")
+    void zeroPageReturnsBadRequest() throws Exception {
+        mockMvc.perform(get("/api/bangumi/search").param("page", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("页码从 1 开始"));
+    }
+
+    @Test
+    @DisplayName("limit=0 -> 400")
+    void zeroLimitReturnsBadRequest() throws Exception {
+        mockMvc.perform(get("/api/bangumi/search").param("limit", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("每页条数不能小于 1"));
+    }
+
+    @Test
+    @DisplayName("limit 超过 50 -> 400：不封顶就是一个请求换一份任意大的结果集")
+    void oversizedLimitReturnsBadRequest() throws Exception {
+        mockMvc.perform(get("/api/bangumi/search").param("limit", "51"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("每页条数不能超过 50"));
+    }
+
+    @Test
+    @DisplayName("排行榜 limit=0 -> 400（与搜索那边是同一个越界）")
+    void zeroRankingLimitReturnsBadRequest() throws Exception {
+        mockMvc.perform(get("/api/bangumi/ranking").param("limit", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("条数不能小于 1"));
+    }
+
+    /**
+     * 正向对照: 边界内的分页参数照常 200.
+     *
+     * <p>专挑边界值本身(1 和 50): 上界写成 @Max(49) 或者下界写成 @Min(2) 这类
+     * 差一位的错误, 只有拿边界值去撞才会露出来.
+     *
+     * <p>这里走的是「不带关键词」那条分支, 全程只读本地表, 不会把测试变成
+     * 一次对 Bangumi 的联网请求.
+     */
+    @Test
+    @DisplayName("正向对照：边界内的分页参数照常 200")
+    void inRangePagingStillSucceeds() throws Exception {
+        mockMvc.perform(get("/api/bangumi/search").param("page", "1").param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(get("/api/bangumi/search").param("limit", "50"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/bangumi/search").param("page", "9999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.list").isEmpty());
+    }
 }
