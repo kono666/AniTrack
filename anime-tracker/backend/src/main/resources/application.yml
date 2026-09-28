@@ -200,12 +200,34 @@ spring:
 #
 # 各环境能看到多少 health 详情在 profile 段里定 (dev 打开、postgres 关闭).
 # 另外 SecurityConfig 里还有一道兜底: 除 health 外的 /actuator/** 需要管理员身份.
+#
+# ── 健康检查分成两组, 因为「容器还活着吗」和「现在能不能给它流量」是两个问题 ──
+#
+#   liveness  : 只问进程本身. 容器探针 (HEALTHCHECK) 用它.
+#   readiness : 加上依赖 (数据库、磁盘). 负载均衡 / 编排系统用它决定要不要发流量.
+#
+# 为什么要分开, 是被实测逼出来的: 数据库停掉时, 带 db 的那份 health 要等
+# Hikari 的连接超时 (postgres profile 是 30 秒) 才会回 503 —— 实测 30.0 秒,
+# Spring 自己都会记一条 "took 30016ms to respond" 的警告.
+# 拿它当容器探针有两个问题:
+#   1) 探针必须快且有界, 30 秒的响应会先撞上探针超时, 于是「超时」和
+#      「依赖不可用」两种状态被混成一种, 排障时分不清;
+#   2) 数据库挂了就去重启后端容器, 这个动作本身解决不了任何问题,
+#      restart: unless-stopped 会把它变成一轮一轮的重启循环.
+# 「依赖不可用」的正确表达是别再往它这儿发流量, 那是 readiness 的职责.
 # ============================================================
 management:
   endpoints:
     web:
       exposure:
         include: health
+  endpoint:
+    health:
+      group:
+        liveness:
+          include: ping
+        readiness:
+          include: db,diskSpace
 
 jwt:
   # 密钥有效期 (毫秒), 默认 7 天. 密钥本身在各 profile 内定义 (见上),

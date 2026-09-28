@@ -54,7 +54,12 @@ public class SecurityConfig {
                 // 探活端点必须免登录: 请求它的是 Docker HEALTHCHECK、CI 冒烟脚本、
                 // nginx 的反代探针, 它们手里不可能有 JWT.
                 // 目前它只回 {"status":"UP"|"DOWN"}, 不含任何内部结构.
-                "/actuator/health"
+                //
+                // 写两条而不是一条: 字符串匹配是「路径完全相等」, 不带通配符时
+                // /actuator/health 匹配不到 /actuator/health/liveness 这样的子路径,
+                // 而容器探针和负载均衡用的恰恰是分组后的子路径.
+                "/actuator/health",
+                "/actuator/health/**"
         ));
         if (devProfile) {
             publicPaths.addAll(List.of(
