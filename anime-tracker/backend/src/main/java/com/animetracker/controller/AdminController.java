@@ -51,6 +51,19 @@ public class AdminController {
         return ApiResponse.success("角色已更新", null);
     }
 
+    /**
+     * 解除用户的登录失败锁定.
+     *
+     * 用 PUT 而不是 POST: 它是把账号状态改回「未锁定」这个确定状态,
+     * 重复调用结果相同, 属于幂等操作.
+     */
+    @PutMapping("/users/{targetUserId}/unlock")
+    public ApiResponse<Void> unlockUser(@CurrentUser User user, @PathVariable Long targetUserId) {
+        adminService.checkAdmin(user);
+        adminService.unlockUser(targetUserId);
+        return ApiResponse.success("账号已解锁", null);
+    }
+
     /** 获取所有评论 */
     @GetMapping("/reviews")
     public ApiResponse<List<Map<String, Object>>> getAllReviews(@CurrentUser User user) {

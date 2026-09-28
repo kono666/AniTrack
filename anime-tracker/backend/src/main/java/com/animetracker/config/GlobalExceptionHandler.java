@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -28,12 +29,21 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(e.getCode(), e.getMessage()));
     }
 
-    /** 参数校验失败 */
+    /**
+     * 参数校验失败.
+     *
+     * 只取注解上写的 message, 不再拼接字段名 —— 这些提示语要原样展示给用户,
+     * 「password: 密码必须同时包含字母和数字」多出来的英文前缀对用户没有意义.
+     * 之所以能这么做, 是因为所有校验注解都集中在 RequestDTO 里且都写了中文
+     * message; 若将来新增注解忘了写 message, 这里就会漏出英文默认文案.
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException e) {
         String msg = e.getBindingResult().getFieldErrors().stream()
-                .map(f -> f.getField() + ": " + f.getDefaultMessage())
-                .collect(Collectors.joining("; "));
+                .map(FieldError::getDefaultMessage)
+                .filter(m -> m != null && !m.isBlank())
+                .distinct()
+                .collect(Collectors.joining("；"));
         return ResponseEntity.badRequest()
                 .body(ApiResponse.error(msg.isEmpty() ? "参数校验失败" : msg));
     }

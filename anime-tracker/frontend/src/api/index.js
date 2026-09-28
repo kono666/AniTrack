@@ -76,6 +76,8 @@ export const getDashboard = () => api.get('/admin/dashboard')
 export const getAdminUsers = () => api.get('/admin/users')
 export const toggleUserStatus = (targetUserId) =>
   api.put(`/admin/users/${targetUserId}/toggle`)
+export const unlockUser = (targetUserId) =>
+  api.put(`/admin/users/${targetUserId}/unlock`)
 export const setUserRole = (targetUserId, role) =>
   api.put(`/admin/users/${targetUserId}/role`, null, { params: { role } })
 export const getAdminReviews = () => api.get('/admin/reviews')

@@ -29,9 +29,15 @@
                 <span class="status-badge" :class="u.status === 'ACTIVE' ? 'status-active' : 'status-disabled'">
                   {{ u.status === 'ACTIVE' ? '正常' : '已禁用' }}
                 </span>
+                <span v-if="u.locked" class="status-badge status-locked">已锁定</span>
               </td>
               <td class="time-cell">{{ formatTime(u.createdAt) }}</td>
               <td>
+                <button
+                  v-if="u.locked"
+                  class="action-btn btn-warn"
+                  @click="handleUnlock(u)"
+                >解锁</button>
                 <button
                   v-if="u.role !== 'ADMIN'"
                   class="action-btn btn-danger"
@@ -56,7 +62,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../../stores/user'
-import { getAdminUsers, toggleUserStatus, setUserRole } from '../../api'
+import { getAdminUsers, toggleUserStatus, setUserRole, unlockUser } from '../../api'
 import AdminLayout from '../../components/AdminLayout.vue'
 import LoadingSpinner from '../../components/LoadingSpinner.vue'
 import EmptyState from '../../components/EmptyState.vue'
@@ -92,6 +98,18 @@ async function handleSetAdmin(u) {
   } catch (e) { $toast(e.response?.data?.message || '操作失败', 'error') }
 }
 
+// 解锁按钮对管理员账号也显示, 与「禁用/设为管理员」不同.
+// 原因是解锁不动任何权限, 只是把登录失败计数清零; 而管理员账号恰恰是最需要
+// 这条恢复路径的 —— 它一旦被人在线爆破锁死, 就没人能进后台把别人解开了.
+async function handleUnlock(u) {
+  if (!confirm(`确定解除 "${u.username}" 的登录锁定？`)) return
+  try {
+    const res = await unlockUser(u.id)
+    $toast(res.data?.message || '账号已解锁', 'success')
+    await loadUsers()
+  } catch (e) { $toast(e.response?.data?.message || '操作失败', 'error') }
+}
+
 onMounted(async () => {
   if (!userStore.loggedIn || userStore.user?.role !== 'ADMIN') { router.push('/'); return }
   await loadUsers()
@@ -112,10 +130,12 @@ onMounted(async () => {
 .status-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
 .status-active { background: #f6ffed; color: #52c41a; }
 .status-disabled { background: #fff2f0; color: #ff4d4f; }
+.status-locked { background: #fffbe6; color: #d48806; margin-left: 6px; }
 .action-btn {
   padding: 4px 12px; font-size: 12px; border-radius: 4px;
   cursor: pointer; margin-right: 4px; background: var(--card-bg);
 }
 .btn-danger { border: 1px solid #ff4d4f; color: #ff4d4f; }
 .btn-purple { border: 1px solid #7c3aed; color: #7c3aed; }
+.btn-warn { border: 1px solid #d48806; color: #d48806; }
 </style>

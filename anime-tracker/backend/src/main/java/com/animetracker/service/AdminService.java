@@ -53,6 +53,11 @@ public class AdminService {
             map.put("role", u.getRole());
             map.put("status", u.getStatus());
             map.put("createdAt", u.getCreatedAt());
+            // 给管理端看的锁定状态. 用 isLocked() 而不是「lockedUntil 非空」:
+            // 过期的锁定时间戳仍然留在字段里, 按非空判断会把早已自动解锁的账号
+            // 显示成「已锁定」, 管理员就会去点一个没有意义的解锁按钮.
+            map.put("locked", u.isLocked());
+            map.put("lockedUntil", u.isLocked() ? u.getLockedUntil() : null);
             result.add(map);
         }
         return result;
@@ -66,6 +71,22 @@ public class AdminService {
             throw BusinessException.badRequest("不能操作管理员账号");
         }
         user.setStatus("ACTIVE".equals(user.getStatus()) ? "DISABLED" : "ACTIVE");
+        userRepository.save(user);
+    }
+
+    /**
+     * 解除登录失败锁定.
+     *
+     * 存在的理由: 限时锁定虽然有「等 15 分钟自动解锁」这条出口, 但用户自己
+     * 没有任何办法知道这一点, 也不知道等了多久. 而且如果有人恶意连试 5 次
+     * 把某个账号锁上, 那 15 分钟里这个用户是完全无法自助恢复的.
+     * 管理员需要一个能立刻解开的手动出口.
+     */
+    public void unlockUser(Long targetUserId) {
+        User user = userRepository.findById(targetUserId)
+                .orElseThrow(() -> BusinessException.notFound("用户不存在"));
+        user.setFailedAttempts(0);
+        user.setLockedUntil(null);
         userRepository.save(user);
     }
 
