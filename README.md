@@ -1,5 +1,7 @@
 # AniTrack · 动漫追番管理平台
 
+[![CI](https://github.com/kono666/AniTrack/actions/workflows/ci.yml/badge.svg)](https://github.com/kono666/AniTrack/actions/workflows/ci.yml)
+
 一个面向动漫爱好者的追番管理 Web 应用。用户可以检索番剧、管理观看进度、评分与评论；管理端提供用户、评论与数据看板。
 
 前后端分离架构，独立完成从需求设计、数据库建模到前后端实现与联调的完整流程。
@@ -170,6 +172,7 @@ AniTrack-作品集/
 │   │       ├── stores/                # Pinia 状态
 │   │       └── router/                # 路由与权限守卫
 │   └── scripts/                       # 种子数据脚本与端到端验证脚本
+├── .github/workflows/ci.yml           # CI：后端测试 / 前端测试与构建 / 镜像构建 + compose 冒烟
 ├── .env.example                       # 环境变量模板（含大模型配置与 Docker 相关项）
 ├── docker-compose.yml                 # 后端 + PostgreSQL（部署用；只起数据库也行）
 ├── start-dev.bat                      # 一键启动（读取 .env → 拉起后端 + 前端）
@@ -277,6 +280,35 @@ docker compose up -d postgres
 
 ---
 
+## 持续集成（CI）
+
+推送到 `main` 或提 PR 时会自动跑 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)，三个 job 各自回答一个不同的问题：
+
+| job | 跑什么 | 它能回答的问题 |
+| --- | --- | --- |
+| `backend` | JDK 17 + `mvn -B test`（183 个用例） | 代码逻辑还对吗？ |
+| `frontend` | `npm ci` + `npm test`（68 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
+| `image` | 构建后端镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
+
+第三个 job 是有意加的。Dockerfile 和 `docker-compose.yml` 在写完的那一刻处于「看起来对」的状态——开发机上没有 Docker，谁也没法执行一次；而部署配置最大的特点就是「写错了不会报错，只会在别人机器上炸」。所以 CI 里用真实 PostgreSQL 把它整个跑起来，顺带把几件事端到端钉住：
+
+- 镜像能构建成功（第一次真的构建它）
+- 容器能连上数据库、Flyway 在空库上把迁移跑完、实体与 `validate` 对得上
+- `/actuator/health` 免登录可访问；`liveness` 与 `readiness` 都返回 200（后者含 db 组件，所以要真连得上库才可能通过）
+- 除 health 外的 actuator 端点匿名一律 401（`env` 会原样打印配置，不能给外人看）
+- 空库上由 `ADMIN_*` 环境变量建出管理员，并且能真的登录成功
+- 迁移建出来的表能读（不只是启动时校验过得去）
+
+冒烟用的 `JWT_SECRET` 与管理员密码在每次运行时用 `openssl rand` 现生成，**仓库里不存任何看起来像密钥的值**——就算它只服务于一个跑完就 `down -v` 丢掉的容器，躺在仓库里的 `JWT_SECRET=...` 也一定会在某个时刻被人复制到别处。
+
+刻意**不**做的事：
+
+- **不跑 `scripts/verify-agent.py`**。它需要真实的 LLM 额度，属于手工验证的范畴；让每个 PR（包括 fork 来的）都去烧钱不合适。
+- **不推送镜像**。这一版的目标只是「构建得出来 + 跑得起来」，没有镜像仓库要发布。
+- **不用 `npm install`**。`npm ci` 严格按锁文件装，锁文件与 `package.json` 对不上就直接失败；`install` 会「顺手把锁文件改了」，那等于让 CI 变成又一个能产出文件的环节——CI 只该验证，不该改文件。
+
+---
+
 ## 数据来源
 
 番剧元数据来自 **Bangumi 公开 API**，不存储任何受版权保护的内容。后端通过 `RestTemplate` 调用并在本地建缓存，缓存时长按数据类型可配置（见 `application.yml`）：
@@ -307,6 +339,8 @@ npm test
 # 用 LLM_PROVIDER=mock 启动后端即可，不产生任何模型费用
 python anime-tracker/scripts/verify-agent.py
 ```
+
+前两项每次推送都会在 CI 上自动跑一遍（见「持续集成」一节）；端到端脚本要真实模型额度，留在本地手工跑。
 
 端到端脚本覆盖的是那些只有真跑起来才看得出来的事：访客拿不到写工具、管理员能拿到、限流真的会拦、额度真的会扣、SSE 真的按事件名推送、工具卡片真的到了前端。
 
