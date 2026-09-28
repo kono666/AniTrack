@@ -37,8 +37,15 @@ if exist "%ENV_FILE%" (
 )
 
 :: Launch Java Backend
-echo [1] Java Backend (port 8080)
-start "Java-Backend-8080" cmd /k "cd /d %~dp0anime-tracker\backend && mvn spring-boot:run"
+::
+:: -Dspring-boot.run.profiles=dev is REQUIRED, not a convenience:
+:: application.yml no longer sets a default profile. Without an explicit
+:: dev here the backend would refuse to start (no JWT_SECRET in .env by
+:: default) - that is intentional, so that a deployment which forgets to
+:: configure anything fails loudly instead of quietly coming up with the
+:: dev H2 database, the public admin/admin123 account and swagger.
+echo [1] Java Backend (port 8080, profile=dev)
+start "Java-Backend-8080" cmd /k "cd /d %~dp0anime-tracker\backend && mvn spring-boot:run -Dspring-boot.run.profiles=dev"
 echo    Waiting for port 8080 (first boot takes 30-60s)...
 powershell -Command "while($true){Start-Sleep 5;try{$c=New-Object Net.Sockets.TcpClient('localhost',8080);$c.Close();break}catch{}}" >nul 2>&1
 echo    Java ready.

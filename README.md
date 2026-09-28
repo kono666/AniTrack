@@ -194,7 +194,7 @@ AniTrack-作品集/
 
 **方式一：一键启动（Windows）**
 
-双击 `start-dev.bat`，脚本会依次拉起后端与前端，并等待端口就绪。
+双击 `start-dev.bat`，脚本会依次拉起后端与前端，并等待端口就绪。它会显式带上 `dev` profile（见下面的说明）。
 
 要启用 AI 助手，先把 `.env.example` 复制为 `.env` 并填入大模型密钥——脚本会读取它并注入后端进程。
 
@@ -203,9 +203,9 @@ AniTrack-作品集/
 **方式二：手动启动**
 
 ```bash
-# 1. 启动后端（默认 dev profile，使用 H2 文件数据库）
+# 1. 启动后端（dev profile，使用 H2 文件数据库）
 cd anime-tracker/backend
-mvn spring-boot:run
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 # 2. 启动前端
 cd anime-tracker/frontend
@@ -214,6 +214,12 @@ npm run dev
 ```
 
 浏览器打开 http://localhost:5173
+
+> **`-Dspring-boot.run.profiles=dev` 不能省。** `application.yml` 里刻意没有设默认 profile：不指定 profile 直接启动会失败（缺 `JWT_SECRET`），而不是安静地退回开发配置。
+>
+> 这个取舍是刻意的。留一个 `active: dev` 当默认值确实方便，但代价是**部署时漏配环境变量不报错**：服务照常起来，用的却是 H2、公开的 `admin/admin123`、swagger 与 h2-console；更糟的是 `JwtUtil` 的熔断只在「非 dev」时才拒绝那个公开的兜底密钥，而 dev 正是被这个默认值激活的——于是一个公开密钥被当成了配置正确的样子。去掉默认值之后，漏配的表现是启动失败，而不是「看起来一切正常，只是谁都能伪造管理员 token」。
+>
+> `start-dev.bat` 里传的就是这个参数；写成环境变量 `SPRING_PROFILES_ACTIVE=dev` 也一样。
 
 **首次启动无需手工导入任何数据**，后端会自动完成三件事：
 
@@ -268,15 +274,17 @@ curl http://localhost:8080/actuator/health/liveness   # 回 {"status":"UP"} 就�
 | --- | --- |
 | 两阶段构建 | 最终镜像里没有源码、Maven 和 JDK，只有运行需要的东西，体积小一半以上 |
 | 非 root 用户运行 | 跑一个 Java 服务不需要 root；容器里的 root 一旦被利用，逃逸到宿主机的成本低得多 |
-| 默认 `SPRING_PROFILES_ACTIVE=postgres` | 消灭「忘了设 profile」这类失误——它不报错，只会安静地用上开发配置 |
+| 内置 `SPRING_PROFILES_ACTIVE=postgres` | 基础配置里没有默认 profile，所以镜像必须自己指定；忘了指定会直接起不来，而不是安静地用上开发配置 |
 | `TZ=Asia/Shanghai`（并装 tzdata） | 容器默认走 UTC：日志时间戳会差 8 小时，AI 助手的「每日额度」会在北京时间早上 8 点重置 |
 | `-XX:MaxRAMPercentage=75` | 让 JVM 按容器给的内存上限算堆；不设的话它可能读到宿主机总内存，然后在容器里被 OOM 杀掉 |
 | 探针打 `/actuator/health/liveness` | 它只问「进程在不在」；带数据库的那份要等 Hikari 连接超时（实测 30 秒），会先撞上探针超时 |
 
-只要数据库时（本地用 `mvn spring-boot:run` 跑后端，借这个 PG 用）：
+只要数据库时（本地借这个 PG 跑后端，记得带上 postgres profile——不带 profile 是起不来的）：
 
 ```bash
 docker compose up -d postgres
+cd anime-tracker/backend
+mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 ```
 
 ---

@@ -1,7 +1,20 @@
 # ============================================================
-# Anime Tracker - 开发环境配置 (默认)
-# 启动方式: mvn spring-boot:run
-# 切换生产: mvn spring-boot:run -Dspring-boot.run.profiles=postgres
+# Anime Tracker - 基础配置 (不属于任何 profile)
+#
+# 这个文件里**刻意不设默认 profile**: 不显式指定就起不来.
+#   本地开发: mvn spring-boot:run -Dspring-boot.run.profiles=dev
+#             (或者直接双击仓库根目录的 start-dev.bat, 它带上了这个参数)
+#   生产:     SPRING_PROFILES_ACTIVE=postgres (Dockerfile 里已内置)
+#
+# 为什么不留一个 active: dev 当默认值 —— 那确实方便, 但代价是「部署时漏配环境变量」
+# 变成一件不报错的事: 服务照常起来, 用的却是 H2 + admin/admin123 + swagger +
+# h2-console 这一整套开发配置. 更麻烦的是 JwtUtil 的熔断恰好拦不住: 它只在
+# 「非 dev」时才拒绝那个公开的兜底密钥, 而 dev 正是被这个默认值激活的
+# (见 JwtUtil.validateSecret). 于是一个公开的密钥被当成了配置正确的样子.
+#
+# 一个不报错的错误配置, 比一个起不来的正确配置危险得多 —— 后者五分钟就能修好.
+# 去掉这行之后, 漏配的表现是启动失败(缺 JWT_SECRET, 见下面的 profile 段), 而不是
+# 「看起来一切正常, 只是所有人都能伪造管理员 token」.
 # ============================================================
 server:
   port: 8080
@@ -46,13 +59,12 @@ server:
   # 是批次 7 的 nginx 配置.
   forward-headers-strategy: native
 
-spring:
-  profiles:
-    active: dev
-
 ---
 # ============================================================
 # DEV Profile: H2 文件数据库
+#
+# 启用: mvn spring-boot:run -Dspring-boot.run.profiles=dev
+#       (或 SPRING_PROFILES_ACTIVE=dev; start-dev.bat 已经带好了)
 # ============================================================
 spring:
   config:
