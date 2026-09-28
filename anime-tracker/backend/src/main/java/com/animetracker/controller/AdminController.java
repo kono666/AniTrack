@@ -40,14 +40,19 @@ public class AdminController {
         return ApiResponse.success("操作成功", null);
     }
 
-    /** 设置用户角色 */
+    /**
+     * 设置用户角色.
+     *
+     * 把当前登录的管理员一起传下去, 是为了让「不能改自己的角色」这条规则有判断依据 ——
+     * 在 service 里拿不到登录态, 只能由这里递进去.
+     */
     @PutMapping("/users/{targetUserId}/role")
     public ApiResponse<Void> setUserRole(
             @CurrentUser User user,
             @PathVariable Long targetUserId,
             @RequestParam String role) {
         adminService.checkAdmin(user);
-        adminService.setUserRole(targetUserId, role);
+        adminService.setUserRole(user, targetUserId, role);
         return ApiResponse.success("角色已更新", null);
     }
 

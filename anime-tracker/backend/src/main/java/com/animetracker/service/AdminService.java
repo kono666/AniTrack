@@ -17,6 +17,18 @@ import java.util.stream.Collectors;
 @Service
 public class AdminService {
 
+    /**
+     * 允许被写入 user.role 的值. 与鉴权侧认的字面量必须一致.
+     *
+     * <p>用 LinkedHashSet 而不是 Set.of: 这个集合会被拼进给用户看的提示语, 而
+     * Set.of 的迭代顺序**每次启动都不一样**(不可变集合带了随机化的哈希盐),
+     * 于是同一段代码在两次启动里会提示出「ADMIN / USER」和「USER / ADMIN」两种
+     * 说法. 不是功能错误, 但会让报错截图和代码对不上, 也让「消息里有什么」这件事
+     * 无法被测试钉住. 保持声明顺序即可.
+     */
+    private static final Set<String> ROLES =
+            Collections.unmodifiableSet(new LinkedHashSet<>(List.of("USER", "ADMIN")));
+
     private final UserRepository userRepository;
     private final ReviewRepository reviewRepository;
     private final TrackingRepository trackingRepository;
@@ -90,12 +102,50 @@ public class AdminService {
         userRepository.save(user);
     }
 
-    /** 修改用户角色 */
-    public void setUserRole(Long targetUserId, String role) {
-        User user = userRepository.findById(targetUserId)
+    /**
+     * 修改用户角色.
+     *
+     * <p>以前这个方法只有「查出来、set、存回去」三步, 角色值原样落库. 三个口子
+     * 合起来能把人锁在门外:
+     *
+     * <ul>
+     *   <li>角色值不校验 —— 传个 "ADMIN " / "admin" / "SUPER" 都能存进去.
+     *       而鉴权那一侧认的是字面量 "ADMIN", 于是库里出现一个「看名字像管理员、
+     *       实际什么权限都没有」的账号, 没有任何地方会报错;</li>
+     *   <li>能改自己 —— 管理员手滑把自己降成 USER, 当场失去管理端, 而且没有
+     *       任何自助恢复的入口(改角色这个动作本身就要管理员权限);</li>
+     *   <li>能把最后一个管理员降级 —— 结果同上, 只是需要别人来点这一下:
+     *       整个系统再没有任何账号进得了管理端.</li>
+     * </ul>
+     *
+     * <p>角色用白名单而不是黑名单: 这一列直接决定能拿到哪些接口, 黑名单漏一个值就是
+     * 一个越权口子, 白名单漏了顶多是「某个合法值暂时用不了」, 失败方向是安全的.
+     *
+     * <p>残留的窗口: 「数到还剩一个管理员」和「写下去」之间不是原子的, 两个管理员
+     * 同时降级对方时理论上都能通过检查. 要彻底堵死得靠数据库层的约束或加锁,
+     * 而这里要防的是手滑和误操作, 不是两个管理员合谋把自己锁死, 所以没上那一层.
+     */
+    public void setUserRole(User actor, Long targetUserId, String role) {
+        if (role == null || !ROLES.contains(role)) {
+            throw BusinessException.badRequest(
+                    "角色只能是 " + String.join(" / ", ROLES) + " 之一");
+        }
+
+        User target = userRepository.findById(targetUserId)
                 .orElseThrow(() -> BusinessException.notFound("用户不存在"));
-        user.setRole(role);
-        userRepository.save(user);
+
+        if (actor != null && actor.getId().equals(target.getId())) {
+            throw BusinessException.badRequest("不能修改自己的角色");
+        }
+
+        // 不变式: 这次操作之后, 系统里至少还得剩下一个管理员
+        if ("ADMIN".equals(target.getRole()) && !"ADMIN".equals(role)
+                && userRepository.countByRole("ADMIN") <= 1) {
+            throw BusinessException.badRequest("这是最后一个管理员, 不能降级");
+        }
+
+        target.setRole(role);
+        userRepository.save(target);
     }
 
     // ========== 评论管理 ==========
