@@ -6,11 +6,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
@@ -70,6 +75,62 @@ public class GlobalExceptionHandler {
         log.debug("No handler for {}", e.getResourcePath());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ApiResponse.error(404, "接口不存在"));
+    }
+
+    // ── 「调用方把请求写错了」这一类 ────────────────────────────
+    //
+    // 这四个异常都在参数绑定/路由阶段抛出, 表示请求本身不合法, 服务端没出任何问题.
+    // 不单独登记的话它们会掉进最下面的兜底处理器, 于是同时发生两件不该发生的事:
+    //
+    //   1) 调用方收到 500「服务器内部错误」. 前端只能提示「服务异常, 请稍后再试」,
+    //      而真实原因是少传了一个参数 —— 该改的是调用方, 不是服务端;
+    //   2) 日志里多一条 ERROR 级的 "Unexpected error". 公网上的扫描器每天都在乱试
+    //      路径与参数, 这些噪音会把真正的异常淹掉 (与上面 404 那条同一个道理).
+    //
+    // 消息里带上出错的参数名: 那是调用方自己发来的请求, 说出来不泄露任何服务端信息,
+    // 但能让写调用方的人一眼定位. 反之, 原始异常消息一律不外传
+    // (里面可能含类名、目标类型这类内部结构).
+    //
+    // 记录级别用 debug: 请求写错是预期内会发生的事, 不该占用 ERROR 级日志.
+
+    /** 少了必填的查询参数, 例如 /api/review/list 没带 subjectId */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingParameter(MissingServletRequestParameterException e) {
+        return badRequest("缺少必填参数: " + e.getParameterName());
+    }
+
+    /** 参数值类型不对, 例如 ?animeId=abc */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        return badRequest("参数 " + e.getName() + " 格式不正确");
+    }
+
+    /** 请求体不是合法 JSON, 或字段类型对不上 */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(HttpMessageNotReadableException e) {
+        return badRequest("请求体格式不正确");
+    }
+
+    /** 请求方法不对, 例如对只读接口发了 POST */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        log.debug("请求方法不支持: {}", e.getMethod());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(ApiResponse.error(405, "该接口不支持 " + e.getMethod() + " 请求"));
+    }
+
+    /** Content-Type 不对, 例如把 JSON 接口用 text/plain 调 */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        log.debug("不支持的 Content-Type: {}", e.getContentType());
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.error(415, "请求内容类型不受支持, 本服务只接受 JSON"));
+    }
+
+    /** 上面几个 400 共用: 统一的记录方式 + 统一的响应结构 */
+    private static ResponseEntity<ApiResponse<Void>> badRequest(String message) {
+        log.debug("客户端请求不合法: {}", message);
+        return ResponseEntity.badRequest().body(ApiResponse.error(400, message));
     }
 
     /** 其他未捕获异常 */
