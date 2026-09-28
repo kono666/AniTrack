@@ -56,6 +56,14 @@ spring:
     # 混用会让「某个脚本到底在哪个环境跑过」变得说不清楚.
     locations: classpath:db/migration/h2
 
+management:
+  endpoint:
+    health:
+      # 本地把详情打开: /actuator/health 会列出每个组件 (数据库、磁盘) 各自的状态,
+      # 启动异常时先看这里, 比翻日志快.
+      # 生产环境必须关 —— 见 postgres 段里的同名字段.
+      show-details: always
+
 # JWT 密钥 —— 开发环境兜底值.
 #
 # 这个字符串是公开写在仓库里的, 所以 JwtUtil 里配了一条硬校验:
@@ -117,6 +125,15 @@ spring:
     console:
       enabled: false
 
+management:
+  endpoint:
+    health:
+      # 与 dev 相反: 公网只允许看到 {"status":"UP"} 这一层.
+      # 详情里会带组件名 (数据库、磁盘、连接池), 属于内部结构信息 ——
+      # 探活只需要一个 UP/DOWN, 不需要知道是哪个组件在打盹.
+      # 这里刻意显式写出来而不是靠默认值: 默认值将来变了不会报错, 只会静默泄露.
+      show-details: never
+
 # JWT 密钥 —— 生产环境.
 #
 # 刻意不给任何兜底值: 没配 JWT_SECRET 时这里解析为空字符串,
@@ -171,6 +188,24 @@ spring:
   flyway:
     baseline-on-migrate: true
     baseline-version: 1
+
+# ============================================================
+# 探活端点 (Actuator)
+#
+# 只开 health 一个. 这里显式写出来、而不是依赖 Boot 的默认值, 有两层意思:
+#   1) 默认值将来变了, 或者谁为了调试临时改成 "*", 不会有人察觉 —— 写在这里的
+#      是一个能被 review、能被测试钉住的清单.
+#   2) /actuator 下还有 env, beans, configprops 这类会打印内部结构的端点.
+#      它们对排查很有用, 但只该在本机用, 不该跟着构建产物上公网.
+#
+# 各环境能看到多少 health 详情在 profile 段里定 (dev 打开、postgres 关闭).
+# 另外 SecurityConfig 里还有一道兜底: 除 health 外的 /actuator/** 需要管理员身份.
+# ============================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
 
 jwt:
   # 密钥有效期 (毫秒), 默认 7 天. 密钥本身在各 profile 内定义 (见上),

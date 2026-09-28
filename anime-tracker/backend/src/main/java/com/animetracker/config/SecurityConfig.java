@@ -50,7 +50,11 @@ public class SecurityConfig {
                 "/api/bangumi/**",
                 "/api/review/list",
                 "/api/review/stats",
-                "/api/stats/anime-heat"
+                "/api/stats/anime-heat",
+                // 探活端点必须免登录: 请求它的是 Docker HEALTHCHECK、CI 冒烟脚本、
+                // nginx 的反代探针, 它们手里不可能有 JWT.
+                // 目前它只回 {"status":"UP"|"DOWN"}, 不含任何内部结构.
+                "/actuator/health"
         ));
         if (devProfile) {
             publicPaths.addAll(List.of(
@@ -91,6 +95,15 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/agent/info").permitAll()
                         // 管理员接口
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        // Actuator 的兜底规则.
+                        //
+                        // 目前只暴露了 health 一个端点 (application.yml 的 exposure 清单),
+                        // 所以这条现在几乎碰不到. 它防的是「以后有人把清单放宽」:
+                        // env / beans / configprops 会原样打印配置与环境变量,
+                        // 一旦被 exposure 放出来, 若没有这条规则, 任何一个登录用户
+                        // (而不仅是管理员) 都能读到.
+                        // 换句话说, 放开暴露清单的操作只会影响管理员, 不会变成对外的洞.
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
                         // 其他接口需要登录
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)

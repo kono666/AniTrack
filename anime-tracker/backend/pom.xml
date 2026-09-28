@@ -52,6 +52,14 @@
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
         </dependency>
+        <!-- Actuator: 只为了 /actuator/health 这一个探活端点 ——
+             Docker HEALTHCHECK、CI 冒烟、nginx 反向代理都靠它判断「服务到底起来没有」.
+             其他端点一律不暴露 (见 application.yml 的 management.endpoints.web.exposure),
+             SecurityConfig 里另有一道兜底: 除 health 外的 /actuator/** 只对管理员开放. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
