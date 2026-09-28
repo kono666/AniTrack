@@ -71,6 +71,26 @@ class ActuatorConfigTest {
                 .isEqualTo("never");
     }
 
+    /**
+     * liveness 与 readiness 的成员必须各就各位.
+     *
+     * <p>这两个组最容易出的错是「有人图省事把 db 加进 liveness」——那样容器探针
+     * 会跟着数据库一起变慢 (实测 30 秒), 而探针必须快且有界. 反过来,
+     * readiness 少了 db 就等于「数据库挂了照样往里发流量」. 两个方向都值得钉住.
+     */
+    @Test
+    @DisplayName("liveness 只含 ping；readiness 必须含 db")
+    void probeGroupsHaveTheRightMembers() {
+        assertThat(read("dev", "management.endpoint.health.group.liveness.include"))
+                .as("容器探针用的 liveness 不该包含 db: 数据库不可用时它会等 Hikari 的连接超时, "
+                        + "而探针必须快且有界; 依赖不可用该由 readiness 表达")
+                .isEqualTo("ping");
+
+        assertThat((String) read("postgres", "management.endpoint.health.group.readiness.include"))
+                .as("readiness 必须包含 db: 它才是「现在能不能把流量给它」的依据")
+                .contains("db");
+    }
+
     // ---------- YAML 读取 ----------
 
     /**

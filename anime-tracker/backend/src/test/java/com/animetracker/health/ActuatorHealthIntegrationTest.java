@@ -56,6 +56,32 @@ class ActuatorHealthIntegrationTest {
     }
 
     /**
+     * liveness 与 readiness 的分工, 在响应里是看得见的.
+     *
+     * <p>liveness 里**不该有 db**: 它要回答的是「进程还活着吗」, 而且必须快、
+     * 必须有界 —— 实测过数据库不可用时, 带 db 的检查要等 Hikari 的连接超时,
+     * 整整 30 秒才回 503. 拿它当容器探针, 会先撞上探针超时,
+     * 于是「超时」和「依赖不可用」两种状态混成一种, 排障时分不清谁是谁.
+     *
+     * <p>readiness 里**必须有 db**: 依赖连不上时, 该做的是别再给它发流量,
+     * 而不是重启它 —— 重启后端解决不了数据库的问题, 只会变成重启循环.
+     */
+    @Test
+    @DisplayName("liveness 只问进程（不含 db），readiness 才看依赖")
+    void livenessAndReadinessHaveDifferentScopes() throws Exception {
+        mockMvc.perform(get("/actuator/health/liveness"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components.ping").exists())
+                .andExpect(jsonPath("$.components.db").doesNotExist());
+
+        mockMvc.perform(get("/actuator/health/readiness"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components.db.status").value("UP"));
+    }
+
+    /**
      * health 是放行的，别的 actuator 端点不是。
      *
      * <p>现在只暴露了 health 一个端点（application.yml 里的 exposure 清单），
