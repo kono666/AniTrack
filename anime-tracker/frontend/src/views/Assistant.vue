@@ -8,19 +8,27 @@
 
       <div class="sidebar-label">历史会话</div>
       <div v-if="!conversations.length" class="sidebar-empty">还没有保存的会话</div>
+      <!-- 一行两个动作, 所以做成两个并列的 <button>, 而不是
+           「li 上挂 @click + 里面再套一个删除按钮」—— 后者在语义上是一个按钮套着
+           另一个按钮, 读屏念出来是一团; 键盘也只能落到外层. 改前正是这样:
+           li 只有 @click, 键盘既选不中也删不掉. -->
       <ul class="conv-list">
         <li
           v-for="c in conversations"
           :key="c.id"
           class="conv-item"
           :class="{ active: c.id === conversationId }"
-          @click="openConversation(c.id)"
         >
-          <div class="conv-main">
+          <button class="conv-main" @click="openConversation(c.id)">
             <div class="conv-title">{{ c.title || '未命名会话' }}</div>
             <div class="conv-sub">{{ c.messageCount }} 条 · {{ formatTime(c.updatedAt) }}</div>
-          </div>
-          <button class="conv-del" title="删除" @click.stop="removeConversation(c.id)">
+          </button>
+          <button
+            class="conv-del"
+            :aria-label="`删除会话「${c.title || '未命名会话'}」`"
+            title="删除"
+            @click="removeConversation(c.id)"
+          >
             <PhTrash :size="14" weight="duotone" />
           </button>
         </li>
@@ -31,7 +39,15 @@
     <section class="chat-main">
       <header class="chat-header">
         <div class="chat-header-left">
-          <button v-if="loggedIn" class="sidebar-toggle" @click="sidebarOpen = !sidebarOpen">
+          <!-- 图标按钮没有可读的名字: 读屏念出来只是一句「按钮」.
+               aria-expanded 让「这个抽屉现在是开着的吗」也能被念出来 -->
+          <button
+            v-if="loggedIn"
+            class="sidebar-toggle"
+            aria-label="会话列表"
+            :aria-expanded="sidebarOpen ? 'true' : 'false'"
+            @click="sidebarOpen = !sidebarOpen"
+          >
             <PhList :size="16" weight="bold" />
           </button>
           <div>
@@ -94,13 +110,15 @@
             ref="inputEl"
           ></textarea>
 
-          <button v-if="busy" class="composer-btn composer-stop" title="停止" @click="stop">
+          <!-- 两个按钮里都只有一个图标, title 在触屏和读屏下都不出现 -->
+          <button v-if="busy" class="composer-btn composer-stop" aria-label="停止生成" title="停止" @click="stop">
             <PhStop :size="16" weight="fill" />
           </button>
           <button
             v-else
             class="composer-btn"
             :disabled="!input.trim() || !canSend"
+            aria-label="发送"
             title="发送"
             @click="send()"
           >

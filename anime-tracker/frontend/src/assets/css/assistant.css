@@ -55,13 +55,26 @@
   gap: 6px;
   padding: 9px 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   transition: background var(--transition);
   margin-bottom: 2px;
 }
 .conv-item:hover { background: var(--card-hover); }
 .conv-item.active { background: rgba(168,85,247,.12); }
-.conv-main { flex: 1; min-width: 0; }
+/* 会话本体是一个 <button>(改前是 li 上的 @click), 所以要把它还原成
+   "一整块可点的区域": 按钮的默认样式(居中、自带边框和背景、字体不继承)
+   在这里一样都不想要 —— 只留 cursor 和那块占满剩余宽度的区域. */
+.conv-main {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
 .conv-title {
   font-size: 13px;
   color: var(--text);
@@ -83,6 +96,14 @@
 }
 .conv-item:hover .conv-del { opacity: 1; }
 .conv-del:hover { color: var(--danger); background: rgba(248,113,113,.12); }
+
+/* 触屏上没有 hover: 手机用户永远 hover 不到那一行, 于是这个删除按钮
+   从头到尾都是 opacity:0 —— 看得见却不能点的按钮很糟, 但看不见才是真的没有.
+   用 (hover: none) 判断"这台设备没有悬停能力", 而不是按宽度判断:
+   窄窗口的桌面浏览器仍然有鼠标, 它应该保持原来的"悬停才出现". */
+@media (hover: none) {
+  .conv-del { opacity: 1; }
+}
 
 /* ── 主区 ── */
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }

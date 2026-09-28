@@ -16,7 +16,7 @@ vi.mock('../../api/agentStream', () => ({
   SSE_EVENTS: { TOOL_CALL: 'tool_call', TOOL_RESULT: 'tool_result', DONE: 'done', ERROR: 'error' },
 }))
 
-import { getAgentInfo, getConversations } from '../../api'
+import { getAgentInfo, getConversations, deleteConversation } from '../../api'
 import { streamChat } from '../../api/agentStream'
 
 const INFO = {
@@ -241,6 +241,67 @@ describe('Assistant page', () => {
     expect(wrapper.find('.chat-sidebar').exists()).toBe(true)
     expect(wrapper.text()).toContain('找治愈番')
     expect(wrapper.text()).toContain('4 条')
+  })
+
+  // ========== 会话列表的可操作性 ==========
+  //
+  // 改前这一行是 `<li @click>` 里再套一个删除按钮: 鼠标能用, 但键盘既选不中
+  // 会话也删不掉它 —— li 没有 tabindex, 而嵌在里面的 button 在语义上是
+  // "一个按钮套着另一个按钮". 现在拆成两个并列的真按钮.
+
+  function seedConversations() {
+    localStorage.setItem('anime_user', JSON.stringify({ username: 'test', token: 'jwt', role: 'USER' }))
+    setActivePinia(createPinia())
+    getConversations.mockResolvedValue({
+      data: {
+        code: 200,
+        data: [
+          { id: 1, title: '找治愈番', messageCount: 4, persona: 'user-assistant', updatedAt: '2026-09-27T10:00:00' },
+          { id: 2, title: '高分番', messageCount: 2, persona: 'user-assistant', updatedAt: '2026-09-27T11:00:00' },
+        ],
+      },
+    })
+  }
+
+  it('会话行里是两个真正的按钮, 键盘能分别落到"打开"和"删除"上', async () => {
+    seedConversations()
+    const wrapper = await mountPage()
+
+    const rows = wrapper.findAll('.conv-item')
+    expect(rows).toHaveLength(2)
+    // 打开会话的那个必须是 <button>(不是挂了 @click 的 div/li)
+    expect(rows[0].find('.conv-main').element.tagName).toBe('BUTTON')
+    expect(rows[0].find('.conv-del').element.tagName).toBe('BUTTON')
+  })
+
+  it('删除按钮有能读出来的名字(图标本身没有文字)', async () => {
+    seedConversations()
+    const wrapper = await mountPage()
+
+    const del = wrapper.findAll('.conv-del')[0]
+    expect(del.attributes('aria-label')).toContain('找治愈番')
+  })
+
+  it('点删除不会顺带把那个会话打开', async () => {
+    // 改前靠 @click.stop 挡住, 现在两个按钮是并列的, 结构上就不会串味
+    seedConversations()
+    const wrapper = await mountPage()
+    const { deleteConversation } = await import('../../api')
+    deleteConversation.mockResolvedValue({ data: { code: 200 } })
+
+    await wrapper.findAll('.conv-del')[0].trigger('click')
+    await flushPromises()
+
+    expect(deleteConversation).toHaveBeenCalledWith(1)
+    expect(streamChat).not.toHaveBeenCalled()
+  })
+
+  it('图标按钮都带 aria-label', async () => {
+    seedConversations()
+    const wrapper = await mountPage()
+
+    expect(wrapper.find('.sidebar-toggle').attributes('aria-label')).toBe('会话列表')
+    expect(wrapper.find('.composer-btn').attributes('aria-label')).toBe('发送')
   })
 
   it('中断正在生成的流: 生成到一半离开页面时', async () => {

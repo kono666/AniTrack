@@ -97,12 +97,14 @@ onMounted(async () => {
 }
 .review-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .review-user { font-weight: 600; font-size: 14px; color: var(--text); }
-.review-stars { color: #f5a623; }
+/* 与别处的星星用同一个 token. 改前这里是 #f5a623 —— 首页的评分角标用的是
+   var(--star)(#fbbf24), 两处星星颜色其实不一样, 只是并排看不出来 */
+.review-stars { color: var(--star); }
 .review-time { color: var(--text-muted); font-size: 12px; }
 .review-subject { font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
 .review-text { font-size: 14px; line-height: 1.6; color: var(--text); }
 .delete-btn {
-  padding: 6px 16px; border: 1px solid #ff4d4f; color: #ff4d4f;
+  padding: 6px 16px; border: 1px solid var(--badge-red-fg); color: var(--badge-red-fg);
   background: var(--card-bg); border-radius: 6px; cursor: pointer;
   font-size: 13px; white-space: nowrap;
 }

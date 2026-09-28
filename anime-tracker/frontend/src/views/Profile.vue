@@ -32,8 +32,13 @@
             <span class="ps-num">{{ stats?.avgScore || '-' }}</span>
             <span class="ps-lbl">均分</span>
           </div>
+          <!-- 「在看」要的是 status=watching 的条数. 改前是
+               totalAnime - completed 的差值 —— 那是「除了看完的之外全都算在看」,
+               于是想看/搁置/抛弃的番也被算了进去. 同一页下面的筛选栏就摆着
+               「在看 N」, 两个数字经常对不上, 而用户没有理由知道该信哪个.
+               口径改成和筛选栏完全一致(都从 trackings 来). -->
           <div class="p-stat">
-            <span class="ps-num">{{ (stats?.totalAnime || 0) - (stats?.completed || 0) }}</span>
+            <span class="ps-num">{{ counts.watching || 0 }}</span>
             <span class="ps-lbl">在看</span>
           </div>
         </div>
@@ -90,7 +95,16 @@
           </div>
         </div>
         <div class="pc-actions" @click.stop>
-          <button class="pca-btn" @click="quickUpdate(item, 'progress', (item.progress||0) + 1)" title="+1集">+1</button>
+          <!-- 到顶就禁用. 改前是无限 +1: 一部 12 集的番能被点成 13/12,
+               进度条按 pct() 卡在 100% 所以看不出来, 但数字就摆在那儿;
+               而且这个值会原样进数据库, 之后每一处「已看 N 集」的统计都带着它 -->
+          <button
+            class="pca-btn"
+            :disabled="atLastEpisode(item)"
+            title="+1集"
+            aria-label="进度加一集"
+            @click="quickUpdate(item, 'progress', nextProgress(item))"
+          >+1</button>
           <select class="pca-select" :value="item.status" @change="e => updateStatus(item, e.target.value)">
             <option v-for="s in statusOptions" :key="s.value" :value="s.value">{{ s.short }}</option>
           </select>
@@ -114,6 +128,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { getTrackingList, getOverallStats, saveTracking } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
 import { PhUserCircle } from '@phosphor-icons/vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
@@ -128,8 +143,6 @@ const trackings = ref([])
 const stats = ref(null)
 const filter = ref('all')
 const sortBy = ref('date')
-
-const fallbackImg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#18181b"><rect width="300" height="400" rx="8"/><text x="150" y="200" text-anchor="middle" fill="#3f3f46" font-size="16">No Cover</text></svg>')
 
 const statusLabel = { want_to_watch: '想看', watching: '在看', watched: '看过', on_hold: '搁置', dropped: '抛弃' }
 const statusOptions = [
@@ -168,6 +181,24 @@ const filtered = computed(() => {
 function pct(item) {
   if (!item.totalEpisodes) return 0
   return Math.min(100, Math.round(((item.progress || 0) / item.totalEpisodes) * 100))
+}
+
+/** 下一集的集数, 封顶在总集数.
+ *  总集数未知(后端没给)时不封顶 —— 那种情况下任何上限都是我们编的.
+ *
+ *  这里的 Math.min 与按钮上的 :disabled 是同一件事的两道锁, 而且**前者是多余的**:
+ *  按钮禁用了就点不到, 而能点到的情况下 progress < totalEpisodes, 加一必不越界.
+ *  留着它是因为禁用状态依赖渲染时的那份数据, 而这是道免费的保险 ——
+ *  只挡住一道门的话, 将来谁把禁用条件放宽一点, 越界就悄悄回来了. */
+function nextProgress(item) {
+  const next = (item.progress || 0) + 1
+  const total = item.totalEpisodes
+  return total ? Math.min(next, total) : next
+}
+
+/** 已经看到最后一集(或超过). 总集数未知时返回 false, 与 nextProgress 一致 */
+function atLastEpisode(item) {
+  return !!item.totalEpisodes && (item.progress || 0) >= item.totalEpisodes
 }
 
 async function updateStatus(item, newStatus) {
@@ -249,12 +280,16 @@ async function loadProfile() {
 .pc-title { font-size: 15px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-score { font-size: 14px; color: var(--star); font-weight: 700; white-space: nowrap; }
 .pc-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 11px; }
+/* 五个状态的底色/字色走 tokens.css 的语义徽章变量.
+   改前是写死的「半透明底 + 亮字」, 那套在暗色下没问题, 但亮色主题下
+   字色(#60a5fa / #34d399 …)是给深色底挑的, 贴在近白的卡片上几乎读不出来.
+   token 里亮色那一套是浅底 + 深字, 两边都各有一套. */
 .pc-status-badge { padding: 2px 8px; border-radius: 10px; font-weight: 600; }
-.st-watching { background: rgba(59,130,246,.15); color: #60a5fa; }
-.st-watched { background: rgba(52,211,153,.15); color: #34d399; }
-.st-want_to_watch { background: rgba(251,191,36,.15); color: #fbbf24; }
-.st-on_hold { background: rgba(161,161,170,.15); color: #a1a1aa; }
-.st-dropped { background: rgba(248,113,113,.15); color: #f87171; }
+.st-watching { background: var(--badge-blue-bg); color: var(--badge-blue-fg); }
+.st-watched { background: var(--badge-green-bg); color: var(--badge-green-fg); }
+.st-want_to_watch { background: var(--badge-amber-bg); color: var(--badge-amber-fg); }
+.st-on_hold { background: var(--badge-gray-bg); color: var(--badge-gray-fg); }
+.st-dropped { background: var(--badge-red-bg); color: var(--badge-red-fg); }
 .pc-type, .pc-year { color: var(--text-muted); }
 .pc-progress { display: flex; align-items: center; gap: 8px; }
 .pc-bar { width: 120px; height: 4px; background: var(--bg-secondary); border-radius: 2px; overflow: hidden; }
@@ -262,7 +297,8 @@ async function loadProfile() {
 .pc-prog-text { font-size: 11px; color: var(--text-muted); }
 .pc-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .pca-btn { width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 700; cursor: pointer; transition: all var(--transition); font-family: inherit; }
-.pca-btn:hover { border-color: var(--primary); color: var(--primary); }
+.pca-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.pca-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pca-select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text); font-size: 11px; cursor: pointer; font-family: inherit; }
 
 @media (max-width: 768px) {

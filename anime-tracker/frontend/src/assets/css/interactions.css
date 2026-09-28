@@ -13,7 +13,13 @@ a:active:not(:disabled),
   transition: transform 80ms ease;
 }
 
-/* Focus ring — visible keyboard navigation */
+/* Focus ring — visible keyboard navigation.
+
+   第二组(卡片类)原先就在这个名单里, 但它们当时**根本没写 tabindex**,
+   也就是说这些选择器从来没有匹配过任何东西 —— 一份为键盘导航写的样式,
+   而键盘压根到不了那些元素上. 批次 6 给这些卡片补上 role/tabindex 之后,
+   这几条才第一次真的生效; 新增的 .hs-card/.today-card/.related-card/.conv-main
+   是同一批补的, 一起列在这里. */
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -21,7 +27,12 @@ select:focus-visible,
 textarea:focus-visible,
 .ep-item:focus-visible,
 .tag-chip:focus-visible,
-.tab:focus-visible {
+.tab:focus-visible,
+.anime-card:focus-visible,
+.hs-card:focus-visible,
+.today-card:focus-visible,
+.related-card:focus-visible,
+.conv-main:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
   border-radius: 4px;

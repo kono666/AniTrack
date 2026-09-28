@@ -10,7 +10,7 @@ vi.mock('../../api', () => ({
 }))
 
 import Home from '../Home.vue'
-import { getRanking } from '../../api'
+import { getRanking, getCalendar, getTags, getByTag } from '../../api'
 import { resetHomeCache } from '../../utils/homeCache'
 
 /**
@@ -22,7 +22,10 @@ import { resetHomeCache } from '../../utils/homeCache'
 
 const router = createRouter({
   history: createMemoryHistory(),
-  routes: [{ path: '/', component: { template: '<div />' } }],
+  routes: [
+    { path: '/', component: { template: '<div />' } },
+    { path: '/anime/:id', component: { template: '<div />' } },
+  ],
 })
 
 // Home 用 v-reveal (IntersectionObserver), jsdom 没有实现它
@@ -92,5 +95,99 @@ describe('首页缓存', () => {
     // 失败的那次没写缓存, 所以还会有新请求发出去(而不是命中一份空缓存)
     expect(getRanking.mock.calls.length).toBeGreaterThan(2)
     second.unmount()
+  })
+})
+
+/**
+ * 首页三类入口的键盘可达性.
+ *
+ * 改前 today-card / hs-card / tag-chip 全都只有 @click: 它们是 div 和 span,
+ * tab 键直接跳过去, 读屏软件也不说这是能按的东西. 鼠标用户永远看不出这个
+ * 问题, 所以只能靠断言把 role / tabindex / 按键这三件事钉住.
+ *
+ * 题外话: interactions.css 里那份 :focus-visible 名单**早就**把 .anime-card、
+ * .tag-chip 这些类写进去了 —— 也就是说当初是打算给它们做焦点态的,
+ * 只是一直没有元素能被 focus, 那条规则从写下那天起就没匹配过任何东西.
+ */
+
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const TODAY_ITEM = { id: 501, nameCn: '今日番', name: 'Today', images: { medium: 'a.jpg' } }
+const HS_ITEM = { id: 502, nameCn: '热门番', name: 'Hot', images: { large: 'b.jpg' } }
+
+/** 日历是按"今天星期几"取的, 所以假数据也得挂在今天那一格上 */
+function calendarForToday(items) {
+  return { data: { data: [{ weekday: { cn: WEEKDAYS[new Date().getDay()] }, items }] } }
+}
+
+describe('首页卡片的键盘操作', () => {
+  beforeEach(async () => {
+    resetHomeCache()
+    vi.clearAllMocks()
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
+    getRanking.mockResolvedValue({ data: { data: [HS_ITEM] } })
+    getCalendar.mockResolvedValue(calendarForToday([TODAY_ITEM]))
+    getTags.mockResolvedValue({ data: { data: [{ name: '治愈', count: 3 }] } })
+    getByTag.mockResolvedValue({ data: { data: [] } })
+
+    await router.push('/')
+    await router.isReady()
+  })
+
+  it('今日放送: 回车和空格都能打开详情', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const card = wrapper.find('.today-card')
+    expect(card.attributes('role')).toBe('button')
+    expect(card.attributes('tabindex')).toBe('0')
+
+    await card.trigger('keydown.enter')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/anime/501')
+
+    // role=button 的约定是回车和空格都触发. 只测回车的话,
+    // "按空格没反应"会成为一个只有键盘用户才会撞上的 bug
+    await router.push('/')
+    await wrapper.find('.today-card').trigger('keydown.space')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/anime/501')
+  })
+
+  it('横向滚动区的卡片同样是可选中的按钮', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const card = wrapper.find('.hs-card')
+    expect(card.attributes('role')).toBe('button')
+    expect(card.attributes('tabindex')).toBe('0')
+
+    await card.trigger('keydown.enter')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/anime/502')
+  })
+
+  it('分类标签能选中, 回车即切换分类', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const chips = wrapper.findAll('.tag-chip')
+    expect(chips[0].text()).toBe('全部')
+    expect(chips[0].attributes('tabindex')).toBe('0')
+    expect(chips[1].attributes('role')).toBe('button')
+
+    await chips[1].trigger('keydown.enter')
+    await flushPromises()
+    // 回车要真的等于点了一下, 而不只是把焦点停在那儿
+    expect(getByTag).toHaveBeenCalledWith('治愈')
+  })
+
+  it('按空格不会把页面往下滚(默认行为被拦掉了)', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    const event = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    wrapper.find('.today-card').element.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
   })
 })

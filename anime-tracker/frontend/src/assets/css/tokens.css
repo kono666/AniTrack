@@ -53,6 +53,37 @@
   /* Tags */
   --tag-bg: rgba(168,85,247,.15);
   --tag-color: #c084fc;
+
+  /* ── 语义徽章 ──
+     管理员端的状态/角色徽章与个人页的追番状态徽章, 原本是 10 个色值直接写死在
+     两处 scoped 样式里, 而且**只有浅色那一套**(#f6ffed 底 + #52c41a 字).
+     暗色主题下它们就成了一块块自己会发光的马卡龙色块; 反过来把亮色那套字色
+     搬到深色底上又读不清. 所以底色和字色必须成对地跟着主题换, 用同一组名字:
+     暗色 = 半透明底 + 亮字, 亮色 = 浅底 + 深字. */
+  --badge-purple-bg: rgba(168,85,247,.16);
+  --badge-purple-fg: #c084fc;
+  --badge-blue-bg: rgba(59,130,246,.16);
+  --badge-blue-fg: #60a5fa;
+  --badge-green-bg: rgba(52,211,153,.16);
+  --badge-green-fg: #34d399;
+  --badge-red-bg: rgba(248,113,113,.16);
+  --badge-red-fg: #f87171;
+  --badge-amber-bg: rgba(251,191,36,.16);
+  --badge-amber-fg: #fbbf24;
+  --badge-gray-bg: rgba(161,161,170,.16);
+  --badge-gray-fg: #a1a1aa;
+
+  /* ── 压在封面图上的东西 ──
+     下面这些**刻意不在 body.light 里覆盖**: 首页轮播和详情页头图的内容是
+     压在封面图上的白字, 亮色主题下也保持深色底 —— 换成浅底的话白字会直接糊掉.
+     同理, 这里也不能图省事复用 --tag-color: 那个是会跟着主题变紫/变深的,
+     在深色头图上会变成深紫压深紫. */
+  --hero-bg: #0c0418;
+  --hero-badge-bg: rgba(168,85,247,.2);
+  --hero-badge-fg: #c084fc;
+  --cover-tag-tv: rgba(59,130,246,.85);
+  --cover-tag-movie: rgba(236,72,153,.85);
+  --cover-tag-other: rgba(168,85,247,.85);
 }
 
 /* ── Light Mode Override ── */
@@ -74,4 +105,20 @@ body.light {
   --navbar-bg: rgba(250,250,250,.85);
   --tag-bg: rgba(168,85,247,.1);
   --tag-color: #7c3aed;
+
+  /* 徽章换成浅底 + 深字. 字色比原先写在 scoped 里的那组(#52c41a / #ff4d4f /
+     #d48806 / #1890ff)更深一档: 那几个是"画在白色卡片上"的颜色,
+     配 #f6ffed 这类浅底时对比度只有 2 出头, 属于能看见但看不清. */
+  --badge-purple-bg: #f0e6ff;
+  --badge-purple-fg: #7c3aed;
+  --badge-blue-bg: #e6f7ff;
+  --badge-blue-fg: #0958d9;
+  --badge-green-bg: #f6ffed;
+  --badge-green-fg: #389e0d;
+  --badge-red-bg: #fff2f0;
+  --badge-red-fg: #cf1322;
+  --badge-amber-bg: #fffbe6;
+  --badge-amber-fg: #ad6800;
+  --badge-gray-bg: #f5f5f5;
+  --badge-gray-fg: #595959;
 }

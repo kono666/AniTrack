@@ -4,6 +4,7 @@ import com.animetracker.dto.RequestDTO.LoginRequest;
 import com.animetracker.dto.RequestDTO.RegisterRequest;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.dto.RequestDTO.TrackRequest;
+import com.animetracker.util.UsernamePolicy;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -16,6 +17,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -195,6 +197,136 @@ class RequestDTOValidationTest {
                 .contains("用户名长度需在 3-50 个字符之间");
         assertThat(messagesOn(register("  ", "a@x.com", "abcd1234"), "username"))
                 .contains("用户名不能为空");
+    }
+
+    /**
+     * 用户名不再是"任意字符", 只允许 字母/数字/下划线/连字符.
+     *
+     * <p>这一组的第一条(尾部空格)是这条规则存在的直接原因: 改前
+     * "admin " 与 "admin" 是两个不同的字符串, 唯一性检查拦不住,
+     * 而在评论列表、用户表、Agent 的回答里它们长得一模一样 ——
+     * 一个肉眼分不出真假的账号. 零宽字符(U+200B)是同一招的升级版.
+     */
+    @ParameterizedTest(name = "非法用户名被拒: {0}")
+    @ValueSource(strings = {
+            "admin ",            // 尾部空格: 看着与 admin 无异, 却是另一个账号
+            " admin",
+            "ad min",
+            "ad\nmin",
+            "ad\tmin",
+            "admin@example",     // 长得像邮箱, 但这不是邮箱字段
+            "admin/../x",
+            "admin<script>",
+            "管理员!",            // 中文可以, 标点不行
+            "ゆき★",
+            "🙂🙂🙂",            // emoji 不在 \p{L} 里 (它们是符号)
+    })
+    @DisplayName("含空格/换行/标点的用户名一律拒绝")
+    void rejectsUsernamesWithUnsafeCharacters(String bad) {
+        assertThat(messagesOn(register(bad, "a@x.com", "abcd1234"), "username"))
+                .as("用户名 %s 不该通过校验", bad)
+                .contains("用户名只能包含中文、字母、数字、下划线和连字符");
+    }
+
+    /**
+     * 不可见字符这一组用码点拼出来, 不写进源码.
+     *
+     * <p>理由有两个. 一是可读性: 一个 U+200B 写进字符串字面量之后, 源码里
+     * 那一行看起来就是 "admin" 加上一个引号, 谁都看不出在测什么, diff 里也
+     * 看不出来. 二是 U+202E(从右向左覆盖符)会把**它后面的源码**倒着显示出来,
+     * 那正是 trojan source 那类攻击的做法, 不该出现在自己的测试文件里.
+     *
+     * <p>其中 U+00A0(不换行空格)值得单独说: 前端提交前会 trim(),
+     * 而 Java 的 String.trim() 只去掉 U+0020 及以下, 去不掉它 ——
+     * 所以"前端 trim 过了"不能当作这道校验可以省掉的理由.
+     */
+    @Test
+    @DisplayName("零宽字符 / bidi 覆盖符 / 控制字符 / 不换行空格都被拒")
+    void rejectsInvisibleCharacters() {
+        String[] invisibles = {
+                "admin" + (char) 0x200B,   // 零宽空格: 页面上完全不显示
+                "admin" + (char) 0x200C,   // 零宽非连接符
+                "admin" + (char) 0x202E,   // 从右向左覆盖符: 能把后面的字符反过来显示
+                "admin" + (char) 0x0007,   // 控制字符 BEL
+                "admin" + (char) 0x00A0,   // 不换行空格: trim() 去不掉它
+        };
+
+        for (String bad : invisibles) {
+            assertThat(messagesOn(register(bad, "a@x.com", "abcd1234"), "username"))
+                    .as("用户名尾部带 U+%04X 时应当被拒", bad.charAt(bad.length() - 1) & 0xFFFF)
+                    .contains("用户名只能包含中文、字母、数字、下划线和连字符");
+        }
+    }
+
+    /**
+     * 非拉丁文字必须放行.
+     *
+     * <p>用 {@code [A-Za-z0-9_]} 之类只认 ASCII 的写法能把上面那组全挡掉,
+     * 代价是把中文和日文用户一起挡在门外 —— 对动漫站点来说这个代价太高.
+     * 所以规则用的是 {@code \p{L}}(任意语言的字母), 这组用例就是钉住这一点.
+     */
+    @ParameterizedTest(name = "非 ASCII 用户名放行: {0}")
+    @ValueSource(strings = {
+            "绫波丽",
+            "ゆきこ",          // 注意「ゆき」只有两字, 会先被长度规则拦下, 测不到字符集
+            "アニメ好き",
+            "한국어이름",
+            "Ünïcödé",
+            "张三丰",
+            "user_01",
+            "user-name",
+            "abc",
+    })
+    @DisplayName("中文/日文/韩文/重音字母 等 Unicode 字母都允许")
+    void acceptsUnicodeUsernames(String ok) {
+        assertThat(messagesOn(register(ok, "a@x.com", "abcd1234"), "username"))
+                .as("用户名 %s 应当通过校验", ok)
+                .isEmpty();
+    }
+
+    /**
+     * 长度边界: 50 通过, 51 拒绝.
+     *
+     * <p>上限对应数据库列宽, 差一位就会从"校验拒掉"退化成"插入时数据库报错",
+     * 那时候用户拿到的是一句看不懂的 500.
+     */
+    @Test
+    @DisplayName("用户名长度边界: 50 位通过, 51 位拒绝")
+    void enforcesUsernameLengthBoundary() {
+        assertThat(messagesOn(register("u".repeat(50), "a@x.com", "abcd1234"), "username")).isEmpty();
+        assertThat(messagesOn(register("u".repeat(51), "a@x.com", "abcd1234"), "username"))
+                .contains("用户名长度需在 3-50 个字符之间");
+        assertThat(messagesOn(register("u".repeat(2), "a@x.com", "abcd1234"), "username"))
+                .contains("用户名长度需在 3-50 个字符之间");
+    }
+
+    /**
+     * 字符集必须整体匹配.
+     *
+     * <p>先纠正一条容易想当然的因果: 这个"整串"保证**不是** {@code ^}/{@code $}
+     * 给的. Bean Validation 的 {@code @Pattern} 底层就是 {@code Matcher.matches()},
+     * 也就是不管正则怎么写都要求整串匹配 —— 把 {@code UsernamePolicy.REGEX} 末尾的
+     * {@code $} 删掉, 这个类里的用例会**全绿**(变异测试实测过).
+     *
+     * <p>那锚点还留着做什么? 挡住下一个拿这个常量去用的人: 换成 {@code find()}
+     * 语义的话, "admin x" 会从开头匹配出 "admin" 判为合法. 校验器给不了这个保证,
+     * 所以下面单独直接测正则本身.
+     */
+    @Test
+    @DisplayName("用户名必须整体匹配, 合法前缀不算数")
+    void usernameMustMatchTheWholeString() {
+        assertThat(messagesOn(register("admin ", "a@x.com", "abcd1234"), "username")).isNotEmpty();
+        assertThat(messagesOn(register("admin x", "a@x.com", "abcd1234"), "username")).isNotEmpty();
+        assertThat(messagesOn(register(" admin", "a@x.com", "abcd1234"), "username")).isNotEmpty();
+
+        // 直接钉正则的语义(注解那层已经被 matches() 兜住了, 测不出锚点的作用):
+        // 用 find() 也找不出合法前缀, 且不匹配空串 —— 后者是 javadoc 里
+        // 「全是空白会落在字符集规则上」那句话的依据
+        Pattern policy = Pattern.compile(UsernamePolicy.REGEX);
+        assertThat(policy.matcher("admin x").find())
+                .as("find() 语义下也不该找出 'admin' 这样的前缀").isFalse();
+        assertThat(policy.matcher("").matches())
+                .as("REGEX 不匹配空串(用 + 而不是 *)").isFalse();
     }
 
     // ========== 登录入参 ==========

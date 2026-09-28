@@ -1,5 +1,18 @@
 <template>
-  <div class="anime-card" @click="goDetail">
+  <!-- 整张卡片是一个链接式的目标. 改前只有 @click: 键盘用户 tab 不到它,
+       读屏软件也不会说"这是个可以按的东西" —— 首页那一屏卡片对外就只剩
+       每张图里的 alt 文字. 语义标签(<a>)在这里换不了: 卡片里是块级内容,
+       而 <a> 包块级元素会牵动一整套布局. 所以补 role + tabindex + 回车/空格.
+       回车和空格都要: role=button 的约定是两者都触发, 只写回车会让
+       "按空格没反应"成为一个只有键盘用户才会遇到的小 bug. -->
+  <div
+    class="anime-card"
+    role="button"
+    tabindex="0"
+    @click="goDetail"
+    @keydown.enter.prevent="goDetail"
+    @keydown.space.prevent="goDetail"
+  >
     <div class="anime-card-img-wrap">
       <!-- Blur placeholder -->
       <div class="card-placeholder" v-if="!imgLoaded">
@@ -51,13 +64,12 @@
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { PhStar } from '@phosphor-icons/vue'
+import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
 
 const props = defineProps({ anime: Object })
 const router = useRouter()
 const imgLoaded = ref(false)
 const imgFailed = ref(false)
-
-const fallbackImg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#1a1a2e"><rect width="300" height="400" rx="8"/><text x="150" y="195" text-anchor="middle" fill="#3f3f46" font-size="14">暂无封面</text><text x="150" y="215" text-anchor="middle" fill="#27272a" font-size="48">🎬</text></svg>')
 
 const name = computed(() => props.anime.nameCn || props.anime.name || 'Unknown')
 const imgSrc = computed(() => {
@@ -156,9 +168,11 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   padding: 3px 8px; border-radius: 4px;
   color: #fff; backdrop-filter: blur(8px);
 }
-.type-tv { background: rgba(59,130,246,.85); }
-.type-movie { background: rgba(236,72,153,.85); }
-.type-other { background: rgba(168,85,247,.85); }
+/* 类型标签压在封面图上, 所以这三个**不随主题变**(见 tokens.css 的注释):
+   底下的图不认主题, 换一套更亮的底色只会让白字糊掉 */
+.type-tv { background: var(--cover-tag-tv); }
+.type-movie { background: var(--cover-tag-movie); }
+.type-other { background: var(--cover-tag-other); }
 
 /* Rating badge (top-right) */
 .card-rating-badge {

@@ -46,24 +46,30 @@
 
     <!-- Dots -->
     <div class="hero-dots" v-if="items.length > 1">
+      <!-- 圆点只有 10px、里面一个字都没有, 读屏软件原本读到的是一串「按钮」.
+           aria-label 说明这是第几张, aria-current 说明现在停在哪一张 ——
+           后者也顺便让「哪个点是亮的」这件事不只靠颜色表达 -->
       <button
-        v-for="(_, i) in items"
+        v-for="(item, i) in items"
         :key="i"
         class="hero-dot"
         :class="{ active: i === current }"
+        :aria-label="`第 ${i + 1} 张: ${item.nameCn || item.name}`"
+        :aria-current="i === current ? 'true' : undefined"
         @click="goTo(i)"
       ></button>
     </div>
 
     <!-- Arrows -->
-    <button v-if="items.length > 1" class="hero-arrow hero-arrow-left" @click="jump(-1)">‹</button>
-    <button v-if="items.length > 1" class="hero-arrow hero-arrow-right" @click="jump(1)">›</button>
+    <button v-if="items.length > 1" class="hero-arrow hero-arrow-left" aria-label="上一张" @click="jump(-1)">‹</button>
+    <button v-if="items.length > 1" class="hero-arrow hero-arrow-right" aria-label="下一张" @click="jump(1)">›</button>
   </div>
 </template>
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 
 const props = defineProps({
   items: { type: Array, default: () => [] }
@@ -73,7 +79,6 @@ const $router = useRouter()
 const current = ref(0)
 let timer = null
 const INTERVAL_MS = 5000
-const fallbackImg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#18181b"><rect width="300" height="400"/><text x="150" y="200" text-anchor="middle" fill="#3f3f46" font-size="16">No Cover</text></svg>')
 
 function stepBy(delta) {
   // 空数组要挡掉: 0 条的时候 (0+1)%0 是 NaN, 会写进 transform 变成
@@ -142,7 +147,7 @@ onUnmounted(() => {
   height: 420px;
   overflow: hidden;
   border-radius: 0 0 24px 24px;
-  background: #0c0418;
+  background: var(--hero-bg);
 }
 .hero-track {
   display: flex;
@@ -179,8 +184,8 @@ onUnmounted(() => {
   display: inline-block;
   font-size: 12px; font-weight: 700;
   padding: 4px 12px; border-radius: 20px;
-  background: rgba(168,85,247,.2);
-  color: #c084fc;
+  background: var(--hero-badge-bg);
+  color: var(--hero-badge-fg);
   margin-bottom: 16px;
   letter-spacing: .5px;
 }

@@ -11,11 +11,19 @@
           <span class="today-date">{{ todayLabel }}</span>
         </h2>
         <div class="today-grid">
+          <!-- 首页这几类卡片都只有 @click, 键盘到不了、读屏也不说它们能按.
+               补 role/tabindex + 回车/空格(role=button 的约定是两个都触发).
+               见 interactions.css 里那份 focus-visible 名单 —— 它早就把这些类
+               列进去了, 只是一直没有元素能被 focus. -->
           <div
             v-for="item in todayAnime.slice(0, 8)"
             :key="item.id"
             class="today-card"
-            @click="$router.push(`/anime/${item.id}`)"
+            role="button"
+            tabindex="0"
+            @click="open(item.id)"
+            @keydown.enter.prevent="open(item.id)"
+            @keydown.space.prevent="open(item.id)"
           >
             <div class="today-cover">
               <img
@@ -50,7 +58,11 @@
             v-for="(item, idx) in popularList"
             :key="item.id"
             class="hs-card"
-            @click="$router.push(`/anime/${item.id}`)"
+            role="button"
+            tabindex="0"
+            @click="open(item.id)"
+            @keydown.enter.prevent="open(item.id)"
+            @keydown.space.prevent="open(item.id)"
           >
             <div class="hs-card-rank" :class="'rank-' + (idx + 1)">{{ idx + 1 }}</div>
             <div class="hs-card-img-wrap">
@@ -73,7 +85,11 @@
             v-for="item in recentList"
             :key="'r-' + item.id"
             class="hs-card"
-            @click="$router.push(`/anime/${item.id}`)"
+            role="button"
+            tabindex="0"
+            @click="open(item.id)"
+            @keydown.enter.prevent="open(item.id)"
+            @keydown.space.prevent="open(item.id)"
           >
             <div class="hs-card-img-wrap">
               <img
@@ -93,14 +109,30 @@
         <!-- Browse by Tag -->
         <div class="browse-section">
           <h2 class="section-heading" v-reveal>🏷️ 分类浏览</h2>
+          <!-- 分类是同一类问题的第三处: 一排 <span @click>, 键盘同样到不了.
+               这几个没做成 <button>: interactions.css 与 tag-filter.css 里
+               已有的 .tag-chip 样式(以及 :active 的按下反馈)是按 span 写的,
+               换成 button 会把它们全部作废, 而这一批要修的不是样式. -->
           <div class="tag-filter">
-            <span class="tag-chip" :class="{ active: selectedTag === '' }" @click="selectTag('')">全部</span>
+            <span
+              class="tag-chip"
+              role="button"
+              tabindex="0"
+              :class="{ active: selectedTag === '' }"
+              @click="selectTag('')"
+              @keydown.enter.prevent="selectTag('')"
+              @keydown.space.prevent="selectTag('')"
+            >全部</span>
             <span
               class="tag-chip"
               v-for="tag in tags"
               :key="tag.name"
+              role="button"
+              tabindex="0"
               :class="{ active: selectedTag === tag.name }"
               @click="selectTag(tag.name)"
+              @keydown.enter.prevent="selectTag(tag.name)"
+              @keydown.space.prevent="selectTag(tag.name)"
             >
               {{ tag.name }}
               <span style="font-size:10px;opacity:.7;">({{ tag.count }})</span>
@@ -128,6 +160,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getRanking, getCalendar, getTags, getByTag } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
 import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
 import { useReveal } from '../composables/useReveal'
@@ -153,7 +186,9 @@ const tagResults = ref([])
 const tagPage = ref(1)
 const pageSize = 24
 
-const fallbackImg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#18181b"><rect width="300" height="400"/><text x="150" y="200" text-anchor="middle" fill="#3f3f46" font-size="16">No Cover</text></svg>')
+/** 打开详情页. 卡片和分类标签都用它 —— 同一段跳转原先在模板里写了 4 遍,
+ *  补键盘支持时要写 12 遍, 这正是该收成一个函数的时候 */
+function open(id) { $router.push(`/anime/${id}`) }
 
 const tagTotalPages = computed(() => Math.max(1, Math.ceil(tagResults.value.length / pageSize)))
 const pagedTagResults = computed(() => {

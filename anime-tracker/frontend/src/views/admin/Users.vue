@@ -150,18 +150,21 @@ onMounted(async () => {
 .username-cell { font-size: 14px; font-weight: 500; color: var(--text); }
 .email-cell { font-size: 13px; color: var(--text-secondary); }
 .time-cell { font-size: 12px; color: var(--text-muted); }
+/* 徽章与按钮的色值走 tokens.css 的语义变量. 改前这里是 10 个写死的色值,
+   而且只有浅色那一套 —— 暗色主题下每一枚徽章都是一块自发光的浅色块,
+   一排操作按钮则是四个扎眼的荧光描边. 现在两种主题各有一套(见 tokens.css). */
 .role-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-.role-admin { background: #f0e6ff; color: #7c3aed; }
-.role-user { background: #e6f7ff; color: #1890ff; }
+.role-admin { background: var(--badge-purple-bg); color: var(--badge-purple-fg); }
+.role-user { background: var(--badge-blue-bg); color: var(--badge-blue-fg); }
 .status-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-.status-active { background: #f6ffed; color: #52c41a; }
-.status-disabled { background: #fff2f0; color: #ff4d4f; }
-.status-locked { background: #fffbe6; color: #d48806; margin-left: 6px; }
+.status-active { background: var(--badge-green-bg); color: var(--badge-green-fg); }
+.status-disabled { background: var(--badge-red-bg); color: var(--badge-red-fg); }
+.status-locked { background: var(--badge-amber-bg); color: var(--badge-amber-fg); margin-left: 6px; }
 .action-btn {
   padding: 4px 12px; font-size: 12px; border-radius: 4px;
   cursor: pointer; margin-right: 4px; background: var(--card-bg);
 }
-.btn-danger { border: 1px solid #ff4d4f; color: #ff4d4f; }
-.btn-purple { border: 1px solid #7c3aed; color: #7c3aed; }
-.btn-warn { border: 1px solid #d48806; color: #d48806; }
+.btn-danger { border: 1px solid var(--badge-red-fg); color: var(--badge-red-fg); }
+.btn-purple { border: 1px solid var(--badge-purple-fg); color: var(--badge-purple-fg); }
+.btn-warn { border: 1px solid var(--badge-amber-fg); color: var(--badge-amber-fg); }
 </style>

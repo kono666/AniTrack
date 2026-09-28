@@ -1,6 +1,7 @@
 package com.animetracker.dto;
 
 import com.animetracker.util.PasswordPolicy;
+import com.animetracker.util.UsernamePolicy;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -18,7 +19,9 @@ public class RequestDTO {
     @Data
     public static class RegisterRequest {
         @NotBlank(message = "用户名不能为空")
-        @Size(min = 3, max = 50, message = "用户名长度需在 3-50 个字符之间")
+        @Size(min = UsernamePolicy.MIN_LENGTH, max = UsernamePolicy.MAX_LENGTH,
+                message = UsernamePolicy.LENGTH_MESSAGE)
+        @Pattern(regexp = UsernamePolicy.REGEX, message = UsernamePolicy.MESSAGE)
         private String username;
 
         @NotBlank(message = "邮箱不能为空")

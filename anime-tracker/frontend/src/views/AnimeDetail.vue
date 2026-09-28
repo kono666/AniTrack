@@ -52,8 +52,11 @@
             class="track-status-btn" :class="{ active: trackForm.status === s.value }"
             @click="trackForm.status = s.value">{{ s.label }}</button>
         </div>
+        <!-- min="0" 与 :max 只是浏览器给的护栏(拖动步进箭头时用), 提交时不算数 ——
+             手打一个 999 照样能提交, 所以 saveTrack 里还有一道 clamp. 两道都要:
+             只有前者的话手打能绕过去, 只有后者的话用户得先提交才知道自己填错了 -->
         <div class="track-input-row">
-          <label>进度</label><input type="number" v-model.number="trackForm.progress" :max="subject.totalEpisodes||999" />
+          <label>进度</label><input type="number" v-model.number="trackForm.progress" min="0" :max="maxProgress" />
           <span>/ {{ subject.totalEpisodes || '?' }}</span>
           <label style="margin-left:16px;">评分</label><input type="number" v-model.number="trackForm.score" min="1" max="10" />
         </div>
@@ -85,7 +88,16 @@
       <section v-if="relatedAnime.length > 0" class="d-section">
         <div class="d-section-hd"><h2>相关推荐</h2></div>
         <div class="related-scroll">
-          <div v-for="item in relatedAnime" :key="item.id" class="related-card" @click="$router.push(`/anime/${item.id}`)">
+          <div
+            v-for="item in relatedAnime"
+            :key="item.id"
+            class="related-card"
+            role="button"
+            tabindex="0"
+            @click="$router.push(`/anime/${item.id}`)"
+            @keydown.enter.prevent="$router.push(`/anime/${item.id}`)"
+            @keydown.space.prevent="$router.push(`/anime/${item.id}`)"
+          >
             <div class="rc-cover">
               <img :src="item.images?.common || item.images?.medium || fallbackImg" :alt="item.nameCn" @error="e=>e.target.src=fallbackImg" />
               <div class="rc-score" v-if="item.rating?.score">⭐{{ item.rating.score.toFixed(1) }}</div>
@@ -171,6 +183,7 @@ import {
   getWatchedEpisodes, toggleEpisode, getAnimeHeat, getByTag
 } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -191,7 +204,21 @@ const relatedAnime = ref([])
 const coverFailed = ref(false)
 const error = ref('')
 
-const fallbackImg = 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#18181b"><rect width="300" height="400" rx="8"/><text x="150" y="195" text-anchor="middle" fill="#3f3f46" font-size="14">暂无</text><text x="150" y="215" text-anchor="middle" fill="#27272a" font-size="48">🎬</text></svg>')
+const maxProgress = computed(() => subject.value?.totalEpisodes || 999)
+
+/** 提交前把进度夹回合法范围.
+ *
+ *  改前这个输入框连 min 都没有, 而且原样提交: 手打 -5 会被后端 @Min(0) 拒掉,
+ *  但用户拿到的只是一句「保存失败」—— 输入框里那个 -5 还在, 看不出哪里不对;
+ *  打 999 则更糟: 后端收下了, 于是进度变成 999/12, 进度条还是 100%,
+ *  数字却永远停在那儿. 所以负数按 0 处理(它表达的是"记不清了", 不是"倒着看"),
+ *  超出总集数按总集数封顶. 非数字(输入框清空时 v-model.number 给的是空串)也归 0. */
+function clampProgress(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return 0
+  const total = subject.value?.totalEpisodes
+  return total ? Math.min(Math.floor(n), total) : Math.floor(n)
+}
 
 const coverImg = computed(() => coverFailed.value ? fallbackImg : (subject.value?.images?.large || subject.value?.images?.common || fallbackImg))
 const heroBg = computed(() => coverFailed.value ? null : (subject.value?.images?.large || subject.value?.images?.common || null))
@@ -248,6 +275,9 @@ async function quickTrack(){
 }
 async function saveTrack(){
   if(!userStore.loggedIn) return
+  // 夹一次再发, 顺便把输入框里的数字改回夹过之后的值 ——
+  // 否则界面上还显示着用户填的 999, 而库里存的是 12, 两边对不上
+  trackForm.progress = clampProgress(trackForm.progress)
   try{ const r=await saveTracking({subjectId:sid,status:trackForm.status,progress:trackForm.progress,score:trackForm.score}); trackForm.id=r.data.data?.id; toast('已保存','success') }catch(e){toast('保存失败','error')}
 }
 async function removeTrack(){
