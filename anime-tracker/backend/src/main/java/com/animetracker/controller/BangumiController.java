@@ -137,10 +137,24 @@ public class BangumiController {
         return ApiResponse.success(translated);
     }
 
+    /**
+     * 按标签取番剧, 最多 {@value AnimeService#BY_TAG_LIMIT} 条.
+     *
+     * <p>为什么是封顶而不是分页: 这个接口的响应体是**一个裸数组**, 前端的
+     * AnimeDetail.vue 直接读 {@code res.data.data} 取相关番剧, 首页 Home.vue 也把它
+     * 当成数组自己 slice 出 24 条一页、并拿数组长度当总页数. 换成
+     * {@code {list,total,page}} 会让这两处悄无声息地渲染成空 —— 没有编译期信号.
+     * 真正的分页留给批次 6 与前端一起改.
+     *
+     * <p>现在这个上限带来一个可见的变化: 标签下超过 50 部时, 首页标签浏览最多翻到
+     * 第 3 页(50 / 24). 这是"不封顶地一次倒出全部"的必要代价 —— 那个洞在数据长起来
+     * 之后就是公开接口上的一个任意大响应.
+     */
     @GetMapping("/by-tag")
     public ApiResponse<List<AnimeDTO>> getByTag(@RequestParam String tag) {
         Set<String> enTags = TagTranslationUtil.reverseTranslateAll(tag);
-        return ApiResponse.success(animeMapper.toListItems(animeService.getByTags(enTags)));
+        return ApiResponse.success(
+                animeMapper.toListItems(animeService.getByTags(enTags, AnimeService.BY_TAG_LIMIT)));
     }
 
     // ══════════ 筛选 ══════════

@@ -133,6 +133,7 @@ public class AnimeTools implements ToolProvider {
         return ToolDefinition.builder()
                 .name("get_by_tag")
                 .description("按标签查找番剧。用户说想看某个类型（如「治愈」「悬疑」「运动」）时用它。"
+                        + "最多返回 " + AnimeService.BY_TAG_LIMIT + " 部，按播出时间倒序。"
                         + "可先用 list_tags 确认标签的确切写法。")
                 .access(Access.PUBLIC)
                 .stringParam("tag", "标签名，例如 治愈 / 悬疑 / 科幻", true)
@@ -141,7 +142,10 @@ public class AnimeTools implements ToolProvider {
                     if (tag.isBlank()) {
                         throw new IllegalArgumentException("标签不能为空");
                     }
-                    List<Anime> list = animeService.getByTags(Set.of(tag));
+                    // 与公开接口用同一个上限. 这里不是"少给几条"的问题: 工具结果
+                    // 之后还会被 max-tool-result-chars 截断, 一次装配几百部番剧的
+                    // 摘要再丢掉, 只是白白占着工作线程. count 因此是「本次返回的条数」.
+                    List<Anime> list = animeService.getByTags(Set.of(tag), AnimeService.BY_TAG_LIMIT);
                     Map<String, Object> out = new LinkedHashMap<>();
                     out.put("tag", tag);
                     out.put("count", list.size());

@@ -31,6 +31,36 @@ public class AnimeService {
 
     private static final Logger log = LoggerFactory.getLogger(AnimeService.class);
 
+    /**
+     * 按标签浏览一次最多返回多少条.
+     *
+     * <p>取 50 是为了与搜索/筛选/排行榜那几个接口的每页上限一致 —— 它们共同回答的是
+     * "一个请求最多换回多少行". 前端首页的标签浏览是客户端翻页(一次拿全, 自己 slice
+     * 24 条一页), 所以这个上限直接决定了它能翻几页; 真要翻得更深, 该做的是给它
+     * 加上与筛选页一致的分页(见批次 6), 而不是把这里的数字调大.
+     */
+    public static final int BY_TAG_LIMIT = 50;
+
+    /**
+     * 播出日倒序, 缺日期的排最后.
+     *
+     * <p>抽成一处是因为它原本在两条路径上各写了一份(标签查询与筛选接口),
+     * 而注释里还专门写着"与另一处保持一致, 免得两处口径再次分叉" —— 保持一致的
+     * 正确做法是只有一份. 这个口径本身在批次 2.1 修过一次: 缺日期的行一度排在最前,
+     * 首页"最近更新"打开就是一屏没有日期的番. 当时那版写的是
+     * {@code nullsLast(...).compare(b, a)} —— 内外两次"反过来"叠在一起, 净效果
+     * 恰好与意图相反; 也刻意不写成 {@code nullsLast().reversed()}, 因为 reversed()
+     * 会把 null 的处理一起翻过去, 同一个坑再踩一遍.
+     */
+    private static final Comparator<Anime> DATE_DESC_UNKNOWN_LAST = (a, b) -> {
+        String da = a.getDate();
+        String db = b.getDate();
+        if (da == null && db == null) return 0;
+        if (da == null) return 1;
+        if (db == null) return -1;
+        return db.compareTo(da);
+    };
+
     private final AnimeRepository animeRepository;
     private final EpisodeRepository episodeRepository;
     private final TagRepository tagRepository;
@@ -234,28 +264,15 @@ public class AnimeService {
                         || season.equals(a.getSeason()))
                 .filter(a -> status == null || status.isEmpty()
                         || status.equals(a.getStatus()))
-                .sorted((a, b) -> {
-                    if ("date".equals(sort)) {
-                        String da = a.getDate();
-                        String db = b.getDate();
-                        // 缺播出日的排最后, 与下面 rank 的 9999 兜底同一个口径:
-                        // 「这个值不知道」不该排到「知道且最大」的前面.
-                        //
-                        // 这里原本是 nullsLast(...).compare(b, a) —— 内外两次"反过来"
-                        // 叠在一起, 净效果成了**缺日期的排最前**, 正好与意图相反.
-                        // 首页"最近更新"打开就是一屏没有日期的番.
-                        // 也刻意不写成 nullsLast().reversed(): reversed() 会把 null 的
-                        // 处理一起翻过去, 同一个坑再踩一遍. 写法与 getByTags 里那份
-                        // 保持一致, 免得两处口径再次分叉.
-                        if (da == null && db == null) return 0;
-                        if (da == null) return 1;
-                        if (db == null) return -1;
-                        return db.compareTo(da);
-                    }
-                    return Integer.compare(
-                            a.getRank() != null ? a.getRank() : 9999,
-                            b.getRank() != null ? b.getRank() : 9999);
-                })
+                .sorted("date".equals(sort)
+                        // 日期倒序那份口径只此一处(见 DATE_DESC_UNKNOWN_LAST 的注释):
+                        // 它原本在本方法与 getByTags 里各写了一份, 而两份"保持一致"
+                        // 靠的是注释里的互相提醒.
+                        ? DATE_DESC_UNKNOWN_LAST
+                        // 名次升序, 没有名次的排最后 —— 与日期那边"缺值不排前"同一个口径:
+                        // 库里名次为 NULL 的占多数(未上榜), 当成 0 参与比较的话它们会
+                        // 集体排到榜首.
+                        : Comparator.comparingInt(a -> a.getRank() != null ? a.getRank() : 9999))
                 .collect(Collectors.toList());
     }
 
@@ -282,8 +299,8 @@ public class AnimeService {
 
     @Cacheable(value = "tags", key = "'all'")
     public List<Map<String, Object>> getAllTags() {
-        // 新表有数据 → 走快速JOIN
-        if (animeTagRepository.hasAny()) {
+        // 新表有数据 → 走聚合查询
+        if (animeTagRepository.existsByAnimeIdNotNull()) {
             List<Object[]> raw = tagRepository.findAllWithCount();
             return raw.stream()
                     .filter(row -> !((String) row[0]).matches("\\d{4}"))
@@ -311,50 +328,90 @@ public class AnimeService {
                 .collect(Collectors.toList());
     }
 
-    /** 使用 anime_tag JOIN 查询, 走索引. 新表空则回退旧方法 */
+    /** 完整结果(**不截断**), 给拿到之后还要自己再筛的调用方用 —— 筛选接口就是. 实现见 {@link #collectByTags} */
     public List<Anime> getByTags(Set<String> tagNames) {
+        return sortByDateDesc(collectByTags(tagNames));
+    }
+
+    /**
+     * 按标签取番剧, 至多 {@code limit} 条(按播出日倒序取前 limit 条).
+     *
+     * <p>给直接对外返回的调用方用: 公开接口 {@code /api/bangumi/by-tag} 与
+     * Agent 工具 {@code get_by_tag}. 这两个地方的调用方都不需要"这个标签下的全部",
+     * 而"全部"是多大由数据决定 —— 标签越通用越大, 于是它同时是响应体上限和
+     * 一次查询要装进内存的行数. 不封顶的话, 一个没有参数的公开 GET
+     * 就能让服务端和客户端各扛一份任意大的结果集, 与 1.3 给 limit 封顶挡的是同一件事.
+     *
+     * <p>截断发生在**排序之后**, 所以留下的是最近的 {@code limit} 部, 而不是
+     * "随便 limit 部". 代价也随之而来, 说清楚: 这一步省下的只是响应体和映射开销,
+     * 匹配到的番剧行仍然都要读出来才能排序 —— 真要连读的行数一起封顶, 得把
+     * ORDER BY 下推到 SQL, 而"按播出日倒序、缺日期的排最后"在 H2 与 PostgreSQL 上
+     * 的默认 NULL 位置并不一致(批次 2.1 修的就是这个分叉), 那就等于把同一套口径
+     * 在两个地方各写一遍. 这里选择只留一份排序.
+     *
+     * <p>{@code limit <= 0} 当作"要 0 条"返回空列表, 不是"不封顶": 前者是调用方
+     * 要的语义, 后者会让一个手滑传进来的 0 变成没有上限的查询.
+     */
+    public List<Anime> getByTags(Set<String> tagNames, int limit) {
+        if (limit <= 0) return Collections.emptyList();
+        List<Anime> all = getByTags(tagNames);
+        return all.size() <= limit ? all : new ArrayList<>(all.subList(0, limit));
+    }
+
+    /**
+     * 按标签名收集匹配的番剧, 已按播出日倒序 —— 不截断.
+     *
+     * <p>改前这里是两次**整表进内存**: {@code tagRepository.findAll()} 找标签名,
+     * 再 {@code animeTagRepository.findAll()} 找关联, 然后在内存里 filter. 而现成的
+     * {@link AnimeTagRepository#findAnimeIdsByTagId} 一直躺在那里没被用过; 旁边那句
+     * "使用 anime_tag JOIN 查询, 走索引"的注释, 描述的正是这段代码从来没做过的事.
+     *
+     * <p>现在两步都走索引: 标签名 → tag 行(uk_tag_name), tag.id → anime_id
+     * (idx_animetag_tag), 最后按 id 批量取番剧. 查询次数与**行数**无关,
+     * 只与标签名个数有关 —— 而标签名个数由调用方给的那几个字符串决定(见
+     * {@link TagTranslationUtil#reverseTranslateAll}: 一个中文名加它的英文写法,
+     * 通常 1~3 个).
+     *
+     * <p>多个标签名之间是**并集**: 只要挂在其中任意一个标签下就算命中. 这不是
+     * 随便定的 —— 传进来的那几个名字本来就是同一个概念的几种写法("百合" / "Yuri"),
+     * 取交集的话它们几乎不可能同时挂在一部番上, 结果会永远是空.
+     *
+     * <p>最后一步取番剧用 {@code findAllById}: 关联表里可能有指向已删除番剧的行
+     * (它不是外键约束的强关联), 取回来的行数因此可能少于 id 个数, 按 id 组装、
+     * 不做"取回来几条就报几条"的假设.
+     */
+    private List<Anime> collectByTags(Set<String> tagNames) {
         if (tagNames.isEmpty()) return Collections.emptyList();
 
-        // 新表有数据 → 走快速JOIN
-        if (animeTagRepository.hasAny()) {
-            List<Tag> tags = tagRepository.findAll().stream()
-                    .filter(t -> tagNames.contains(t.getName()))
-                    .collect(Collectors.toList());
+        // 新表有数据 → 走索引
+        if (animeTagRepository.existsByAnimeIdNotNull()) {
+            List<Tag> tags = tagRepository.findByNameIn(tagNames);
             if (tags.isEmpty()) return Collections.emptyList();
 
-            Set<Long> tagIds = tags.stream().map(Tag::getId).collect(Collectors.toSet());
-            List<Integer> animeIds = animeTagRepository.findAll().stream()
-                    .filter(at -> tagIds.contains(at.getTag().getId()))
-                    .map(AnimeTag::getAnimeId)
-                    .distinct()
-                    .collect(Collectors.toList());
-
+            // LinkedHashSet: 并集去重. 同一部番可能同时挂在中文名和英文名下
+            // (迁移与后续同步各写过一次), 不去重的话它会在结果里出现两次
+            Set<Integer> animeIds = new LinkedHashSet<>();
+            for (Tag tag : tags) {
+                animeIds.addAll(animeTagRepository.findAnimeIdsByTagId(tag.getId()));
+            }
             if (animeIds.isEmpty()) return Collections.emptyList();
-            return animeRepository.findAllById(animeIds).stream()
-                    .sorted((a, b) -> {
-                        String da = a.getDate(); String db = b.getDate();
-                        if (da == null && db == null) return 0;
-                        if (da == null) return 1;
-                        if (db == null) return -1;
-                        return db.compareTo(da);
-                    })
-                    .collect(Collectors.toList());
+
+            return new ArrayList<>(animeRepository.findAllById(animeIds));
         }
 
-        // 新表空(迁移未完成) → 回退旧方法
+        // 新表空(迁移未完成) → 回退旧方法. 这条路上仍然是整表读 + 内存过滤,
+        // 但它是"关联表里一行都没有"时的兜底, 而且改前所有请求走的都是这一档.
         return animeRepository.findAll().stream()
                 .filter(a -> a.getTags() != null
                         && Arrays.stream(a.getTags().split(","))
                                  .map(String::trim)
                                  .anyMatch(tagNames::contains))
-                .sorted((a, b) -> {
-                    String da = a.getDate(); String db = b.getDate();
-                    if (da == null && db == null) return 0;
-                    if (da == null) return 1;
-                    if (db == null) return -1;
-                    return db.compareTo(da);
-                })
                 .collect(Collectors.toList());
+    }
+
+    /** 排序用的一小步: 收集出来的结果统一按播出日倒序(口径见上面的常量) */
+    private static List<Anime> sortByDateDesc(Collection<Anime> animes) {
+        return animes.stream().sorted(DATE_DESC_UNKNOWN_LAST).collect(Collectors.toList());
     }
 
     // ==================== 内部方法 ====================

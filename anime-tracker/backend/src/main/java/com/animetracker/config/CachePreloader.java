@@ -6,6 +6,7 @@ import com.animetracker.service.AnimeService;
 import com.animetracker.service.BangumiApiClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -47,6 +48,18 @@ public class CachePreloader {
     private final AnimeRepository animeRepo;
     private final AnimeService animeService;
 
+    /**
+     * 启动后是否自动联网补充数据, 默认开着.
+     *
+     * <p>存在的理由只有一个: 数 SQL 的集成测试要把它关掉. 它是**异步**的, 在用例
+     * 跑的同时往 anime / anime_tag 里插数据, 而那些插入的语句和用例自己发的语句
+     * 算在同一个 SessionFactory 的统计里 —— 于是"这个动作发了几条 SQL"会变成一个
+     * 随后台线程进度变化的数字. QueryCountIntegrationTest 就撞在这上面, 它关掉这个开关
+     * 之后断言才成立(见那里的 properties).
+     */
+    @Value("${anitrack.preload.enabled:true}")
+    private boolean enabled;
+
     public CachePreloader(BangumiApiClient apiClient, AnimeRepository animeRepo, AnimeService animeService) {
         this.apiClient = apiClient;
         this.animeRepo = animeRepo;
@@ -55,6 +68,10 @@ public class CachePreloader {
 
     @EventListener(ApplicationReadyEvent.class)
     public void preload() {
+        if (!enabled) {
+            log.info("预加载已关闭(anitrack.preload.enabled=false), 跳过");
+            return;
+        }
         CompletableFuture.runAsync(() -> {
             long startCount = animeRepo.count();
             log.info("当前缓存 {} 条，开始补充...", startCount);

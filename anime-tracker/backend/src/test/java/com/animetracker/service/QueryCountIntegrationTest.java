@@ -1,9 +1,13 @@
 package com.animetracker.service;
 
+import com.animetracker.entity.Anime;
 import com.animetracker.entity.User;
+import com.animetracker.repository.AnimeTagRepository;
 import com.animetracker.repository.UserRepository;
+import com.animetracker.util.TagTranslationUtil;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
+import org.hibernate.resource.jdbc.spi.StatementInspector;
 import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,9 +19,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,10 +52,43 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:anitrack-query-count;DB_CLOSE_DELAY=-1;MODE=MySQL",
-        "spring.jpa.properties.hibernate.generate_statistics=true"
+        "spring.jpa.properties.hibernate.generate_statistics=true",
+        // 关掉启动预加载: 它在后台线程里往 anime / anime_tag 插数据, 而那些插入的语句
+        // 和用例自己发的算在同一个 SessionFactory 的统计里, 会让下面的条数与行数
+        // 变成"看后台跑到哪了"的随机值(实测: 同一个用例曾经数出 1 条, 也数出 5 条).
+        // 这个类要断言的是"这次动作读了几行", 所以库必须是安静的
+        "anitrack.preload.enabled=false",
+        // 记下执行的 SQL 文本, 供"生成的语句长什么样"这类断言使用(见 SqlRecorder)
+        "spring.jpa.properties.hibernate.session_factory.statement_inspector="
+                + "com.animetracker.service.QueryCountIntegrationTest$SqlRecorder"
 })
 @ActiveProfiles("dev")
 class QueryCountIntegrationTest {
+
+    /**
+     * 把最近一条执行的 SQL 留下来.
+     *
+     * <p>为什么还要这一层: 语句条数与读入行数都看不见"这条 SQL 有没有行数限制" ——
+     * 读一行和读一万行都是一条语句、零个实体. 而有些改动(比如把 COUNT 整表换成
+     * exists)的全部意义就在于生成的语句里多了个限制.
+     *
+     * <p>它是 Hibernate 自己的扩展点, 由上面 properties 里的
+     * {@code hibernate.session_factory.statement_inspector} 指过来.
+     * 静态字段是刻意的: Hibernate 自己 new 这个类, 测试拿不到那个实例.
+     */
+    public static class SqlRecorder implements StatementInspector {
+        private static final AtomicReference<String> LAST = new AtomicReference<>();
+
+        @Override
+        public String inspect(String sql) {
+            LAST.set(sql);
+            return sql;
+        }
+
+        static String last() {
+            return LAST.get();
+        }
+    }
 
     /** 与启动预加载灌进来的那批番剧 id 错开, 免得被它们的行数干扰 */
     private static final int SUBJECT_BASE = 96000000;
@@ -66,6 +106,10 @@ class QueryCountIntegrationTest {
     @Autowired
     private AdminService adminService;
     @Autowired
+    private AnimeService animeService;
+    @Autowired
+    private AnimeTagRepository animeTagRepository;
+    @Autowired
     private UserRepository userRepository;
 
     private User user;
@@ -75,6 +119,11 @@ class QueryCountIntegrationTest {
         jdbc.execute("DELETE FROM anime_tracking");
         jdbc.execute("DELETE FROM anime WHERE id >= " + SUBJECT_BASE);
         jdbc.execute("DELETE FROM review");
+        // 标签: 先删关联行再删标签行(fk_anime_tag_tag 挡着). 两个条件各管一类 ——
+        // 挂在自建番剧上的, 和为了撑行数灌进去的噪声行
+        jdbc.execute("DELETE FROM anime_tag WHERE anime_id >= " + SUBJECT_BASE);
+        jdbc.execute("DELETE FROM anime_tag WHERE tag_id IN (SELECT id FROM tag WHERE name LIKE 'qct-%')");
+        jdbc.execute("DELETE FROM tag WHERE name LIKE 'qct-%'");
         user = userRepository.save(User.builder()
                 .username("q" + UUID.randomUUID().toString().substring(0, 8))
                 .password("x")
@@ -263,5 +312,166 @@ class QueryCountIntegrationTest {
         assertThat(all).hasSize(6);
         assertThat(all.get(0)).containsKeys("username", "userId", "subjectId");
         assertThat(statementsFor(() -> adminService.getAllReviews())).isEqualTo(1);
+    }
+
+    // ========== 按标签查番剧 ==========
+    //
+    // 这一组换了一个度量: **读进来多少个实体**, 而不是发了几条 SQL.
+    //
+    // 因为"整表进内存再 filter"和"走索引"这两种写法, 语句条数可以一样多 ——
+    // 前者就是两条 SELECT(一条读 tag 全表, 一条读 anime_tag 全表), 后者也是两条.
+    // 光数语句分不出它们, 只有"读了几行"能: 改前是 tag 全表 + anime_tag 全表
+    // 都进内存, 几千行就是几千个实体. 所以这里断言的是 entityLoadCount,
+    // 并且断言它与噪声行数**无关**(100 行和 2000 行读到的一样多).
+
+    /** 噪声关联行用的 id 段, 与追番/评论那一段错开 */
+    private static final int TAG_NOISE_BASE = 96100000;
+
+    /** 取一个标签行的 id, 没有就建. 预加载器与标签迁移都会建同名标签, 所以不能直接 INSERT */
+    private long tagIdOf(String name) {
+        List<Long> existing = jdbc.queryForList("SELECT id FROM tag WHERE name = ?", Long.class, name);
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
+        jdbc.update("INSERT INTO tag (name) VALUES (?)", name);
+        return jdbc.queryForObject("SELECT id FROM tag WHERE name = ?", Long.class, name);
+    }
+
+    /** 灌 n 行与本次查询无关的关联行, 返回它们挂的那个标签 id */
+    private long seedAnimeTagNoise(int rows) {
+        long tagId = tagIdOf("qct-noise-" + rows);
+        List<Object[]> args = new ArrayList<>();
+        for (int i = 0; i < rows; i++) {
+            args.add(new Object[]{TAG_NOISE_BASE + i, tagId});
+        }
+        jdbc.batchUpdate("INSERT INTO anime_tag (anime_id, tag_id) VALUES (?, ?)", args);
+        return tagId;
+    }
+
+    /** 建一部番剧并挂到一个标签上 */
+    private void seedTaggedAnime(int id, String title, String date, long tagId) {
+        jdbc.update("INSERT INTO anime (id, title, date) VALUES (?, ?, ?)", id, title, date);
+        jdbc.update("INSERT INTO anime_tag (anime_id, tag_id) VALUES (?, ?)", id, tagId);
+    }
+
+    /**
+     * 关联表长到几千行时, 按标签查番剧读进来的仍然只有命中的那几行.
+     *
+     * <p>改动前这里是: 读 tag 全表(几千行? 不, 几十行) + 读 anime_tag **全表**
+     * 再在内存里过滤, 所以噪声行数会被原样算进读入量 —— 这条用例的两种数据量
+     * 断言的是同一个数字, 正是为了说明"读入量与表的大小无关".
+     */
+    @ParameterizedTest(name = "关联表里另有 {0} 行噪声")
+    @ValueSource(ints = {100, 2000})
+    @DisplayName("按标签查番剧: 读入的实体数与关联表行数无关(1 个标签 + 3 部番剧)")
+    void tagLookupNeverLoadsTheWholeJoinTable(int noiseRows) {
+        seedAnimeTagNoise(noiseRows);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM anime_tag WHERE anime_id >= "
+                + TAG_NOISE_BASE, Integer.class))
+                .as("噪声行要真的灌进去了, 否则这条用例是空过")
+                .isEqualTo(noiseRows);
+
+        String target = "qct-target-" + noiseRows;
+        long targetTag = tagIdOf(target);
+        for (int i = 0; i < 3; i++) {
+            seedTaggedAnime(SUBJECT_BASE + i, "标签番" + i, String.format("2024-01-0%d", i + 1), targetTag);
+        }
+
+        Statistics stats = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+        stats.clear();
+        List<Anime> found = animeService.getByTags(Set.of(target));
+        long loadedEntities = stats.getEntityLoadCount();
+
+        assertThat(found).extracting(Anime::getId)
+                .containsExactly(SUBJECT_BASE + 2, SUBJECT_BASE + 1, SUBJECT_BASE);
+        assertThat(loadedEntities)
+                .as("读入 1 个 tag 实体 + 3 部番剧; 改动前这里还要加上 %d 行噪声", noiseRows)
+                .isEqualTo(4);
+    }
+
+    /**
+     * 中文标签名会带着它的英文写法一起来查("百合" → 中文名 + Yuri + Girls Love),
+     * 同一部番挂了两个名字时只该出现一次.
+     *
+     * <p>这条用的是真实存在的中文标签名, 所以库里(s)可能还有预加载器灌的其他番剧 ——
+     * 断言只在自己建的这几行上做, 但**去重**那一条是对整个结果断言的:
+     * 重复是这次改动的直接后果(并集 + 两次命中同一部番), 与谁的数据无关.
+     *
+     * <p>日期给到 2099 年是为了避开封顶: 真实标签下的番剧可能不止 50 部,
+     * 而按播出日倒序截断时, 自建的这几行要稳稳排在最前面.
+     */
+    @Test
+    @DisplayName("标签的多种写法是并集且去重: 中文名与英文名各命中的番剧都在, 且不重复")
+    void tagNamesAreUnionAndDeduplicated() {
+        long cn = tagIdOf("百合");
+        long en = tagIdOf("Yuri");
+        seedTaggedAnime(SUBJECT_BASE, "只挂中文名", "2099-01-03", cn);
+        seedTaggedAnime(SUBJECT_BASE + 1, "只挂英文名", "2099-01-02", en);
+        seedTaggedAnime(SUBJECT_BASE + 2, "两个名字都挂", "2099-01-01", cn);
+        jdbc.update("INSERT INTO anime_tag (anime_id, tag_id) VALUES (?, ?)", SUBJECT_BASE + 2, en);
+
+        Set<String> names = TagTranslationUtil.reverseTranslateAll("百合");
+        assertThat(names).as("这个标签确实有多种写法, 否则这条用例测不到并集").hasSizeGreaterThan(1);
+
+        List<Anime> found = animeService.getByTags(names, AnimeService.BY_TAG_LIMIT);
+        List<Integer> mine = found.stream().map(Anime::getId)
+                .filter(id -> id >= SUBJECT_BASE).toList();
+
+        assertThat(mine).containsExactlyInAnyOrder(SUBJECT_BASE, SUBJECT_BASE + 1, SUBJECT_BASE + 2);
+        assertThat(found).extracting(Anime::getId)
+                .as("同一部番被两个标签名各命中一次, 只能出现一遍")
+                .doesNotHaveDuplicates();
+    }
+
+    /**
+     * 标签下超过上限时, 留下的是播出日最近的 50 部.
+     *
+     * <p>上限与"不封顶"的差别在返回条数上; "先截断"与"先排序"的差别只在留下哪几部 ——
+     * 所以两个断言都要: 条数是 50, 而留下的确实是最近的那 50 部.
+     */
+    @Test
+    @DisplayName("标签下 60 部: 公开上限只返回最近的 50 部, 不封顶的那个重载返回 60")
+    void tagBrowseIsCappedAndKeepsTheNewestOnes() {
+        long tagId = tagIdOf("qct-many");
+        for (int i = 0; i < 60; i++) {
+            seedTaggedAnime(SUBJECT_BASE + i, "量产番" + i,
+                    String.format("%04d-01-01", 1960 + i), tagId);
+        }
+
+        List<Anime> capped = animeService.getByTags(Set.of("qct-many"), AnimeService.BY_TAG_LIMIT);
+
+        assertThat(capped).hasSize(AnimeService.BY_TAG_LIMIT);
+        assertThat(capped.get(0).getId()).isEqualTo(SUBJECT_BASE + 59);
+        assertThat(capped).extracting(Anime::getId)
+                .doesNotContain(SUBJECT_BASE, SUBJECT_BASE + 9)
+                .contains(SUBJECT_BASE + 10);
+        // 筛选接口走的是不封顶的那个: 它拿到完整集合后还要按年份/季度/状态再筛,
+        // 在这里截断会让"符合条件"的行凭空消失
+        assertThat(animeService.getByTags(Set.of("qct-many"))).hasSize(60);
+    }
+
+    /**
+     * "关联表空不空"这条判定本身也不该随表长变慢.
+     *
+     * <p>它原来写的是 {@code SELECT COUNT(*) > 0 FROM anime_tag}, 每次按标签查番剧
+     * 都要先数一遍整张表. 现在改成 exists 派生查询, 依赖的是 Spring Data 对 exists
+     * 投影会加 {@code setMaxResults(1)} —— 这是框架行为, 不是我们写的 SQL,
+     * 所以这里直接对生成的语句下断言: 哪天升级把它改掉了, 这条会先红,
+     * 而不是悄悄退化成"每次数一遍整张表".
+     *
+     * <p>{@code fetch first} 是 H2 方言对行数限制的写法(实测; 这个用例跑在 H2 上).
+     */
+    @Test
+    @DisplayName("判断关联表是否为空: 生成的 SQL 带行数限制, 不是 COUNT 整表")
+    void emptinessCheckIsLimitedToOneRow() {
+        seedAnimeTagNoise(2000);
+
+        boolean any = animeTagRepository.existsByAnimeIdNotNull();
+
+        assertThat(any).isTrue();
+        assertThat(SqlRecorder.last())
+                .as("这条判定的答案在第一行就定了, 不该数完整张表")
+                .containsIgnoringCase("from anime_tag")
+                .containsIgnoringCase("fetch first");
     }
 }

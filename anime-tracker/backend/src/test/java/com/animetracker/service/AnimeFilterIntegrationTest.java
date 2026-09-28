@@ -2,6 +2,7 @@ package com.animetracker.service;
 
 import com.animetracker.dto.BangumiDTO.RatingDTO;
 import com.animetracker.dto.BangumiDTO.SubjectDTO;
+import com.animetracker.dto.BangumiDTO.TagDTO;
 import com.animetracker.entity.Anime;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,6 +61,12 @@ class AnimeFilterIntegrationTest {
     }
 
     private void seed(int id, String name, String date, Integer totalEpisodes, Integer rank) {
+        seedTagged(id, name, date, totalEpisodes, rank);
+    }
+
+    /** 同上, 另外挂上标签 —— 标签会同时写进 tags 列与 anime_tag 关联表 */
+    private void seedTagged(int id, String name, String date, Integer totalEpisodes, Integer rank,
+                            String... tags) {
         SubjectDTO dto = new SubjectDTO();
         dto.setId(id);
         dto.setName(name);
@@ -70,6 +77,13 @@ class AnimeFilterIntegrationTest {
         rating.setTotal(100);
         rating.setRank(rank);
         dto.setRating(rating);
+        if (tags.length > 0) {
+            dto.setTags(Arrays.stream(tags).map(t -> {
+                TagDTO tag = new TagDTO();
+                tag.setName(t);
+                return tag;
+            }).collect(Collectors.toList()));
+        }
         animeService.upsertAnime(dto);
     }
 
@@ -237,5 +251,46 @@ class AnimeFilterIntegrationTest {
         // 年份换掉 -> 一条都不该剩
         assertThat(filteredAmong(ids(90000151, 90000152, 90000153),
                 String.valueOf(ym.getYear() - 1), season, "finished", null)).isEmpty();
+    }
+
+    // ========== 标签 ==========
+
+    /** 调真实的 getFiltered 带上 tag, 结果收窄到自己建的这几行 */
+    private List<Integer> taggedAmong(Set<Integer> mine, String tag, String year) {
+        return animeService.getFiltered(year, null, null, tag, null).stream()
+                .map(Anime::getId)
+                .filter(mine::contains)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 标签筛选: 传来的名字会**同时试**中文原文和它的英文写法, 两个写法各挂一部番时
+     * 两部都要出现.
+     *
+     * <p>为什么这件事要专门验: 库里同一批标签是两套写法混着的(Bangumi 那边给的是英文,
+     * 界面上显示的是中文), 所以"按百合找"必须也能找到只挂了 Yuri 的那一部.
+     * 这条路和别的筛选条件一样, 坏了只会安静地少给几条 —— 调用方分不清"没有"和"筛丢了".
+     *
+     * <p>第三部挂了不相干的标签, 是负向对照: 少了它, 一个"永远返回全部"的筛选器
+     * 也能让前两条断言通过. 最后一条断言年份与标签叠加是「与」——
+     * 只查去年时, 这批今年播的行一条都不该剩.
+     */
+    @Test
+    @DisplayName("按标签筛: 中文名与英文写法都命中, 与年份叠加是「与」")
+    void filtersByTagIncludingItsEnglishSpelling() {
+        String date = LocalDate.now().minusWeeks(1).toString();
+        seedTagged(90000161, "标签用例挂中文名", date, 12, 1, "百合");
+        seedTagged(90000162, "标签用例挂英文名", date, 12, 2, "Yuri");
+        seedTagged(90000163, "标签用例不相干", date, 12, 3, "科幻");
+        Set<Integer> mine = ids(90000161, 90000162, 90000163);
+
+        // 传中文名: 中文名和英文名各挂的那部都在
+        assertThat(taggedAmong(mine, "百合", null)).containsExactlyInAnyOrder(90000161, 90000162);
+        // 传英文名: 只按这个写法找 —— 中文原文不在候选里(方向是"中文→英文", 没有反向表)
+        assertThat(taggedAmong(mine, "Yuri", null)).containsExactly(90000162);
+        // 不相干的标签不在结果里
+        assertThat(taggedAmong(mine, "百合", null)).doesNotContain(90000163);
+        // 叠加年份: 这批行都在今年, 查去年就一条都没有
+        assertThat(taggedAmong(mine, "百合", String.valueOf(LocalDate.now().getYear() - 1))).isEmpty();
     }
 }

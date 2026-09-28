@@ -37,7 +37,7 @@ public class TagMigrationService implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        if (animeTagRepo.hasAny()) {
+        if (animeTagRepo.existsByAnimeIdNotNull()) {
             log.info("[TagMigration] 已完成过, 跳过");
             return;
         }
