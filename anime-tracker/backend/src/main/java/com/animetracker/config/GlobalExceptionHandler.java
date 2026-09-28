@@ -2,11 +2,15 @@ package com.animetracker.config;
 
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.exception.BusinessException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.InvalidMediaTypeException;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -17,9 +21,11 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.util.List;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
@@ -154,6 +160,64 @@ public class GlobalExceptionHandler {
     private static ResponseEntity<ApiResponse<Void>> badRequest(String message) {
         log.debug("客户端请求不合法: {}", message);
         return ResponseEntity.badRequest().body(ApiResponse.error(400, message));
+    }
+
+    /**
+     * 异步请求超时 —— DeferredResult/SseEmitter 到了自己声明的时限还没有结果.
+     *
+     * 不登记这一条的话它会掉进下面的兜底处理器, 变成 500「服务器内部错误」外加一条
+     * ERROR 日志. 两处都不对: 服务端并没有出错, 只是这次调用太久了, 该让前端提示
+     * 「稍后重试」而不是「服务异常」; 而这类超时是**配置预期内**会发生的事
+     * (阈值就在 llm.overall-timeout-ms 里写着), 不该占用 ERROR 级日志.
+     *
+     * 504 而不是 408: 408 是「你发得太慢」, 这里慢的是我们自己的上游.
+     *
+     * <p><b>SSE 请求只能回空体</b>, 理由见 {@link #clientAcceptsJson}: 这不是为了省字节,
+     * 而是带体会坏. /api/agent/chat/stream 上声明了 produces=text/event-stream, 于是
+     * 这一次请求能产出的类型就只剩 event-stream, 而 SSE 客户端的 Accept 里没有 JSON ——
+     * 硬把 ApiResponse 序列化出去会以 HttpMediaTypeNotAcceptableException(406) 收场,
+     * 容器接着把这次失败转发给 /error, 而 /error 落在 Spring Security 的
+     * anyRequest().authenticated() 上, 匿名访客最终拿到的是 401「请先登录」:
+     * 一次超时被报成了没登录, 客户端还会把它当成认证失败处理 —— 实测 JDK 的
+     * HttpURLConnection 直接抛 HttpRetryException("cannot retry ... in streaming mode").
+     * 空体没有可协商的类型, 这条链就断在第一步.
+     *
+     * <p>也不往流里补一条 error 事件: 超时回调触发时 emitter 已经被标记成 completed
+     * (实测发什么都返回 "ResponseBodyEmitter has already completed"), 想推成事件就得
+     * 自己再挂一个看门狗定时器; 而前端对「流断了却没有 done」本来就有兜底提示
+     * (frontend/src/api/agentStream.js), 不值当.
+     *
+     * <p>顺带说明这里和「流已经开始推之后才超时」的关系: 那种情况下响应早已提交, 504
+     * 只会被容器忽略, 客户端看到的就是一条推了一半、没有 done 的流 —— 前端同样按上面
+     * 那条兜底处理.
+     */
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAsyncTimeout(AsyncRequestTimeoutException e,
+                                                                HttpServletRequest request) {
+        log.warn("异步请求超时, 已按 504 结束: {} {}", request.getMethod(), request.getRequestURI());
+        if (!clientAcceptsJson(request)) {
+            return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT).build();
+        }
+        return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
+                .body(ApiResponse.error(504, "AI 响应超时, 请稍后重试; 把问题问得短一些会快很多"));
+    }
+
+    /**
+     * 这次请求能不能带一个 JSON 响应体出去.
+     *
+     * 没写 Accept、写了 {@code *&#47;*} 或写了非法值都算能 —— 那是最常见的情况,
+     * 也最宽容(与改动前的行为一致); 只有明确只要别的类型(SSE 的 text/event-stream)
+     * 才算不能. 于是这条判断的适用面刚好压在真正会出事的那一类请求上.
+     */
+    private static boolean clientAcceptsJson(HttpServletRequest request) {
+        try {
+            List<MediaType> accepted = MediaType.parseMediaTypes(request.getHeader(HttpHeaders.ACCEPT));
+            return accepted.isEmpty()
+                    || accepted.stream().anyMatch(t -> t.isCompatibleWith(MediaType.APPLICATION_JSON));
+        } catch (InvalidMediaTypeException ex) {
+            // 头写坏了不该让响应也跟着坏掉, 按最宽容处理
+            return true;
+        }
     }
 
     /** 其他未捕获异常 */

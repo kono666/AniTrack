@@ -114,6 +114,31 @@ public class AgentBudgetGuard {
         }
     }
 
+    /**
+     * 退还一次「预扣了但一次都没跑」的额度.
+     *
+     * <p>与 {@link #settle(int)} 的分工: settle 用于「跑完了, 但实际轮数比预留的少」,
+     * 它至少算一次调用(模型确实被调过); release 用于「压根没跑起来」—— 目前只有一种
+     * 情况: 预扣之后提交给 worker 池时被拒绝(池子满了). 那种情况下模型一次都没调,
+     * 整份预留必须原样退回.
+     *
+     * <p>不退还的后果不是「少了几分钱」, 而是个正反馈: 服务越忙 -> 被拒的请求越多 ->
+     * 额度掉得越快, 最后恰好在最需要额度的时候把额度耗光, 而那笔钱一分都没花出去.
+     *
+     * <p>跨天与 settle 同样处理: 退款不能打到新一天的账上.
+     */
+    public void release() {
+        int limit = props.getDailyCallBudget();
+        if (limit <= 0) {
+            return;
+        }
+        synchronized (lock) {
+            if (day.equals(clock.get())) {
+                used = Math.max(0, used - reserveSize());
+            }
+        }
+    }
+
     /** 今日剩余可用的模型调用次数; 未设上限时返回 -1 */
     public int remaining() {
         int limit = props.getDailyCallBudget();

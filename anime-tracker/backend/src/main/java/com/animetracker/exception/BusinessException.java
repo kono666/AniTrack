@@ -50,4 +50,17 @@ public class BusinessException extends RuntimeException {
     public static BusinessException tooManyRequests(String message) {
         return new BusinessException(429, message);
     }
+
+    /**
+     * 503 Service Unavailable.
+     *
+     * 用在「服务端自己腾不出手, 与你无关」的场景 —— 目前是 Agent 的 worker 池满了.
+     * 和 429 的分工: 429 是「你问得太勤了」, 由**配额**决定, 换个人来照样能问;
+     * 503 是「此刻服务器忙不过来」, 与配额无关, 等一会儿大家都好. 两者的重试策略
+     * 不一样, 所以码要分开 —— 都并到 429 里, 前端就没法区分「减少自己的频率」
+     * 和「换个时间再来」.
+     */
+    public static BusinessException serviceUnavailable(String message) {
+        return new BusinessException(503, message);
+    }
 }

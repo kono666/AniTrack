@@ -75,6 +75,62 @@ class AgentBudgetGuardTest {
                 .isEqualTo(429);
     }
 
+    /**
+     * 预扣之后发现「压根没跑起来」(提交线程池被拒)时, 整份预留要原样退回.
+     *
+     * 与 settle 的区别在最后那一行: settle 至少算一次调用, release 退的是全额.
+     * 这两者混用会让额度账目整体偏移一个常数 —— 而预算是按天算的, 偏移看不出来,
+     * 只会表现成「额度莫名其妙早用完了几次」.
+     */
+    @Test
+    @DisplayName("压根没跑起来的预扣要整份退回, 而不是按 settle 只退一部分")
+    void releaseRefundsTheWholeReservation() {
+        AgentBudgetGuard guard = new AgentBudgetGuard(props(100));
+
+        guard.acquire();
+        assertThat(guard.usedToday()).isEqualTo(ROUNDS);
+
+        guard.release();
+        assertThat(guard.usedToday()).as("一次都没跑, 就该回到零").isZero();
+        assertThat(guard.remaining()).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("退还不能退成负数, 也不该在没预扣过的时候凭空加额度")
+    void releaseNeverGoesNegative() {
+        AgentBudgetGuard guard = new AgentBudgetGuard(props(100));
+
+        guard.release();
+
+        assertThat(guard.usedToday()).isZero();
+        assertThat(guard.remaining()).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("未设上限时 release 是空操作")
+    void releaseIsNoopWhenUnlimited() {
+        AgentBudgetGuard guard = new AgentBudgetGuard(props(0));
+
+        guard.release();
+
+        assertThat(guard.usedToday()).isZero();
+        assertThat(guard.remaining()).isEqualTo(-1);
+    }
+
+    @Test
+    @DisplayName("跨天后到达的退还请求不该打到新一天的账上")
+    void releaseAfterRolloverDoesNotTouchTheNewDay() {
+        AtomicReference<LocalDate> today = new AtomicReference<>(LocalDate.of(2026, 9, 27));
+        AgentBudgetGuard guard = new AgentBudgetGuard(props(100), today::get);
+
+        guard.acquire();
+        today.set(LocalDate.of(2026, 9, 28));
+        guard.release();
+
+        assertThat(guard.usedToday()).isZero();
+        assertThat(guard.remaining()).isEqualTo(100);
+    }
+
     @Test
     @DisplayName("0 表示不限: 本地开发不该被预算挡住")
     void zeroMeansUnlimited() {

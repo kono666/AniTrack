@@ -69,8 +69,42 @@ public class LlmProperties {
     /** 读取超时(毫秒), 比 Bangumi 的 120s 短, 便于快速失败 */
     private int readTimeout = 90_000;
 
+    /**
+     * 一次提问的整体超时(毫秒); 0 表示自动推导, 见 {@link #effectiveOverallTimeoutMs()}.
+     *
+     * <p>与上面两个超时不是一回事: connect/read 管的是**一次模型调用**最多等多久,
+     * 这个管的是**一整次提问**最多跑多久. 一次提问最多跑 maxToolRounds 轮、每轮一次
+     * 模型调用, 所以两者的量级差着一个 maxToolRounds —— 把 readTimeout 直接当成整次
+     * 提问的上限, 会在正常但慢的请求上误杀.
+     */
+    private int overallTimeoutMs = 0;
+
+    /** 自动推导整体超时时, 留给工具执行与写库的余量 */
+    private static final long OVERALL_TIMEOUT_SLACK_MS = 60_000L;
+
     /** 密钥是否已配置 */
     public boolean hasApiKey() {
         return apiKey != null && !apiKey.isBlank();
+    }
+
+    /**
+     * 实际生效的整体超时(毫秒).
+     *
+     * <p>自动推导的口径是 {@code maxToolRounds × readTimeout + 一分钟余量}. 之所以是
+     * maxToolRounds 次而不是 maxToolRounds + 1 次: 编排循环每一轮都先调一次模型,
+     * 模型不再要求调用工具时就直接产出最终回答 —— 最后那次回答本身就占掉一轮, 不会
+     * 额外多一次 (见 AgentOrchestrator.run 的循环).
+     *
+     * <p>余量给的是工具执行与写库: 它们不在 readTimeout 的覆盖范围里, 但通常远快于
+     * 一次模型调用. 这个数字不是精确值, 只是「别把正常但慢的请求掐掉」的上界.
+     *
+     * <p>真实的默认值: 6 × 90 秒 + 60 秒 = 10 分钟. 看着长, 但它只在**真的卡住**时
+     * 才起作用 —— 正常跑完就把请求结束了, 这个值不参与计时.
+     */
+    public long effectiveOverallTimeoutMs() {
+        if (overallTimeoutMs > 0) {
+            return overallTimeoutMs;
+        }
+        return (long) Math.max(1, maxToolRounds) * readTimeout + OVERALL_TIMEOUT_SLACK_MS;
     }
 }

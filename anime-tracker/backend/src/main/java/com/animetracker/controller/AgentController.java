@@ -26,14 +26,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.async.DeferredResult;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * AI 助手接口.
@@ -55,10 +57,19 @@ public class AgentController {
 
     private static final Logger log = LoggerFactory.getLogger(AgentController.class);
 
-    /** SSE 连接最长存活时间, 要比模型最慢的一次响应宽松 */
-    private static final long EMITTER_TIMEOUT_MS = 180_000L;
     /** 推给前端的工具结果预览长度 */
     private static final int PREVIEW_CHARS = 300;
+
+    /** 跑 Agent 循环的线程数 */
+    private static final int WORKER_THREADS = 4;
+    /**
+     * 排队上限.
+     *
+     * 池子满了之后是「拒绝」还是「无限排队」, 区别就在有没有这个数: 队列不设界时,
+     * 上游一慢, 请求就在这里无声地堆积 —— 前端一直转圈, 服务端一直攒着连接,
+     * 直到内存或别的什么东西先出事. 有个上限, 超出的人当场拿到 503, 反而是好消息.
+     */
+    private static final int WORKER_QUEUE_CAPACITY = 16;
 
     private final AgentOrchestrator orchestrator;
     private final AgentConversationService conversationService;
@@ -72,13 +83,25 @@ public class AgentController {
      * 跑 Agent 循环的线程池.
      *
      * 用固定大小而不是缓存池: 每个任务都在等大模型返回, 池子无限大只会把上游配额打爆,
-     * 不如让超出的请求排队. 队列不设界是因为入口有全局限流兜着, 堆不起来.
+     * 不如让超出的请求排队. 排队也要有上限 —— 见 {@link #WORKER_QUEUE_CAPACITY}.
+     *
+     * 队列满了由拒绝策略当场抛 503: 抛在**调用方线程**上(即提交这一刻的请求线程),
+     * 于是它照常走全局异常处理, 前端拿到的是结构一致的 JSON, 而不是一个没人管的
+     * 异步错误. 池子已关闭时(应用正在停机)走的也是这个分支, 不会变成 500.
      */
-    private final ExecutorService workers = Executors.newFixedThreadPool(4, r -> {
-        Thread t = new Thread(r, "agent-worker");
-        t.setDaemon(true);
-        return t;
-    });
+    private final ThreadPoolExecutor workers = new ThreadPoolExecutor(
+            WORKER_THREADS, WORKER_THREADS,
+            0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(WORKER_QUEUE_CAPACITY),
+            r -> {
+                Thread t = new Thread(r, "agent-worker");
+                t.setDaemon(true);
+                return t;
+            },
+            (r, executor) -> {
+                throw BusinessException.serviceUnavailable(
+                        "AI 助手正在处理的提问太多了, 请稍等一会儿再试");
+            });
 
     public AgentController(AgentOrchestrator orchestrator,
                            AgentConversationService conversationService,
@@ -99,6 +122,22 @@ public class AgentController {
     @PreDestroy
     void shutdown() {
         workers.shutdown();
+    }
+
+    /**
+     * 把一次 Agent 执行交给 worker 池; 池子满了就抛 503(见 {@link #workers}).
+     *
+     * 提交失败时把刚预扣的每日额度退回去: 预扣发生在提交**之前**(理由见 chat 的注释),
+     * 所以「被拒」这条路上额度已经扣了而模型一次都没调. 不退还的话, 服务越忙额度掉得
+     * 越快 —— 恰好在最需要额度的时候把额度耗光, 而那笔钱一分都没花出去.
+     */
+    private void submit(Runnable task) {
+        try {
+            workers.submit(task);
+        } catch (RuntimeException e) {
+            budget.release();
+            throw e;
+        }
     }
 
     // ========== 对话 ==========
@@ -128,24 +167,56 @@ public class AgentController {
         return ApiResponse.success(out);
     }
 
-    /** 非流式对话: 一次返回完整回答与工具调用轨迹 */
+    /**
+     * 非流式对话: 一次返回完整回答与工具调用轨迹.
+     *
+     * <p><b>为什么要交出去异步跑, 而不是直接在请求线程上算完</b>: 一次 Agent 循环最多
+     * 跑 maxToolRounds 轮、每轮一次模型调用, 整体可以到几分钟. 这条链路以前是同步的,
+     * 于是每个请求都占着一条 Tomcat 请求线程直到跑完 —— 而请求线程是有上限的.
+     * 几个人同时问, 线程被占满, 受影响的是**所有接口**: 首页、番剧列表、登录, 一起转圈.
+     * 一个慢接口把整个站点拖下水, 这才是要修的问题, 不是「AI 慢」.
+     *
+     * <p>改成 DeferredResult 之后, 请求线程提交完任务就还回线程池了, 慢活在
+     * {@link #workers} 上跑. 对前端完全透明: 还是一样的 JSON, 只是等待期间不再占着
+     * 服务端线程. 到点没跑完就由 DeferredResult 自己结束这次请求(前端拿到 504),
+     * 时限取自 {@code llm.overall-timeout-ms}.
+     *
+     * <p>身份/限流/预算/入参校验全部留在提交之前: 它们都很便宜, 而且被拒时必须是
+     * 同步的普通 JSON(403/429/400/503), 不该退化成一个异步的错误.
+     */
     @PostMapping("/chat")
-    public ApiResponse<Map<String, Object>> chat(@CurrentUser User user,
-                                                 @Valid @RequestBody AgentChatRequest req,
-                                                 HttpServletRequest http) {
+    public DeferredResult<ApiResponse<Map<String, Object>>> chat(@CurrentUser User user,
+                                                                @Valid @RequestBody AgentChatRequest req,
+                                                                HttpServletRequest http) {
         Persona persona = resolvePersona(user, req.getPersona());
         checkRateLimit(user, http);
         budget.acquire();
         String input = normalizeInput(req.getMessage());
+        List<LlmMessage> history = loadHistory(user, req);
 
-        AgentResult result = orchestrator.run(user, persona, loadHistory(user, req), input,
-                AgentOrchestrator.SILENT);
-        budget.settle(result.getRounds());
+        // 超时兜底: 到点还没跑完就把请求结束掉, 让前端拿到一个明确的答复而不是一直等.
+        // 这**不会**中断 worker 上的任务(也中断不了 —— 它阻塞在上游 HTTP 上), 那次调用
+        // 会自己跑完然后被丢弃. 真正兜住成本的是 readTimeout 与每日预算, 不是这个超时.
+        DeferredResult<ApiResponse<Map<String, Object>>> out =
+                new DeferredResult<>(props.effectiveOverallTimeoutMs());
 
-        Map<String, Object> out = answerPayload(result);
-        out.put("conversationId", persist(user, req, persona, input, result));
-        out.put("dailyRemaining", budget.remaining());
-        return ApiResponse.success(out);
+        submit(() -> {
+            try {
+                AgentResult result = orchestrator.run(user, persona, history, input,
+                        AgentOrchestrator.SILENT);
+                budget.settle(result.getRounds());
+
+                Map<String, Object> payload = answerPayload(result);
+                payload.put("conversationId", persist(user, req, persona, input, result));
+                payload.put("dailyRemaining", budget.remaining());
+                out.setResult(ApiResponse.success(payload));
+            } catch (Exception e) {
+                log.warn("Agent 执行失败: {}", e.toString());
+                out.setErrorResult(e);
+            }
+        });
+
+        return out;
     }
 
     /** 流式对话: 工具调用与最终回答通过 SSE 实时推送 */
@@ -161,9 +232,12 @@ public class AgentController {
         String input = normalizeInput(req.getMessage());
         List<LlmMessage> history = loadHistory(user, req);
 
-        SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MS);
+        // 超时要能覆盖最坏的一次执行(轮数 × 单次模型调用), 否则正常但慢的请求会被中途
+        // 掐断 —— 前端看到的是「流莫名其妙断了」, 而不是任何一条错误. 口径见
+        // LlmProperties.effectiveOverallTimeoutMs()
+        SseEmitter emitter = new SseEmitter(props.effectiveOverallTimeoutMs());
 
-        workers.submit(() -> {
+        submit(() -> {
             try {
                 AgentResult result = orchestrator.run(user, persona, history, input,
                         new AgentOrchestrator.Listener() {
