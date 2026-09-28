@@ -89,8 +89,11 @@ export const getUserInfo = (userId) => api.get(`/user/info/${userId}`)
 export const getCurrentUser = () => api.get('/user/me')
 
 // ========== Bangumi 番剧 ==========
+/** 搜索每页条数. 后端 limit 的上限是 50(BangumiController 的 @Max), 20 是本项目的口径;
+ *  导出它是为了让 Search.vue 算「共几页」时用的是同一个数, 而不是自己再抄一份 20. */
+export const SEARCH_PAGE_SIZE = 20
 export const searchAnime = (keyword, page = 1) =>
-  api.get('/bangumi/search', { params: { keyword, page, limit: 20 } })
+  api.get('/bangumi/search', { params: { keyword, page, limit: SEARCH_PAGE_SIZE } })
 export const getAnimeDetail = (subjectId) =>
   api.get(`/bangumi/subject/${subjectId}`)
 export const getEpisodes = (subjectId) =>

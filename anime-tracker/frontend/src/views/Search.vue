@@ -36,6 +36,16 @@
         <AnimeCard v-for="item in results" :key="item.id" :anime="item" />
       </div>
       <EmptyState v-else icon="🔍" message="没有找到相关番剧" />
+
+      <!-- 翻页. 后端 /bangumi/search 本来就吃 page/limit 并回 total(批次 1.3 加的),
+           缺的一直是前端: 改前只请求第 1 页, 而结果上方还写着「共找到 N 个结果」——
+           用户看得见总数, 却翻不到第 21 条, 只能换个词再搜一次 -->
+      <Pagination
+        v-if="results.length > 0"
+        :current-page="page"
+        :total-pages="totalPages"
+        @change="doSearch"
+      />
     </div>
 
     <!-- Browse view (no search query) -->
@@ -51,11 +61,12 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { searchAnime, getRanking } from '../api'
+import { searchAnime, getRanking, SEARCH_PAGE_SIZE } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import AnimeCard from '../components/AnimeCard.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
+import Pagination from '../components/Pagination.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -63,10 +74,14 @@ const router = useRouter()
 const keyword = ref('')
 const results = ref([])
 const total = ref(0)
+const page = ref(1)
 const loading = ref(false)
 const searched = ref(false)
 const browseList = ref([])
 const error = ref('')
+
+// 页数按后端口径算(它回的 total 是**全部**匹配数, 不是这一页的条数)
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / SEARCH_PAGE_SIZE)))
 
 const viewMode = computed(() => route.query.view || 'rank')
 const pageTitle = computed(() => {
@@ -75,18 +90,20 @@ const pageTitle = computed(() => {
   return '🏆 热门排行'
 })
 
-async function doSearch() {
+/** 搜索第 p 页. 新关键词从第 1 页开始, 翻页时把页码传进来(默认参数就是 1) */
+async function doSearch(p = 1) {
   const q = keyword.value.trim()
   if (!q) return
   // Sync to URL
   if (route.query.q !== q) {
     router.replace({ query: { q } })
   }
+  page.value = p
   loading.value = true
   searched.value = true
   error.value = ''
   try {
-    const res = await searchAnime(q, 1)
+    const res = await searchAnime(q, p)
     results.value = res.data.data?.list || []
     total.value = res.data.data?.total || 0
   } catch (e) {
@@ -99,9 +116,11 @@ async function doSearch() {
   loading.value = false
 }
 
-/** 失败后重试: 按当前是在搜索还是在浏览列表, 重跑对应那一次加载 */
+/** 失败后重试: 按当前是在搜索还是在浏览列表, 重跑对应那一次加载.
+ *  搜索态要带上当前页码 —— 在第 3 页上失败, 重试应该重试第 3 页,
+ *  而不是把用户悄悄送回第 1 页 */
 function retry() {
-  if (searched.value) doSearch()
+  if (searched.value) doSearch(page.value)
   else loadBrowse()
 }
 

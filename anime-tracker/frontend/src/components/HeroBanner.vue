@@ -56,13 +56,13 @@
     </div>
 
     <!-- Arrows -->
-    <button v-if="items.length > 1" class="hero-arrow hero-arrow-left" @click="prev">‹</button>
-    <button v-if="items.length > 1" class="hero-arrow hero-arrow-right" @click="next">›</button>
+    <button v-if="items.length > 1" class="hero-arrow hero-arrow-left" @click="jump(-1)">‹</button>
+    <button v-if="items.length > 1" class="hero-arrow hero-arrow-right" @click="jump(1)">›</button>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 const props = defineProps({
@@ -72,18 +72,67 @@ const props = defineProps({
 const $router = useRouter()
 const current = ref(0)
 let timer = null
+const INTERVAL_MS = 5000
 const fallbackImg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#18181b"><rect width="300" height="400"/><text x="150" y="200" text-anchor="middle" fill="#3f3f46" font-size="16">No Cover</text></svg>')
 
-function next() { current.value = (current.value + 1) % props.items.length }
-function prev() { current.value = (current.value - 1 + props.items.length) % props.items.length }
-function goTo(i) { current.value = i; resetTimer() }
-function resetTimer() {
-  clearInterval(timer)
-  timer = setInterval(next, 5000)
+function stepBy(delta) {
+  // 空数组要挡掉: 0 条的时候 (0+1)%0 是 NaN, 会写进 transform 变成
+  // translateX(-NaN%). 平时按钮不渲染所以碰不到, 但 props 从有到无的过程中
+  // 定时器还在跑, 这是唯一会走到这里的路径.
+  if (props.items.length === 0) return
+  current.value = (current.value + delta + props.items.length) % props.items.length
+}
+function next() { stepBy(1) }
+
+/** 手动切换(箭头 / 圆点): 顺带把 5 秒的计时重新开始 ——
+ *  用户刚点完, 不该在 0.2 秒之后又被自动切走 */
+function jump(delta) { stepBy(delta); syncTimer() }
+function goTo(i) { current.value = i; syncTimer() }
+
+/** 用户在系统里开了「减少动效」就完全不自动播放(但手动左右切换仍然可用) */
+function prefersReducedMotion() {
+  // jsdom 没有 matchMedia, 可选调用兜住 —— 测试环境按「不减少动效」处理
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true
 }
 
-onMounted(() => { if (props.items.length > 1) resetTimer() })
-onUnmounted(() => clearInterval(timer))
+/**
+ * 自动轮播的总开关. 三种情况都不转:
+ *   * 少于两条(没什么可轮的);
+ *   * 标签页在后台 —— 改前不管这个: 切走之后定时器照跑, 回来时可能已经
+ *     空转了几十次, 用户看到的是轮播"跳"到了某个位置, 而且白白占着 CPU;
+ *   * 用户要求减少动效.
+ *
+ * 另外这个函数同时是「数据到位了再开始转」的那一处. 改前是 onMounted 里
+ * 判断一次就完了, 而 Home.vue 是先用空数组挂上组件、数据回来了才通过 props
+ * 传进来的 —— onMounted 那一刻 length 是 0, 于是定时器**从来没起来过**,
+ * 首页那个轮播其实一直停在第一张(箭头按钮能点, 所以看着像"能动")。
+ * 现在改成 watch items.length, 数据到了才开始转.
+ */
+function syncTimer() {
+  clearInterval(timer)
+  timer = null
+  if (props.items.length < 2) return
+  if (document.hidden) return
+  if (prefersReducedMotion()) return
+  timer = setInterval(next, INTERVAL_MS)
+}
+
+function onVisibilityChange() { syncTimer() }
+
+watch(() => props.items.length, () => {
+  // 数据换了(或条数变了): 回到第一张, 计时重新开始
+  if (current.value >= props.items.length) current.value = 0
+  syncTimer()
+})
+
+onMounted(() => {
+  syncTimer()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+onUnmounted(() => {
+  clearInterval(timer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+})
 </script>
 
 <style scoped>
@@ -197,6 +246,12 @@ onUnmounted(() => clearInterval(timer))
 .hero-arrow:hover { background: rgba(168,85,247,.3); border-color: rgba(168,85,247,.5); }
 .hero-arrow-left { left: 16px; }
 .hero-arrow-right { right: 16px; }
+
+/* 用户在系统里开了「减少动效」: 自动播放已经在 JS 里停掉了(见 syncTimer),
+   这里再去掉手动切换时的滑动动画 —— 尊重这个设置的完整含义是两件事都做 */
+@media (prefers-reduced-motion: reduce) {
+  .hero-track { transition: none; }
+}
 
 @media (max-width: 768px) {
   .hero { height: 340px; }

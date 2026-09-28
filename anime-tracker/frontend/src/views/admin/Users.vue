@@ -140,8 +140,11 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* 这份是**实际生效**的那份, 不是 assets/css/admin.css 里那份.
+   原因见 admin.css 的注释: 那份在 @layer components 里, scoped 不在层里,
+   层叠层的规则一定输. 所以窄屏横向滚动这件事必须在这里改, 那边只是保持同步. */
 .admin-table-wrap {
-  background: var(--card-bg); border-radius: 12px; overflow: hidden;
+  background: var(--card-bg); border-radius: 12px; overflow-x: auto;
   box-shadow: var(--shadow);
 }
 .username-cell { font-size: 14px; font-weight: 500; color: var(--text); }

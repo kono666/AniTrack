@@ -276,6 +276,19 @@ async function loadProfile() {
   .p-tab { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
   .p-list { padding: 0 16px; }
   .pc-cover { width: 48px; }
-  .pc-actions { display: none; }
+
+  /* 操作区在窄屏下从「藏起来」改成「单独占一行」.
+     改前这里是一句 display:none —— 「+1 集」和「改状态」在手机上直接消失,
+     而这两个恰恰是移动端最常用的动作(看完一集顺手点一下), 藏掉功能换来的
+     "干净"不划算: 用户只会以为这个站没有这个功能, 或者以为自己没登录.
+     卡片改成可换行, 操作区 width:100% 于是被挤到第二行, 用一条分隔线和内容分开. */
+  .p-card { flex-wrap: wrap; }
+  .pc-actions {
+    display: flex; width: 100%; gap: 10px;
+    padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--border);
+  }
+  /* 手指不是鼠标: 两个控件都按 40px 的触控目标放大, 下拉框吃掉剩下的宽度 */
+  .pca-btn { width: 40px; height: 40px; font-size: 14px; }
+  .pca-select { flex: 1; min-height: 40px; padding: 8px 10px; font-size: 13px; }
 }
 </style>

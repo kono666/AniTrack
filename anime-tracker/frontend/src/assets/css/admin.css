@@ -2,9 +2,20 @@
    🎬 AniTrack — Admin Table & Chart Cards
    ============================================================ */
 
-/* ── Admin Table ── */
-.admin-table-wrap { background:var(--card); border-radius:var(--radius); overflow:hidden; border:1px solid var(--card-border); }
-.admin-table { width:100%; border-collapse:collapse; font-size:13px; }
+/* ── Admin Table ──
+
+   overflow-x:auto —— 窄屏下用户表格(7 列)放不下, 改前是 overflow:hidden:
+   多出来的列被**切掉**了, 而且没有任何滚动条, 所以「操作」那一列(解锁/禁用/
+   设为管理员)在手机上直接是看不到也点不到的. 现在横向可滚.
+
+   注意这条规则有对手: users.vue 的 scoped 里也写了一份 .admin-table-wrap.
+   这个文件是 @import 进 @layer components 的, 而 scoped 样式不在任何 layer 里,
+   层叠层里的规则无论怎么写都输给不在层里的 —— 所以两处必须一起改, 只改这里
+   等于没改(批次 6 之前就是这样: 修了也白修). */
+.admin-table-wrap { background:var(--card); border-radius:var(--radius); overflow-x:auto; border:1px solid var(--card-border); }
+/* 撑开最小宽度, 让横向滚动真的会出现 —— 没有它, table 的 width:100% 会一路
+   压到 7 列挤成一团, overflow 设了也永远滚不起来 */
+.admin-table { width:100%; min-width:720px; border-collapse:collapse; font-size:13px; }
 .admin-table th { padding:14px 16px; text-align:left; color:var(--text-muted); font-weight:600; border-bottom:1px solid var(--border); background:var(--bg-secondary); }
 .admin-table td { padding:14px 16px; border-bottom:1px solid var(--border); color:var(--text); }
 .admin-table tr:last-child td { border-bottom:none; }
