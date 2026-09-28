@@ -4,8 +4,19 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
+/**
+ * 追番记录: 一个用户对一部番只有一条.
+ *
+ * uniqueConstraints 里的约束名与 db/migration 下 V3 建的约束同名, 但两处各管一段:
+ * 生产库靠 Flyway 的 DDL 兜底, 测试库是 ddl-auto=create-drop 由 Hibernate 建表,
+ * 不写在这里测试库就没有约束, 并发用例会假绿.
+ * (Hibernate 的 validate 只比对表与列、不校验约束, 所以两处写重了也不会冲突.)
+ */
 @Entity
-@Table(name = "anime_tracking")
+@Table(name = "anime_tracking",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_anime_tracking_user_subject",
+                columnNames = {"user_id", "subject_id"}))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

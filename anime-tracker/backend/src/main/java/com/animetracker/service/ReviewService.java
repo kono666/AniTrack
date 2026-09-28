@@ -5,6 +5,7 @@ import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.ReviewRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import java.util.*;
 
@@ -12,28 +13,43 @@ import java.util.*;
 public class ReviewService {
 
     private final ReviewRepository reviewRepository;
+    private final IsolatedInsert isolatedInsert;
 
-    public ReviewService(ReviewRepository reviewRepository) {
+    public ReviewService(ReviewRepository reviewRepository, IsolatedInsert isolatedInsert) {
         this.reviewRepository = reviewRepository;
+        this.isolatedInsert = isolatedInsert;
     }
 
-    /** 添加或更新评论 */
+    /**
+     * 添加或更新评论.
+     *
+     * 与 {@link TrackService#saveTracking} 同一套写法, 理由也一样:
+     * review 表上有 (user_id, subject_id) 唯一约束, 并发下的落败方重查一次改成更新,
+     * 而不是把 500 抛给用户. 插入同样要套 {@link IsolatedInsert}, 否则 Agent 工具
+     * 那条路上的外层事务会被冲突毒化, 补救全部作废.
+     */
     public Review saveReview(User user, ReviewRequest req) {
         Optional<Review> existing = reviewRepository.findByUserAndSubjectId(user, req.getSubjectId());
-
-        Review review;
         if (existing.isPresent()) {
-            review = existing.get();
-        } else {
-            review = Review.builder()
+            return applyAndSave(existing.get(), req);
+        }
+        try {
+            return isolatedInsert.attempt(() -> applyAndSave(Review.builder()
                     .user(user)
                     .subjectId(req.getSubjectId())
-                    .build();
+                    .build(), req));
+        } catch (DataIntegrityViolationException e) {
+            Review winner = reviewRepository.findByUserAndSubjectId(user, req.getSubjectId())
+                    .orElseThrow(() -> e);
+            return applyAndSave(winner, req);
         }
+    }
 
+    /** 落字段并立刻 flush, 让约束冲突必定在 try 块内抛出. 理由同 TrackService. */
+    private Review applyAndSave(Review review, ReviewRequest req) {
         review.setRating(req.getRating());
         review.setContent(req.getContent());
-        return reviewRepository.save(review);
+        return reviewRepository.saveAndFlush(review);
     }
 
     /** 删除评论 */

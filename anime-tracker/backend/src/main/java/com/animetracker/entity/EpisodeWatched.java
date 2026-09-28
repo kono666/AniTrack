@@ -4,8 +4,14 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
+/**
+ * 已看剧集: 一个用户对某番的某一集只会有一条. 约束说明同 {@link AnimeTracking}.
+ */
 @Entity
-@Table(name = "episode_watched")
+@Table(name = "episode_watched",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_episode_watched_user_anime_episode",
+                columnNames = {"user_id", "anime_id", "episode_num"}))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

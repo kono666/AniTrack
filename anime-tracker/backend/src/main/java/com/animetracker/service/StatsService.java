@@ -2,8 +2,8 @@ package com.animetracker.service;
 
 import com.animetracker.entity.*;
 import com.animetracker.repository.*;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
 
 @Service
@@ -13,13 +13,16 @@ public class StatsService {
     private final AnimeRepository animeRepo;
     private final EpisodeWatchedRepository epWatchedRepo;
     private final ReviewRepository reviewRepo;
+    private final IsolatedInsert isolatedInsert;
 
     public StatsService(TrackingRepository trackingRepo, AnimeRepository animeRepo,
-                        EpisodeWatchedRepository epWatchedRepo, ReviewRepository reviewRepo) {
+                        EpisodeWatchedRepository epWatchedRepo, ReviewRepository reviewRepo,
+                        IsolatedInsert isolatedInsert) {
         this.trackingRepo = trackingRepo;
         this.animeRepo = animeRepo;
         this.epWatchedRepo = epWatchedRepo;
         this.reviewRepo = reviewRepo;
+        this.isolatedInsert = isolatedInsert;
     }
 
     /** 用户类型分布 */
@@ -102,16 +105,39 @@ public class StatsService {
                 .map(EpisodeWatched::getEpisodeNum).toList();
     }
 
-    /** 切换剧集观看状态 */
-    @Transactional
+    /**
+     * 切换剧集观看状态.
+     *
+     * <b>这里的 @Transactional 被摘掉了, 说清原因和代价</b>
+     *
+     * episode_watched 上加了 (user_id, anime_id, episode_num) 唯一约束, 并发下两次
+     * 「打勾」必有一次撞约束. 插入套一层 {@link IsolatedInsert}, 让冲突只回滚它自己 ——
+     * 冲突会毒化当前事务, 而当前事务未必是我们的(Agent 工具调用外面套着
+     * ToolTransactionRunner 的事务), 不隔离的话补救会被 UnexpectedRollbackException 吃掉.
+     * 删除需要的事务边界移到了 EpisodeWatchedRepository 的那个派生删除方法上.
+     *
+     * 类上/方法上不加 @Transactional 也是同一个理由: 事务边界套在 catch 外面,
+     * 冲突会把整个方法的事务标记成 rollback-only, 返回 true 也救不回来.
+     *
+     * 代价是「查 + 写」不再原子: 两个请求可能同时看到「未看过」. 但唯一约束保证最多插进
+     * 一行, 落败的那个返回 true(已看过) —— 与「两个都点了打勾」该有的结果一致.
+     */
     public boolean toggleEpisode(User user, Integer animeId, Integer episodeNum) {
         if (epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(user, animeId, episodeNum)) {
             epWatchedRepo.deleteByUserAndAnimeIdAndEpisodeNum(user, animeId, episodeNum);
             return false;
-        } else {
-            epWatchedRepo.save(EpisodeWatched.builder()
-                    .user(user).animeId(animeId).episodeNum(episodeNum).build());
+        }
+        try {
+            isolatedInsert.attempt(() -> epWatchedRepo.saveAndFlush(EpisodeWatched.builder()
+                    .user(user).animeId(animeId).episodeNum(episodeNum).build()));
             return true;
+        } catch (DataIntegrityViolationException e) {
+            // 只认「确实已经有一行」这一种情况; 查不到说明炸的是别的约束(比如 user_id 外键),
+            // 那就不是并发落败, 原样抛出, 别把真问题吞成一次「打勾成功」
+            if (epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(user, animeId, episodeNum)) {
+                return true;
+            }
+            throw e;
         }
     }
 

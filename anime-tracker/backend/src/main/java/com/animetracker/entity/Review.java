@@ -4,8 +4,14 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
+/**
+ * 短评: 一个用户对一部番只有一条. 约束说明同 {@link AnimeTracking}.
+ */
 @Entity
-@Table(name = "review")
+@Table(name = "review",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_review_user_subject",
+                columnNames = {"user_id", "subject_id"}))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

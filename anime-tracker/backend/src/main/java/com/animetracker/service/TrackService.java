@@ -6,6 +6,7 @@ import com.animetracker.entity.AnimeTracking;
 import com.animetracker.entity.User;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.TrackingRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import java.util.*;
 
@@ -14,33 +15,75 @@ public class TrackService {
 
     private final TrackingRepository trackingRepository;
     private final AnimeRepository animeRepository;
+    private final IsolatedInsert isolatedInsert;
 
     public TrackService(TrackingRepository trackingRepository,
-                        AnimeRepository animeRepository) {
+                        AnimeRepository animeRepository,
+                        IsolatedInsert isolatedInsert) {
         this.trackingRepository = trackingRepository;
         this.animeRepository = animeRepository;
+        this.isolatedInsert = isolatedInsert;
     }
 
-    /** 添加或更新追番记录 */
+    /**
+     * 添加或更新追番记录.
+     *
+     * <b>为什么不能只写「先查后插」</b>
+     *
+     * 查不到就插, 两个请求同时走这条路(双击、前端重试、多标签页)就会落下两行.
+     * 重复行的后果不是「多一条数据」这么轻: 该用户之后每次调
+     * findByUserAndSubjectId 都会抛 IncorrectResultSizeDataAccessException,
+     * 相关接口从此**永久 500 且不自愈** —— 数据躺在库里, 重启也没用.
+     *
+     * 真正的防线是 anime_tracking 上的唯一约束(V3 迁移建的). 这里做的是它的配套:
+     * 让并发落败的那个请求不要以 500 收场, 而是重查一次、改成更新,
+     * 对外表现与「它后到」完全一致.
+     *
+     * <b>插入为什么套一层 IsolatedInsert</b>
+     *
+     * 冲突会毒化「当前事务」, 而当前事务未必是我们的 —— Agent 工具调用那条路上,
+     * 外面套着 ToolTransactionRunner 开的事务. 把插入单独放进一个 REQUIRES_NEW 事务,
+     * 它失败只回滚它自己, 外层不受牵连, catch 之后的重查与改写才有意义.
+     * 详细理由见 {@link IsolatedInsert}.
+     *
+     * 另一个办法是给本方法加 @Transactional, 但那样只会更糟: 事务边界套在 catch 外面,
+     * 冲突直接把整个方法的事务标记成 rollback-only, 连「重查一次」都救不回来.
+     *
+     * 代价是「查 + 写」不再是一个原子步骤. 这里丢的是后写覆盖先写的旧值,
+     * 与加锁前相比没有变差 —— 但重复行从此不可能出现, 那才是要命的那件事.
+     */
     public AnimeTracking saveTracking(User user, TrackRequest req) {
         Optional<AnimeTracking> existing = trackingRepository.findByUserAndSubjectId(user, req.getSubjectId());
-
-        AnimeTracking track;
         if (existing.isPresent()) {
-            track = existing.get();
-        } else {
-            track = AnimeTracking.builder()
+            return applyAndSave(existing.get(), req);
+        }
+        try {
+            return isolatedInsert.attempt(() -> applyAndSave(AnimeTracking.builder()
                     .user(user)
                     .subjectId(req.getSubjectId())
-                    .build();
+                    .build(), req));
+        } catch (DataIntegrityViolationException e) {
+            // 并发对手抢先插了同一行. 重查回来更新它, 不把 500 抛给用户.
+            AnimeTracking winner = trackingRepository.findByUserAndSubjectId(user, req.getSubjectId())
+                    // 仍查不到, 说明这次冲突与 (user_id, subject_id) 无关, 原样抛出别掩盖
+                    .orElseThrow(() -> e);
+            return applyAndSave(winner, req);
         }
+    }
 
+    /**
+     * 把请求字段落到实体上并落库.
+     *
+     * 用 saveAndFlush 而不是 save: 三个实体的主键都是 IDENTITY, 现在 save 也会立刻发
+     * INSERT, 但这是自增主键带来的巧合. saveAndFlush 把 flush 钉死在这次调用里,
+     * 约束冲突必定在 try 块内抛出, 换个主键策略也不会悄悄失效.
+     */
+    private AnimeTracking applyAndSave(AnimeTracking track, TrackRequest req) {
         track.setStatus(req.getStatus());
         if (req.getProgress() != null) track.setProgress(req.getProgress());
         if (req.getScore() != null) track.setScore(req.getScore());
         if (req.getNotes() != null) track.setNotes(req.getNotes());
-
-        return trackingRepository.save(track);
+        return trackingRepository.saveAndFlush(track);
     }
 
     /** 删除追番记录 */
