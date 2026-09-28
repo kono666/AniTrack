@@ -1,8 +1,17 @@
-# Anime Tracker - 生产环境 PostgreSQL
-# 启动: docker-compose up -d
-# 然后: mvn spring-boot:run -Dspring-boot.run.profiles=postgres
-
-version: '3.8'
+# ============================================================
+#  一键起「后端 + 数据库」
+#
+#  用法:
+#    1. 复制 .env.example 为 .env, 填好 JWT_SECRET 与首次部署用的 ADMIN_PASSWORD
+#    2. docker compose up -d --build
+#    3. curl http://localhost:8080/actuator/health 看到 {"status":"UP"} 就成功了
+#
+#  只想要数据库 (本地跑 mvn, 借这个 PG 用):
+#    docker compose up -d postgres
+#
+#  变量都从 .env 读 (compose 会自动读同目录下的 .env), 没有的用这里的默认值.
+#  没有写 version: —— Compose v2 已不再需要它, 留着只会多一条 obsolete 警告.
+# ============================================================
 
 services:
   postgres:
@@ -10,18 +19,79 @@ services:
     container_name: anitrack-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: anitrack
-      POSTGRES_USER: anitrack
-      POSTGRES_PASSWORD: anitrack
+      POSTGRES_DB: ${DB_NAME:-anitrack}
+      POSTGRES_USER: ${DB_USER:-anitrack}
+      POSTGRES_PASSWORD: ${DB_PASS:-anitrack}
     ports:
-      - "5432:5432"
+      # 只绑到本机回环地址, 不写 "5432:5432".
+      # 后者会把数据库暴露在所有网卡上 —— 本机开发时看起来毫无区别,
+      # 一旦照抄这份文件部署到云主机, 那就是一个开着 5432 端口、密码是默认值的库.
+      # 后端在同一个 compose 网络里用服务名 postgres 连它, 并不需要走宿主机端口.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U anitrack"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-anitrack} -d ${DB_NAME:-anitrack}"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  backend:
+    build:
+      context: ./anime-tracker/backend
+    image: anitrack-backend:latest
+    container_name: anitrack-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        # 等「PG 真的能接受连接」再启动后端.
+        # 只写 depends_on: [postgres] 表达的是「容器起来了」, 不是「数据库可连了」——
+        # 那样 Flyway 会在启动瞬间撞上连接失败, 后端直接退出, 然后 restart 策略再拉起来,
+        # 靠重启硬熬过去. 用 service_healthy 就把这段运气换成了确定.
+        condition: service_healthy
+    environment:
+      # 数据库: 主机名是 compose 网络里的服务名 postgres, 不是 localhost
+      DB_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-anitrack}
+      DB_USER: ${DB_USER:-anitrack}
+      DB_PASS: ${DB_PASS:-anitrack}
+
+      # JWT 签名密钥.
+      # 用 ${...:?} 的效果是: .env 里没填就直接拒绝启动, 并打印下面这句话.
+      # 这跟后端自身的 fail-fast 是同一个取舍 (见设计要点 7):
+      # 一个公开的默认密钥不会让任何功能报错, 只会让任何人都能伪造管理员 token,
+      # 所以宁可起不来.
+      JWT_SECRET: ${JWT_SECRET:?未设置 JWT_SECRET —— 生产环境的签名密钥必须显式提供, 见 .env.example}
+
+      # 初始管理员: 只在「库里还没有管理员」时用到, 之后可以从 .env 里撤掉.
+      # 这里不给 ADMIN_PASSWORD 兜底值 —— 公开的默认管理员密码等于一个后门.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+
+      # AI 助手: 不填密钥也能启动, 只是助手会提示需要配置, 其余功能不受影响
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai-compat}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      # 公网部署时这两个比本地要严: 一次提问最多触发 6 轮工具调用, 按提问计数会低估开销
+      LLM_DAILY_BUDGET_CALLS: ${LLM_DAILY_BUDGET_CALLS:-500}
+      LLM_RATE_LIMIT_PER_MINUTE: ${LLM_RATE_LIMIT_PER_MINUTE:-10}
+
+      # 跨域白名单: 同源部署 (nginx 反代 /api) 时留空即可, 后端连 CORS 过滤器都不注册
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+    ports:
+      # 前面有 nginx 反代时, 建议改成 "127.0.0.1:8080:8080" ——
+      # 只让本机的反向代理能访问, 公网只认那一个入口.
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      # 与 Dockerfile 里的 HEALTHCHECK 同一条命令 (分组后的 liveness: 只问进程在不在,
+      # 不碰数据库 —— 原因见 Dockerfile 里的说明), 在这里再写一遍是为了让
+      # docker compose ps 一眼看到 unhealthy (它展示的是 compose 自己的配置).
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/actuator/health/liveness"]
+      interval: 30s
+      timeout: 3s
+      start_period: 60s
+      retries: 3
 
 volumes:
   pgdata:
