@@ -175,8 +175,31 @@ public class AdminService {
         return result;
     }
 
-    /** 管理员删除任意评论 */
+    /**
+     * 管理员删除任意评论.
+     *
+     * <p>为什么要先确认存在, 而不是直接 deleteById: Spring Data JPA 3.2 的 deleteById
+     * 实现是 {@code findById(id).ifPresent(this::delete)} —— 目标不存在时它**什么都不做,
+     * 也不抛异常**. 也就是说删一个不存在的 id 会一路走到「评论已删除」这个 200 上
+     * (实测确认: 接口确实回 200). 管理员在列表上点删除、而那条已经被作者自己删掉时,
+     * 他拿到的是一句成功的谎话, 分不清「删掉了」和「这条本来就没有」.
+     *
+     * <p>顺带一提, 更早的 Spring Data 版本这里抛 EmptyResultDataAccessException, 而项目
+     * 没有为它登记处理器, 表现是 500「服务器错误」. 两种错法不同, 但都不是这里该有的
+     * 答复 —— 「目标不存在」不是服务端故障.
+     *
+     * <p>统一成 404, 与用户自己删评论那条路一致(ReviewService.deleteReview 就是
+     * findById 后抛 notFound): 同一种情况在同一个系统里只该有一种答复.
+     * 另一条路(把删除做成幂等, 不存在也回 200)也说得通, 但那样这两个接口对同一件事
+     * 会给出不同答复, 所以没选.
+     *
+     * <p>残留的窗口: existsById 与 deleteById 之间目标被删掉的话, 这次会回 200 而实际
+     * 什么都没删 —— 终态(那条评论不在了)仍然是对的, 不值得为它加锁.
+     */
     public void deleteAnyReview(Long reviewId) {
+        if (!reviewRepository.existsById(reviewId)) {
+            throw BusinessException.notFound("评论不存在");
+        }
         reviewRepository.deleteById(reviewId);
     }
 
