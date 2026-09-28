@@ -1,7 +1,18 @@
 <template>
   <AdminLayout>
     <LoadingSpinner v-if="loading" />
-    <div v-if="!loading">
+
+    <!-- 加载失败. 改前一失败就是空表格, 和「这个站还没有用户」长得一模一样 ——
+         管理端看到空表第一反应是数据没了, 而不是接口挂了 -->
+    <EmptyState
+      v-else-if="error"
+      icon="⚠️"
+      :message="error"
+      action-label="重试"
+      @action="loadUsers"
+    />
+
+    <div v-else>
       <div class="admin-table-wrap">
         <table class="admin-table">
           <thead>
@@ -64,6 +75,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '../../stores/user'
 import { getAdminUsers, toggleUserStatus, setUserRole, unlockUser } from '../../api'
 import { useToast } from '../../composables/useToast'
+import { loadErrorMessage } from '../../utils/loadError'
 import AdminLayout from '../../components/AdminLayout.vue'
 import LoadingSpinner from '../../components/LoadingSpinner.vue'
 import EmptyState from '../../components/EmptyState.vue'
@@ -73,14 +85,23 @@ const userStore = useUserStore()
 const { show: toast } = useToast()
 const users = ref([])
 const loading = ref(true)
+const error = ref('')
 
 function formatTime(d) { return d ? new Date(d).toLocaleDateString('zh-CN') : '-' }
 
 async function loadUsers() {
+  error.value = ''
+  loading.value = true
   try {
     const res = await getAdminUsers()
-    if (res.data.code === 200) users.value = res.data.data
-  } catch (e) { console.error(e) }
+    if (res.data.code === 200) {
+      users.value = res.data.data
+    } else {
+      error.value = `加载用户列表失败：服务端返回 ${res.data.code}`
+    }
+  } catch (e) {
+    error.value = loadErrorMessage(e, '加载用户列表')
+  }
   loading.value = false
 }
 

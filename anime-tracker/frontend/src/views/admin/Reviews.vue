@@ -1,7 +1,20 @@
 <template>
   <AdminLayout>
     <LoadingSpinner v-if="loading" />
-    <div v-if="!loading">
+
+    <!-- 加载失败. 清单里点名的是 Dashboard 和 Users 两页, 这里是同一个毛病的
+         第三处(同一个目录、同一行 catch console.error、同一个结局): 失败时
+         reviews 保持空数组, 页面上显示的是「暂无评论」—— 把接口挂了说成
+         「本来就没有评论」 -->
+    <EmptyState
+      v-else-if="error"
+      icon="⚠️"
+      :message="error"
+      action-label="重试"
+      @action="loadReviews"
+    />
+
+    <div v-else>
       <div class="reviews-wrap">
         <div v-if="reviews.length > 0">
           <div v-for="r in reviews" :key="r.id" class="review-row">
@@ -29,6 +42,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '../../stores/user'
 import { getAdminReviews, adminDeleteReview } from '../../api'
 import { useToast } from '../../composables/useToast'
+import { loadErrorMessage } from '../../utils/loadError'
 import AdminLayout from '../../components/AdminLayout.vue'
 import LoadingSpinner from '../../components/LoadingSpinner.vue'
 import EmptyState from '../../components/EmptyState.vue'
@@ -38,14 +52,23 @@ const userStore = useUserStore()
 const { show: toast } = useToast()
 const reviews = ref([])
 const loading = ref(true)
+const error = ref('')
 
 function formatTime(d) { return d ? new Date(d).toLocaleString('zh-CN') : '-' }
 
 async function loadReviews() {
+  error.value = ''
+  loading.value = true
   try {
     const res = await getAdminReviews()
-    if (res.data.code === 200) reviews.value = res.data.data
-  } catch (e) { console.error(e) }
+    if (res.data.code === 200) {
+      reviews.value = res.data.data
+    } else {
+      error.value = `加载评论列表失败：服务端返回 ${res.data.code}`
+    }
+  } catch (e) {
+    error.value = loadErrorMessage(e, '加载评论列表')
+  }
   loading.value = false
 }
 
