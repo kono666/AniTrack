@@ -9,6 +9,7 @@ import com.animetracker.repository.UserRepository;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.TrackingRepository;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -150,9 +151,15 @@ public class AdminService {
 
     // ========== 评论管理 ==========
 
-    /** 获取所有评论列表 */
+    /**
+     * 获取所有评论列表.
+     *
+     * <p>用 JOIN FETCH 一次把作者带回来: {@code Review.user} 是 LAZY 的, 而每一行
+     * 都要读作者名和 id —— 不 fetch 就是「有几条评论就查几次用户」. 评论越多越慢,
+     * 而这是管理端首页, 恰好是评论最多的那类库最常被打开.
+     */
     public List<Map<String, Object>> getAllReviews() {
-        List<Review> reviews = reviewRepository.findAllByOrderByCreatedAtDesc();
+        List<Review> reviews = reviewRepository.findAllWithUser(Pageable.unpaged());
         List<Map<String, Object>> result = new ArrayList<>();
         for (Review r : reviews) {
             Map<String, Object> map = new HashMap<>();

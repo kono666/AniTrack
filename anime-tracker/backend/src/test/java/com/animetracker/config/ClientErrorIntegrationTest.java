@@ -212,4 +212,50 @@ class ClientErrorIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.list").isEmpty());
     }
+
+    // ── 评论列表的分页参数 ──────────────────────────────────────
+    //
+    // 这一组盯两件事. 一是 ReviewController 上那个类级 @Validated 真的挂上了 ——
+    // 它原本没有, 是这次加参数注解时最容易漏的一步(漏了注解就静默失效).
+    // 二是**响应结构没被顺手改掉**: 前端 AnimeDetail.vue 读的是 res.data.data
+    // 这个数组本身, 换成 {list,total,page} 会让评论整块白掉, 而这件事没有任何
+    // 编译期信号.
+
+    @Test
+    @DisplayName("评论列表: 响应仍是裸数组, 加了分页参数也没变结构")
+    void reviewListStillReturnsABareArray() throws Exception {
+        mockMvc.perform(get("/api/review/list").param("subjectId", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").isArray());
+    }
+
+    @Test
+    @DisplayName("评论列表: 老调用方不传分页参数照常 200, 行为兼容")
+    void reviewListWithoutPagingParamsStillWorks() throws Exception {
+        mockMvc.perform(get("/api/review/list").param("subjectId", "1").param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray());
+    }
+
+    @Test
+    @DisplayName("评论列表: page=0 -> 400（证明类级 @Validated 真的挂上了）")
+    void reviewListRejectsZeroPage() throws Exception {
+        mockMvc.perform(get("/api/review/list").param("subjectId", "1").param("page", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("页码从 1 开始"));
+    }
+
+    @Test
+    @DisplayName("评论列表: limit 越界 -> 400")
+    void reviewListRejectsOutOfRangeLimit() throws Exception {
+        mockMvc.perform(get("/api/review/list").param("subjectId", "1").param("limit", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("每页条数不能小于 1"));
+
+        mockMvc.perform(get("/api/review/list").param("subjectId", "1").param("limit", "51"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("每页条数不能超过 50"));
+    }
 }

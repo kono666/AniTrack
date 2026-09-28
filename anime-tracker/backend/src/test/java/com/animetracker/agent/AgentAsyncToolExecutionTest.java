@@ -12,7 +12,6 @@ import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.UserRepository;
-import com.animetracker.service.AdminService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hibernate.LazyInitializationException;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +42,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * 第 1 条尤其重要: 它是这个类存在的理由. 没有它, 将来有人把 runner 去掉,
  * 剩下的测试依然全绿, 而线上是在用户点开评论助手时才炸.
+ *
+ * <p><b>前两条的载体换了, 记一下原因</b>
+ *
+ * <p>原来这两条走的是 {@code adminService.getAllReviews()} —— 那时它逐条读
+ * {@code Review.user}, 是"必须开事务"的典型. 后来给那个方法加了 JOIN FETCH
+ * (批次 3.2, 修它的 N+1), 作者就跟着评论一起取回来了, 于是这条路径**不再碰懒加载**,
+ * 第 1 条再也抛不出异常. 这不是修复失效, 而是 runner 需要它的例子少了一个.
+ *
+ * <p>所以这里改成直接访问那个仍然是 LAZY 的关联. 要证的东西没变: 事务外读不到、
+ * 事务内读得到. 模型里这样的关联还有好几个(AnimeTag.tag、Episode.anime、
+ * AgentMessage.conversation), 哪天它们也都被 fetch 掉了, 这条用例还会再失效一次 ——
+ * 那时该问的是 runner 还有没有必要存在, 而不是把用例删掉了事.
  */
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:anitrack-async;DB_CLOSE_DELAY=-1;MODE=MySQL",
@@ -57,8 +68,6 @@ class AgentAsyncToolExecutionTest {
     private ToolRegistry registry;
     @Autowired
     private ToolTransactionRunner runner;
-    @Autowired
-    private AdminService adminService;
     @Autowired
     private UserRepository userRepository;
     @Autowired
@@ -81,6 +90,12 @@ class AgentAsyncToolExecutionTest {
         }
     }
 
+    /** 一次「事务外读不到、事务内读得到」的访问: 拿到评论再读它的作者名 */
+    private String authorNameOutsideAnyTransaction() {
+        return reviewRepository.findBySubjectIdOrderByCreatedAtDesc(SUBJECT_ID)
+                .get(0).getUser().getUsername();
+    }
+
     @Test
     @DisplayName("前提: 普通工作线程上访问懒加载关联确实会失败")
     void lazyAccessFailsOnPlainWorkerThread() throws Exception {
@@ -89,7 +104,7 @@ class AgentAsyncToolExecutionTest {
         Thread worker = new Thread(() -> {
             try {
                 // 换一个线程就等于换了一个没有 EntityManager 的世界
-                adminService.getAllReviews().get(0).get("username");
+                authorNameOutsideAnyTransaction();
             } catch (Throwable t) {
                 failure.set(t);
             }
@@ -110,7 +125,7 @@ class AgentAsyncToolExecutionTest {
 
         Thread worker = new Thread(() -> {
             try {
-                result.set(runner.run(null, managedUser -> adminService.getAllReviews()));
+                result.set(runner.run(null, managedUser -> authorNameOutsideAnyTransaction()));
             } catch (Throwable t) {
                 failure.set(t);
             }
@@ -119,13 +134,8 @@ class AgentAsyncToolExecutionTest {
         worker.join(30_000);
 
         assertThat(failure.get()).isNull();
-        assertThat(result.get()).isInstanceOf(List.class);
-
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> reviews = (List<Map<String, Object>>) result.get();
         // username 来自 Review.user 这个 LAZY 关联 —— 能读到就说明事务确实生效了
-        assertThat(reviews).isNotEmpty();
-        assertThat(reviews.get(0).get("username")).isEqualTo("async-probe");
+        assertThat(result.get()).isEqualTo("async-probe");
     }
 
     @Test
