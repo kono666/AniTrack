@@ -28,12 +28,14 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../../stores/user'
 import { getAdminReviews, adminDeleteReview } from '../../api'
+import { useToast } from '../../composables/useToast'
 import AdminLayout from '../../components/AdminLayout.vue'
 import LoadingSpinner from '../../components/LoadingSpinner.vue'
 import EmptyState from '../../components/EmptyState.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
+const { show: toast } = useToast()
 const reviews = ref([])
 const loading = ref(true)
 
@@ -52,7 +54,7 @@ async function handleDelete(r) {
   try {
     await adminDeleteReview(r.id)
     reviews.value = reviews.value.filter(x => x.id !== r.id)
-  } catch (e) { $toast(e.response?.data?.message || '删除失败', 'error') }
+  } catch (e) { toast(e.response?.data?.message || '删除失败', 'error') }
 }
 
 onMounted(async () => {

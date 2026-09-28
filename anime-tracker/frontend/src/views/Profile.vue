@@ -114,12 +114,14 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { getTrackingList, getOverallStats, saveTracking } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { useToast } from '../composables/useToast'
 import { PhUserCircle } from '@phosphor-icons/vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
+const { show: toast } = useToast()
 const loading = ref(true)
 const error = ref('')
 const trackings = ref([])
@@ -172,15 +174,15 @@ async function updateStatus(item, newStatus) {
   try {
     await saveTracking({ subjectId: item.subjectId, status: newStatus, progress: item.progress || 0, score: item.score || 0 })
     item.status = newStatus
-    $toast('已更新', 'success')
-  } catch (e) { $toast('更新失败', 'error') }
+    toast('已更新', 'success')
+  } catch (e) { toast('更新失败', 'error') }
 }
 
 async function quickUpdate(item, field, val) {
   try {
     await saveTracking({ subjectId: item.subjectId, status: item.status, progress: val, score: item.score || 0 })
     item.progress = val
-  } catch (e) { $toast('更新失败', 'error') }
+  } catch (e) { toast('更新失败', 'error') }
 }
 
 onMounted(loadProfile)

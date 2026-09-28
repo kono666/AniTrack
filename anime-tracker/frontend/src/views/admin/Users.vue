@@ -63,12 +63,14 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../../stores/user'
 import { getAdminUsers, toggleUserStatus, setUserRole, unlockUser } from '../../api'
+import { useToast } from '../../composables/useToast'
 import AdminLayout from '../../components/AdminLayout.vue'
 import LoadingSpinner from '../../components/LoadingSpinner.vue'
 import EmptyState from '../../components/EmptyState.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
+const { show: toast } = useToast()
 const users = ref([])
 const loading = ref(true)
 
@@ -87,7 +89,7 @@ async function handleToggleStatus(u) {
   try {
     await toggleUserStatus(u.id)
     await loadUsers()
-  } catch (e) { $toast(e.response?.data?.message || '操作失败', 'error') }
+  } catch (e) { toast(e.response?.data?.message || '操作失败', 'error') }
 }
 
 async function handleSetAdmin(u) {
@@ -95,7 +97,7 @@ async function handleSetAdmin(u) {
   try {
     await setUserRole(u.id, 'ADMIN')
     await loadUsers()
-  } catch (e) { $toast(e.response?.data?.message || '操作失败', 'error') }
+  } catch (e) { toast(e.response?.data?.message || '操作失败', 'error') }
 }
 
 // 解锁按钮对管理员账号也显示, 与「禁用/设为管理员」不同.
@@ -105,9 +107,9 @@ async function handleUnlock(u) {
   if (!confirm(`确定解除 "${u.username}" 的登录锁定？`)) return
   try {
     const res = await unlockUser(u.id)
-    $toast(res.data?.message || '账号已解锁', 'success')
+    toast(res.data?.message || '账号已解锁', 'success')
     await loadUsers()
-  } catch (e) { $toast(e.response?.data?.message || '操作失败', 'error') }
+  } catch (e) { toast(e.response?.data?.message || '操作失败', 'error') }
 }
 
 onMounted(async () => {

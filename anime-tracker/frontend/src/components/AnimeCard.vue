@@ -207,4 +207,14 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
 }
 .meta-dot { color: var(--text-muted); margin: 0 2px; }
 .meta-score { color: var(--star); font-weight: 700; }
+
+/* 窄屏收一点内边距和字号.
+   这两条原先写在 assets/css/anime-card.css 的媒体查询里, 但那个文件是在
+   @layer components 里的, 而 scoped 样式不加 layer —— 层叠层里的规则无论
+   媒体查询怎么写都输给不在层里的规则. 也就是说它们从来没有生效过, 只是看起来
+   像是移动端适配. 现在按它原本的意图搬进 scoped, 才真的会用到. */
+@media (max-width: 480px) {
+  .anime-card-body { padding: 8px 10px 12px; }
+  .anime-card-title { font-size: 11px; }
+}
 </style>

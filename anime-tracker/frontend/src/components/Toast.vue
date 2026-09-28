@@ -21,31 +21,17 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { useToast } from '../composables/useToast'
 
-const items = ref([])
-let nextId = 0
-const timers = new Map()
+/**
+ * 这个组件只负责渲染 —— 状态和操作都在 composables/useToast.js 里(模块作用域),
+ * 调用方直接 import 那个, 不再经过 window.
+ */
+const { items, show, remove } = useToast()
+
 const iconMap = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' }
 
-function remove(id) {
-  items.value = items.value.filter(i => i.id !== id)
-  const t = timers.get(id)
-  if (t) { clearTimeout(t); timers.delete(id) }
-}
-
-function show(message, type = 'info', duration = 3500, action = null) {
-  const id = nextId++
-  items.value.push({ id, message, type, action })
-  const timer = setTimeout(() => remove(id), duration)
-  timers.set(id, timer)
-}
-
-// Mount to global
-if (typeof window !== 'undefined') {
-  window.$toast = show
-}
-
+// 仍然暴露出去: 万一有地方通过 ref 拿到这个组件再调(比如测试里), 行为不变
 defineExpose({ show, remove })
 </script>
 

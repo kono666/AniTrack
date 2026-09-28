@@ -128,6 +128,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getRanking, getCalendar, getTags, getByTag } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+// 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
+import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
 import { useReveal } from '../composables/useReveal'
 import HeroBanner from '../components/HeroBanner.vue'
 import HorizontalScroll from '../components/HorizontalScroll.vue'
@@ -182,19 +184,16 @@ async function selectTag(tag) {
   }
 }
 
-// 内存缓存 (5分钟TTL)
-const cache = { data: null, time: 0 }
-const CACHE_TTL = 5 * 60 * 1000
-
 onMounted(loadHome)
 
 // 单独取名(原来是直接写在 onMounted 里的匿名函数)是为了让错误态上的「重试」
 // 有东西可调 —— 重试就是把这一次加载原样再跑一遍
 async function loadHome() {
   error.value = ''
-  // 命中缓存直接渲染
-  if (cache.data && (Date.now() - cache.time) < CACHE_TTL) {
-    const c = cache.data
+  // 命中缓存直接渲染. 缓存对象在模块作用域(utils/homeCache.js), 跨组件实例有效 ——
+  // 改前它是这里的一个对象, 跟着组件实例一起被卸载, TTL 从来没有生效过
+  if (homeCache.data && (Date.now() - homeCache.time) < HOME_CACHE_TTL) {
+    const c = homeCache.data
     heroItems.value = c.hero; popularList.value = c.popular
     recentList.value = c.recent; todayAnime.value = c.today
     tags.value = c.tags; loading.value = false
@@ -239,8 +238,8 @@ async function loadHome() {
   // 数据缓存 5 分钟. 于是错误被缓存成了事实 —— 用户点重试(或者切走再回来)拿到的
   // 还是那份空缓存, 连一次新的请求都不会发出去.
   if (coreLoaded) {
-    cache.data = { hero: heroItems.value, popular: popularList.value, recent: recentList.value, today: todayAnime.value, tags: tags.value }
-    cache.time = Date.now()
+    homeCache.data = { hero: heroItems.value, popular: popularList.value, recent: recentList.value, today: todayAnime.value, tags: tags.value }
+    homeCache.time = Date.now()
   }
 }
 </script>

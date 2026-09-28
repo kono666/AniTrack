@@ -171,11 +171,13 @@ import {
   getWatchedEpisodes, toggleEpisode, getAnimeHeat, getByTag
 } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { useToast } from '../composables/useToast'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
 
 const route = useRoute()
 const userStore = useUserStore()
+const { show: toast } = useToast()
 const sid = Number(route.params.id)
 
 const subject = ref(null)
@@ -246,21 +248,21 @@ async function quickTrack(){
 }
 async function saveTrack(){
   if(!userStore.loggedIn) return
-  try{ const r=await saveTracking({subjectId:sid,status:trackForm.status,progress:trackForm.progress,score:trackForm.score}); trackForm.id=r.data.data?.id; $toast('已保存','success') }catch(e){$toast('保存失败','error')}
+  try{ const r=await saveTracking({subjectId:sid,status:trackForm.status,progress:trackForm.progress,score:trackForm.score}); trackForm.id=r.data.data?.id; toast('已保存','success') }catch(e){toast('保存失败','error')}
 }
 async function removeTrack(){
   if(!confirm('取消追番？')) return
-  try{ await deleteTracking(sid); trackForm.id=null; trackForm.status='want_to_watch'; trackForm.progress=0; trackForm.score=0; $toast('已取消','info') }catch(e){$toast('操作失败','error')}
+  try{ await deleteTracking(sid); trackForm.id=null; trackForm.status='want_to_watch'; trackForm.progress=0; trackForm.score=0; toast('已取消','info') }catch(e){toast('操作失败','error')}
 }
 async function submitReview(){
-  if(!userStore.loggedIn||myReview.rating<=0){$toast('请评分','warning');return}
-  try{ const r=await saveReview({subjectId:sid,rating:myReview.rating,content:myReview.content}); myReview.id=r.data.data?.id; $toast('已提交','success')
-    const [rr,sr]=await Promise.all([getSubjectReviews(sid,userStore.user.id),getRatingStats(sid)]); reviews.value=rr.data.data||[]; ratingStats.value=sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)} }catch(e){$toast('失败','error')}
+  if(!userStore.loggedIn||myReview.rating<=0){toast('请评分','warning');return}
+  try{ const r=await saveReview({subjectId:sid,rating:myReview.rating,content:myReview.content}); myReview.id=r.data.data?.id; toast('已提交','success')
+    const [rr,sr]=await Promise.all([getSubjectReviews(sid,userStore.user.id),getRatingStats(sid)]); reviews.value=rr.data.data||[]; ratingStats.value=sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)} }catch(e){toast('失败','error')}
 }
 async function deleteMyReview(){
   if(!confirm('删除评论？')) return
   try{ await delReviewApi(myReview.id); myReview.id=null; myReview.rating=0; myReview.content=''
-    const [rr,sr]=await Promise.all([getSubjectReviews(sid,userStore.user.id),getRatingStats(sid)]); reviews.value=rr.data.data||[]; ratingStats.value=sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)} }catch(e){$toast('失败','error')}
+    const [rr,sr]=await Promise.all([getSubjectReviews(sid,userStore.user.id),getRatingStats(sid)]); reviews.value=rr.data.data||[]; ratingStats.value=sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)} }catch(e){toast('失败','error')}
 }
 
 onMounted(load)

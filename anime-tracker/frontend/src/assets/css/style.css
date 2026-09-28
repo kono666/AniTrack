@@ -18,13 +18,9 @@
 /* ── Component Patterns ── */
 @import './navbar.css' layer(components);
 @import './tab.css' layer(components);
-@import './anime-card.css' layer(components);
-@import './detail-hero.css' layer(components);
 @import './search-bar.css' layer(components);
 @import './track-buttons.css' layer(components);
-@import './episode-grid.css' layer(components);
 @import './stats.css' layer(components);
-@import './reviews.css' layer(components);
 @import './auth.css' layer(components);
 @import './empty-loading.css' layer(components);
 @import './pagination.css' layer(components);

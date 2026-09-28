@@ -18,10 +18,24 @@
 }
 .section-card h3 { margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
 
+/* ── Anime Grid ──
+   原在 anime-card.css 里, 和 AnimeCard.vue 的 scoped 样式重复的规则一并删掉了.
+   留下的只有这条网格本身 —— 它和卡片组件无关, 是页面级的排布(Home / Search
+   都用它), 而且没有任何 scoped 规则与它重复, 是那个文件里唯一还活着的东西. */
+.anime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 16px;
+}
+
 /* ── Footer ── */
 .footer { text-align:center; padding:24px; color:var(--text-muted); font-size:12px; border-top:1px solid var(--border); margin-top:40px; }
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .page-container { padding:16px; }
+  .anime-grid { grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:10px; }
+}
+@media (max-width: 480px) {
+  .anime-grid { grid-template-columns:repeat(3,1fr); gap:8px; }
 }
