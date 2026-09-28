@@ -92,16 +92,27 @@ public class TrackService {
                 .ifPresent(trackingRepository::delete);
     }
 
-    /** 获取用户的追番列表(含番剧标题和封面) */
+    /**
+     * 获取用户的追番列表(含番剧标题和封面).
+     *
+     * <p>番剧信息是<b>一次</b> {@code findAllById} 取回来的, 不是在循环里逐条 findById:
+     * 追番 50 部就是 50 次数据库往返, 而这个接口就是追番页本身, 每打开一次付一遍.
+     *
+     * <p>这里原来的注释写着「批量查询番剧信息(修复N+1)」, 紧跟着的却是一个
+     * 逐条 findById 的循环 —— 注释说对了该做什么, 代码没做. 这种注释比没有注释更坏:
+     * 读到它的人会放心地把这段跳过. 现在注释与代码说的是同一件事, 并由
+     * {@code QueryCountIntegrationTest} 按真实 SQL 条数钉住(不论追番多少条, 恒定 2 条).
+     */
     public List<Map<String, Object>> getUserTrackings(User user) {
         List<AnimeTracking> trackings = trackingRepository.findByUserOrderByUpdatedAtDesc(user);
         List<Map<String, Object>> result = new ArrayList<>();
 
-        // 批量查询番剧信息(修复N+1)
+        // 一次取回全部番剧. 这里不需要为「一条追番都没有」挡一道: findAllById 收到
+        // 空集合会直接返回空列表, 不会拼出 `WHERE id IN ()` 那种非法 SQL.
         Map<Integer, Anime> animeMap = new HashMap<>();
-        for (AnimeTracking t : trackings) {
-            animeRepository.findById(t.getSubjectId()).ifPresent(a -> animeMap.put(t.getSubjectId(), a));
-        }
+        animeRepository.findAllById(
+                        trackings.stream().map(AnimeTracking::getSubjectId).distinct().toList())
+                .forEach(a -> animeMap.put(a.getId(), a));
 
         for (AnimeTracking t : trackings) {
             Map<String, Object> map = new HashMap<>();

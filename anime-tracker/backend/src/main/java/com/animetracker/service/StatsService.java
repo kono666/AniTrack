@@ -3,11 +3,15 @@ package com.animetracker.service;
 import com.animetracker.entity.*;
 import com.animetracker.repository.*;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import java.util.*;
 
 @Service
 public class StatsService {
+
+    /** 首页「最近活动」展示的条数. 取数下推到数据库, 不在这里 limit. */
+    private static final int RECENT_ACTIVITY_LIMIT = 10;
 
     private final TrackingRepository trackingRepo;
     private final AnimeRepository animeRepo;
@@ -25,20 +29,23 @@ public class StatsService {
         this.isolatedInsert = isolatedInsert;
     }
 
-    /** 用户类型分布 */
+    /**
+     * 用户类型分布.
+     *
+     * <p>番剧信息一次 {@code findAllById} 取回. 原来的注释同样是「修复N+1」那句,
+     * 而下面逐条 findById 的循环正是它声称已经修掉的东西 —— 与
+     * {@link TrackService#getUserTrackings} 是同一份注释、同一个坑.
+     */
     public Map<String, Integer> getGenreDistribution(User user) {
         List<AnimeTracking> trackings = trackingRepo.findByUserOrderByUpdatedAtDesc(user);
         Map<String, Integer> genreCount = new LinkedHashMap<>();
 
-        // 批量查询番剧(修复N+1)
         Set<Integer> subjectIds = new HashSet<>();
         for (AnimeTracking t : trackings) {
             subjectIds.add(t.getSubjectId());
         }
         Map<Integer, Anime> animeMap = new HashMap<>();
-        for (Integer sid : subjectIds) {
-            animeRepo.findById(sid).ifPresent(a -> animeMap.put(sid, a));
-        }
+        animeRepo.findAllById(subjectIds).forEach(a -> animeMap.put(a.getId(), a));
 
         for (AnimeTracking t : trackings) {
             Anime a = animeMap.get(t.getSubjectId());
@@ -64,12 +71,30 @@ public class StatsService {
         return dist;
     }
 
-    /** 最近活动 */
+    /**
+     * 最近活动.
+     *
+     * <p>两条查询: 一条取最近 {@value #RECENT_ACTIVITY_LIMIT} 条追番, 一条把这 10 部的
+     * 番剧信息一次取回. 改之前是「先把该用户的<b>全部</b>追番查出来再 {@code limit(10)}」
+     * 加上「在这 10 条里逐条 findById」:
+     *
+     * <ul>
+     *   <li>前者让首页这一块的开销随追番总数增长 —— 追番 500 部的人, 打开首页要
+     *       先把 500 行读进内存, 再丢掉 490 行. 分页下推到数据库(Pageable)之后,
+     *       读进来的就是 10 行;</li>
+     *   <li>后者是 N+1 的老样子, 只不过 N 被 limit 压到了 10, 所以更不容易被注意到.</li>
+     * </ul>
+     */
     public List<Map<String, Object>> getRecentActivity(User user) {
-        List<AnimeTracking> trackings = trackingRepo.findByUserOrderByUpdatedAtDesc(user);
-        List<Map<String, Object>> activity = new ArrayList<>();
+        List<AnimeTracking> recent = trackingRepo.findByUserOrderByUpdatedAtDesc(
+                user, PageRequest.of(0, RECENT_ACTIVITY_LIMIT));
 
-        for (AnimeTracking t : trackings.stream().limit(10).toList()) {
+        Map<Integer, Anime> animeMap = new HashMap<>();
+        animeRepo.findAllById(recent.stream().map(AnimeTracking::getSubjectId).distinct().toList())
+                .forEach(a -> animeMap.put(a.getId(), a));
+
+        List<Map<String, Object>> activity = new ArrayList<>();
+        for (AnimeTracking t : recent) {
             Map<String, Object> item = new HashMap<>();
             item.put("type", "tracking");
             item.put("status", t.getStatus());
@@ -77,8 +102,10 @@ public class StatsService {
             item.put("progress", t.getProgress());
             item.put("score", t.getScore());
             item.put("time", t.getUpdatedAt());
-            animeRepo.findById(t.getSubjectId()).ifPresent(a ->
-                    item.put("animeTitle", a.getTitleCn() != null ? a.getTitleCn() : a.getTitle()));
+            Anime a = animeMap.get(t.getSubjectId());
+            if (a != null) {
+                item.put("animeTitle", a.getTitleCn() != null ? a.getTitleCn() : a.getTitle());
+            }
             activity.add(item);
         }
         return activity;
