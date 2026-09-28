@@ -144,6 +144,8 @@ AI 请求链路：`AgentController` 校验身份与额度 → 按身份得出可
 AniTrack-作品集/
 ├── anime-tracker/
 │   ├── backend/                       # Spring Boot 后端
+│   │   ├── Dockerfile                 # 两阶段构建：Maven 编译 → JRE 运行（见设计要点 15）
+│   │   ├── .dockerignore              # 把本地 H2 库、构建产物挡在构建上下文之外
 │   │   ├── src/main/java/com/animetracker/
 │   │   │   ├── agent/                 # AI Agent：主循环、工具注册表、预算与限流
 │   │   │   │   ├── llm/               # 大模型客户端（Anthropic / OpenAI 兼容 / Mock）
@@ -168,8 +170,8 @@ AniTrack-作品集/
 │   │       ├── stores/                # Pinia 状态
 │   │       └── router/                # 路由与权限守卫
 │   └── scripts/                       # 种子数据脚本与端到端验证脚本
-├── .env.example                       # 环境变量模板（含大模型配置）
-├── docker-compose.yml                 # PostgreSQL 服务
+├── .env.example                       # 环境变量模板（含大模型配置与 Docker 相关项）
+├── docker-compose.yml                 # 后端 + PostgreSQL（部署用；只起数据库也行）
 ├── start-dev.bat                      # 一键启动（读取 .env → 拉起后端 + 前端）
 └── stop-dev.bat
 ```
@@ -240,6 +242,41 @@ mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 
 ---
 
+## 部署（Docker）
+
+后端镜像与数据库都在仓库里定义好了，两条命令起来：
+
+```bash
+cp .env.example .env                                  # 填 JWT_SECRET 与首次部署用的 ADMIN_PASSWORD
+docker compose up -d --build
+curl http://localhost:8080/actuator/health/liveness   # 回 {"status":"UP"} 就成了
+```
+
+三件值得先说清楚的事：
+
+- **没有 `JWT_SECRET` 会直接拒绝启动**，报错写在 compose 文件里（`${JWT_SECRET:?...}`）。这跟后端自身的 fail-fast 是同一个取舍：一个公开的默认密钥不会让任何功能报错，只会让任何人都能伪造管理员 token——所以宁可起不来。
+- **`ADMIN_PASSWORD` 只在第一次启动（库里还没有管理员）时用到**，配好并登录成功后就可以从 `.env` 里撤掉，改密码入口在用户设置页。
+- **数据库只绑在 `127.0.0.1`**（`127.0.0.1:5432:5432` 而不是 `5432:5432`）。本机开发时两种写法毫无区别，但照抄到云主机上，后者就是一个开在公网、密码还是默认值的数据库。
+
+镜像本身（`anime-tracker/backend/Dockerfile`）做的事：
+
+| 做法 | 为什么 |
+| --- | --- |
+| 两阶段构建 | 最终镜像里没有源码、Maven 和 JDK，只有运行需要的东西，体积小一半以上 |
+| 非 root 用户运行 | 跑一个 Java 服务不需要 root；容器里的 root 一旦被利用，逃逸到宿主机的成本低得多 |
+| 默认 `SPRING_PROFILES_ACTIVE=postgres` | 消灭「忘了设 profile」这类失误——它不报错，只会安静地用上开发配置 |
+| `TZ=Asia/Shanghai`（并装 tzdata） | 容器默认走 UTC：日志时间戳会差 8 小时，AI 助手的「每日额度」会在北京时间早上 8 点重置 |
+| `-XX:MaxRAMPercentage=75` | 让 JVM 按容器给的内存上限算堆；不设的话它可能读到宿主机总内存，然后在容器里被 OOM 杀掉 |
+| 探针打 `/actuator/health/liveness` | 它只问「进程在不在」；带数据库的那份要等 Hikari 连接超时（实测 30 秒），会先撞上探针超时 |
+
+只要数据库时（本地用 `mvn spring-boot:run` 跑后端，借这个 PG 用）：
+
+```bash
+docker compose up -d postgres
+```
+
+---
+
 ## 数据来源
 
 番剧元数据来自 **Bangumi 公开 API**，不存储任何受版权保护的内容。后端通过 `RestTemplate` 调用并在本地建缓存，缓存时长按数据类型可配置（见 `application.yml`）：
@@ -258,7 +295,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 ## 测试
 
 ```bash
-# 后端：单元测试 + 集成测试（181 个）
+# 后端：单元测试 + 集成测试（183 个）
 cd anime-tracker/backend
 mvn test
 
@@ -273,7 +310,7 @@ python anime-tracker/scripts/verify-agent.py
 
 端到端脚本覆盖的是那些只有真跑起来才看得出来的事：访客拿不到写工具、管理员能拿到、限流真的会拦、额度真的会扣、SSE 真的按事件名推送、工具卡片真的到了前端。
 
-覆盖的重点放在**说得出理由的地方**：Agent 主循环的轮数与失败回灌、提示词注入的越权拦截、额度预留与跨天重置、SSE 分片解析的边界、异步线程上的懒加载陷阱、两套迁移脚本必须成对、探活端点的免登录与暴露范围、客户端写错的请求各归各家（400/405/415 而不是 500）。这些逻辑一旦写错不会立刻报错，而是以「演示当天打不开」「上线后偶尔报错」的形式出现，所以各留了一条测试钉住。
+覆盖的重点放在**说得出理由的地方**：Agent 主循环的轮数与失败回灌、提示词注入的越权拦截、额度预留与跨天重置、SSE 分片解析的边界、异步线程上的懒加载陷阱、两套迁移脚本必须成对、探活端点的免登录与 liveness/readiness 分工、客户端写错的请求各归各家（400/405/415 而不是 500）。这些逻辑一旦写错不会立刻报错，而是以「演示当天打不开」「上线后偶尔报错」的形式出现，所以各留了一条测试钉住。
 
 ## 设计要点
 
@@ -386,6 +423,20 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 
 配置口径本身由 `ActuatorConfigTest` 守着：它直接读 `application.yml`，按文档逐段合并后断言「只暴露 health」和「dev 打开 / postgres 关闭详情」。之所以不用集成测试守这一条，是因为本机没有 PostgreSQL——postgres 段恰恰是最容易写错、又最难在本地跑到的一处。
 
+**探活还分成了两组**，因为「容器还活着吗」和「现在能不能给它流量」是两个问题：`/actuator/health/liveness` 只含 `ping`，`/actuator/health/readiness` 含 `db` 与磁盘。这个划分是被实测逼出来的——把数据库停掉，同一份代码下三个端点差得很清楚：
+
+| 端点 | 数据库正常 | 数据库停掉 |
+| --- | --- | --- |
+| `/actuator/health/liveness` | 200 UP（0.008s） | **200 UP（0.005s）** |
+| `/actuator/health/readiness` | 200 UP（0.008s） | **503 DOWN（30.0s）** |
+| `/actuator/health` | 200 UP（0.1s） | 503 DOWN（30.0s） |
+
+带 `db` 的那份要等 Hikari 的连接超时（postgres profile 配的是 30 秒）才回 503，连接不上时的异常栈会先刷满日志，Spring 自己再补一条 `took 30016ms to respond` 的警告。由此定下三条：
+
+- **容器探针（`HEALTHCHECK`）打 liveness**。探针必须快且有界：30 秒的响应会先撞上探针超时，于是「超时」和「依赖不可用」两种状态混成一种，排障时分不清是哪个。
+- **「依赖不可用」交给 readiness**。此时正确的动作是别再往它这儿发流量，而不是重启后端容器——重启解决不了数据库的问题，`restart: unless-stopped` 只会把它变成一轮一轮的重启循环。
+- **`SecurityConfig` 里放行两条：`/actuator/health` 与 `/actuator/health/**`**。字符串匹配默认是路径全等，不带通配符时第一条匹配不到 `/actuator/health/liveness` 这样的子路径——而探针与负载均衡用的恰恰是子路径。这个坑不会报错，只会以「探针拿到 401、容器一直 unhealthy」的形式出现。
+
 **14. 客户端把请求写错，不该变成 500**
 
 `4xx` 和 `5xx` 的区别不只是状态码好看不好看：调用方靠它决定「我改请求」还是「服务端有问题，重试或报障」。把「你少传了一个参数」报成 500，等于把该由调用方修的错推给服务端，前端也只能提示「服务异常，请稍后再试」。
@@ -408,6 +459,14 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 
 测试分两层：`ClientErrorIntegrationTest` 走真实过滤器链与参数绑定，用不需要登录的公开接口把这五种情况各钉一条，并留一条正向对照确认正常的 200 没受影响；`GlobalExceptionHandlerTest` 逐个断言状态码、文案，以及「内部细节不出现在响应里」。分层的原因很直接——单元测试直接调处理器方法，证明不了它真的会被用上（万一兜底抢在前面，单元测试会全绿而线上仍回 500），所以必须有一条走真实请求。
 
+**15. 容器：启动顺序与信号**
+
+镜像怎么构建、怎么起，都写在「部署（Docker）」一节里了。这里记三条只有踩过才知道的：
+
+- **`depends_on` 要配 `condition: service_healthy`**。只写 `depends_on: [postgres]` 表达的是「那个容器起来了」，不是「数据库能连了」——Flyway 会在启动那一瞬间撞上连接失败、后端退出，然后靠 `restart` 策略一遍遍重试，把一件本来确定的事交给运气。等 `pg_isready` 通过再启动，这段运气就没了。
+- **`ENTRYPOINT` 用 `sh -c "exec java ..."`**，让 java 成为 PID 1。这样 `docker stop` 发的 SIGTERM 直接进 JVM，Spring 才能走完优雅关闭（停止接收新请求、关连接池）；否则信号被 shell 吃掉，容器只能等到超时被硬杀。
+- **探针在 compose 文件里又写了一遍**。Dockerfile 里的 `HEALTHCHECK` 决定容器自身的健康状态，而 `docker compose ps` 展示的是 compose 的配置——两处不一致时（这种文件很容易改一处忘另一处），人看到的和实际生效的就不是一回事。所以两处都写，并在注释里互相指认。
+
 ---
 
 ## 已知限制
@@ -420,3 +479,4 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - 关注、私信、动态等社交功能尚未实现。
 - 没有邮箱验证与找回密码流程，注册时填的邮箱目前只作为账号标识，尚不能用来收信。
 - **表结构变更已交给 Flyway**（见设计要点 12）：脚本在 `db/migration/{h2,postgres}` 下，启动时自动执行并校验，`ddl-auto` 已从 `update` 改成 `validate`。仍然存在的限制：Flyway 版本跟着 Spring Boot 走（3.2.0 → 9.22.3），它声明支持的 H2 版本到 2.2.220、PostgreSQL 到 15，而本项目用的是 H2 2.2.224 与 PG 16——实测正常，只是每次启动会打一条「upgrade recommended」，升级 Spring Boot 后自然消失。
+- **镜像没有在本机构建验证过**：开发这台机器上没有 Docker，所以 `docker build` 与 `docker compose up` 这两步没法实跑。能验证的都验证了——用容器会拿到的同一套环境变量（`SPRING_PROFILES_ACTIVE=postgres` 加 `DB_URL`/`DB_USER`/`DB_PASS`/`JWT_SECRET`/`ADMIN_*`）在真实 PostgreSQL 16 上启动成功：Flyway 把两个脚本跑完、管理员账号由 `ADMIN_*` 建出来、三个探活端点的行为与本文描述一致、密码认证也确认生效（错误密码会被拒）。但「镜像本身能构建成功」这一步只能交给 CI（见设计要点 15 之后要做的 CI 任务）。
