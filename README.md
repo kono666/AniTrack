@@ -117,7 +117,8 @@ messages = [系统提示词] + 历史 + [本次提问]
 | 数据库 | H2（开发，文件模式）/ PostgreSQL（生产） |
 | 接口文档 | springdoc-openapi |
 | 测试 | JUnit 5 + Mockito + MockRestServiceServer；Vitest + @vue/test-utils |
-| 部署辅助 | Docker Compose（PostgreSQL） |
+| 部署 | 两阶段 Dockerfile + Docker Compose（后端 + PostgreSQL 16）；配置全部走环境变量 |
+| 持续集成 | GitHub Actions：后端测试 / 前端测试与构建 / 镜像构建 + compose 冒烟 |
 | 外部数据 | Bangumi 公开 API（`api.bgm.tv`） |
 
 ---
@@ -501,6 +502,21 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - **`ENTRYPOINT` 用 `sh -c "exec java ..."`**，让 java 成为 PID 1。这样 `docker stop` 发的 SIGTERM 直接进 JVM，Spring 才能走完优雅关闭（停止接收新请求、关连接池）；否则信号被 shell 吃掉，容器只能等到超时被硬杀。
 - **探针在 compose 文件里又写了一遍**。Dockerfile 里的 `HEALTHCHECK` 决定容器自身的健康状态，而 `docker compose ps` 展示的是 compose 的配置——两处不一致时（这种文件很容易改一处忘另一处），人看到的和实际生效的就不是一回事。所以两处都写，并在注释里互相指认。
 
+**16. 前端依赖：为什么 `devDependencies` 里有一个没人 import 的 esbuild**
+
+`anime-tracker/frontend/package.json` 里除了 vite，还单独写了 `"esbuild": "^0.28.2"`，而代码里没有任何地方 `import` 它。它是刻意留在那里的，理由是一条挺绕的链：
+
+- 应用构建用 `vite@5`，而 `vitest@4` 要求 vite `^6 || ^7 || ^8`——两者不可能共用一个版本，于是 npm 会在 `vitest` 目录下**再装一份 vite**。
+- 那份 vite 把 `esbuild` 声明为**可选 peer**（`peerDependenciesMeta.esbuild.optional`）。npm 碰到 peer 会主动去装，但这条路径装出来的 `@esbuild/*` 平台包**丢掉了 `optional` 标记**。
+- 后果一：锁文件里只有顶层 vite 5 用的 esbuild `0.21.5`，没有那份 vite 需要的 `0.28.2`。`npm ci` 校验的是「锁文件能否满足整棵树」，于是直接拒绝执行——报「package.json 与 package-lock.json 不同步」。
+- 后果二：丢掉 `optional` 标记意味着 npm 认为这些包**在当前平台上也必须装**。换到别的平台就会报 `EBADPLATFORM`（在 Windows 上它要装 netbsd-arm64，想装也装不了）。
+
+把 esbuild 提成根上的直接依赖后，那个 peer 由一份**普通依赖**来满足，npm 不再嵌套复制，平台包的 `optional` 标记也就正常了。
+
+顺带记下一条操作性的坑：**锁文件不能在项目目录里重新生成**。`npm install --package-lock-only` 会参考已存在的 `node_modules`，而 `node_modules` 里只装了当前平台那一份二进制——生成出来的锁文件就只剩 Windows 的 rolldown 绑定（实测：15 个平台二进制只剩 1 个），推到 Linux 上照样失败。正确做法是在一个「只有 `package.json`、没有 `node_modules`」的干净目录里解析，再把锁文件拷回来。
+
+这个锁文件坏掉时，开发机上一切正常（测试照跑、构建照过），因为它用的是 `node_modules` 而不是锁文件；只有在一个干净环境里执行 `npm ci` 才会暴露。这正是加 CI 的直接收益。
+
 ---
 
 ## 已知限制
@@ -513,4 +529,4 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - 关注、私信、动态等社交功能尚未实现。
 - 没有邮箱验证与找回密码流程，注册时填的邮箱目前只作为账号标识，尚不能用来收信。
 - **表结构变更已交给 Flyway**（见设计要点 12）：脚本在 `db/migration/{h2,postgres}` 下，启动时自动执行并校验，`ddl-auto` 已从 `update` 改成 `validate`。仍然存在的限制：Flyway 版本跟着 Spring Boot 走（3.2.0 → 9.22.3），它声明支持的 H2 版本到 2.2.220、PostgreSQL 到 15，而本项目用的是 H2 2.2.224 与 PG 16——实测正常，只是每次启动会打一条「upgrade recommended」，升级 Spring Boot 后自然消失。
-- **镜像没有在本机构建验证过**：开发这台机器上没有 Docker，所以 `docker build` 与 `docker compose up` 这两步没法实跑。能验证的都验证了——用容器会拿到的同一套环境变量（`SPRING_PROFILES_ACTIVE=postgres` 加 `DB_URL`/`DB_USER`/`DB_PASS`/`JWT_SECRET`/`ADMIN_*`）在真实 PostgreSQL 16 上启动成功：Flyway 把两个脚本跑完、管理员账号由 `ADMIN_*` 建出来、三个探活端点的行为与本文描述一致、密码认证也确认生效（错误密码会被拒）。但「镜像本身能构建成功」这一步只能交给 CI（见设计要点 15 之后要做的 CI 任务）。
+- **开发机上没有 Docker**：`docker build` 与 `docker compose up` 没法在本机实跑，所以改动镜像或编排相关的文件时，只能等 CI 的结果来确认。CI 里那个 `image` job 就是为这件事存在的：每次推送都会真的构建镜像、起一套完整的 compose 栈（后端 + PostgreSQL 16 + 空库跑完 Flyway），再打六项冒烟断言（探活免登录、liveness/readiness 分工、其余 actuator 端点匿名 401、管理员由环境变量建出并能登录、迁移出来的表能读）。本地能验证的部分也验证过：用容器会拿到的同一套环境变量在真实 PostgreSQL 16 上启动成功，密码认证确认生效（错误密码会被拒）。
