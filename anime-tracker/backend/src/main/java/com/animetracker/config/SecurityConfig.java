@@ -1,12 +1,15 @@
 package com.animetracker.config;
 
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -25,10 +28,14 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfig {
 
-    private final JwtAuthFilter jwtAuthFilter;
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
+    private final JwtAuthFilter jwtAuthFilter;
+    private final CorsProperties corsProperties;
+
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter, CorsProperties corsProperties) {
         this.jwtAuthFilter = jwtAuthFilter;
+        this.corsProperties = corsProperties;
     }
 
     @Bean
@@ -54,8 +61,24 @@ public class SecurityConfig {
             ));
         }
 
+        // CORS 只在白名单非空时启用.
+        //
+        // 空白名单不是「启用一个什么都不放行的配置」, 而是完全不注册 CORS ——
+        // 本项目是同源部署 (开发靠 Vite 代理, 生产靠 nginx 反代 /api), 根本不需要它.
+        // 少注册一层过滤器, 就少一处可能误伤同源请求的边界情况.
+        if (corsProperties.isEnabled()) {
+            http.cors(cors -> cors.configurationSource(corsConfigurationSource()));
+            log.info("CORS 已启用, 允许的前端来源: {}", corsProperties.originList());
+            if (corsProperties.allowsAnyOrigin()) {
+                log.warn("app.cors.allowed-origins 含通配符 *, 任何网站都能跨域调用本 API; "
+                        + "若非有意为之, 请改成具体的前端域名");
+            }
+        } else {
+            http.cors(AbstractHttpConfigurer::disable);
+            log.info("CORS 未启用 (app.cors.allowed-origins 为空) —— 按同源部署处理");
+        }
+
         http
-                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
@@ -101,13 +124,40 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * 跨域规则.
+     *
+     * 只在 app.cors.allowed-origins 非空时才会被用到 (见 filterChain), 其余时候形同虚设.
+     *
+     * 三点刻意的收紧, 对比改动前后:
+     *   1) 来源: 从「任意来源」改成「白名单里的来源」. 只有配了 * 才退回通配.
+     *   2) 凭证: 从 allowCredentials(true) 改成不放行.
+     *      通配来源 + 允许携带凭证是 CORS 里明确禁止的组合, 因为那等于允许
+     *      任何网站拿着用户的 Cookie 去调用本 API. 本项目用 Bearer token 认证,
+     *      token 放在 Authorization 头里由前端自己带上, 不依赖浏览器自动发送,
+     *      所以关掉它没有任何副作用.
+     *   3) 方法: 从 * 收窄成实际用到的 5 个. 通配会把 TRACE 之类也放进来.
+     */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));
-        config.setAllowedMethods(List.of("*"));
-        config.setAllowedHeaders(List.of("*"));
-        config.setAllowCredentials(true);
+
+        if (corsProperties.allowsAnyOrigin()) {
+            // 显式写了 * 才走通配. 用 originPatterns 而非 origins, 因为
+            // setAllowedOrigins(List.of("*")) 在放行凭证时会被 Spring 直接拒绝.
+            config.setAllowedOriginPatterns(List.of("*"));
+        } else {
+            config.setAllowedOrigins(corsProperties.originList());
+        }
+
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // Authorization 必须放行: 前端每个请求都要带 Bearer token.
+        // 不能写成 * —— 通配在「不带凭证」时虽可用, 但部分中间层对它的处理并不一致,
+        // 显式列出来更好排查.
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Requested-With"));
+        config.setAllowCredentials(false);
+        // 预检请求的结果缓存 1 小时, 省掉每个请求前的一次 OPTIONS 往返
+        config.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

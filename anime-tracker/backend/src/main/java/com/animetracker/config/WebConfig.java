@@ -6,12 +6,19 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.converter.StringHttpMessageConverter;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+/**
+ * 参数解析器与 RestTemplate 的配置.
+ *
+ * 注意: CORS 刻意不在这里配置.
+ * 它统一由 SecurityConfig 的 corsConfigurationSource() 提供. 这里原本也写了一份
+ * 一模一样的通配策略 —— 同一个策略有两个出口, 意味着收紧时很容易只改一处、
+ * 另一处继续生效. 一个策略只留一个出口.
+ */
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
@@ -19,15 +26,6 @@ public class WebConfig implements WebMvcConfigurer {
 
     public WebConfig(CurrentUserResolver currentUserResolver) {
         this.currentUserResolver = currentUserResolver;
-    }
-
-    @Override
-    public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/api/**")
-                .allowedOriginPatterns("*")
-                .allowedMethods("*")
-                .allowedHeaders("*")
-                .allowCredentials(true);
     }
 
     @Override
