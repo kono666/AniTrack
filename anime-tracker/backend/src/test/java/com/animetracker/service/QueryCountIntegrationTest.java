@@ -145,6 +145,16 @@ class QueryCountIntegrationTest {
 
     /** 灌 n 条短评, 每条来自一个不同的用户 —— 作者各不相同的列表才是 N+1 的重灾区 */
     private void seedReviews(int n) {
+        seedReviews(n, i -> 8);
+    }
+
+    /**
+     * 同上, 但分数由调用方按行号决定.
+     *
+     * <p>评分统计那组要的是「十档都有」—— 只有分数铺开了, 均分与分布才有东西可断言;
+     * 全给 8 分的话, 分布数组里九个零一个 n, 算错了也未必看得出来.
+     */
+    private void seedReviews(int n, java.util.function.IntUnaryOperator ratingOf) {
         // created_at 显式给成递增的时刻: 列表是按它倒序的, 全 NULL 的话"第几页是哪几条"
         // 就成了运气, 而下面要断言的正是切页切对了没有
         long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
@@ -156,16 +166,27 @@ class QueryCountIntegrationTest {
                     .status("ACTIVE")
                     .build());
             jdbc.update("INSERT INTO review (user_id, subject_id, rating, content, created_at) "
-                            + "VALUES (?, ?, 8, ?, ?)",
-                    author.getId(), SUBJECT_BASE, "c" + i,
+                            + "VALUES (?, ?, ?, ?, ?)",
+                    author.getId(), SUBJECT_BASE, ratingOf.applyAsInt(i), "c" + i,
                     new java.sql.Timestamp(base + i * 60_000L));
         }
     }
 
-    /** 只数这次动作真正发出去的语句. 灌数据的那几条在 clear() 之前, 不计入. */
-    private long statementsFor(Runnable action) {
+    /**
+     * 清空统计并把 Statistics 交出来.
+     *
+     * <p>只数语句条数的用例走 {@link #statementsFor}; 需要看"读了几行"的那些
+     * (下面两组)自己拿这个, 因为 {@code getEntityLoadCount()} 与语句条数是两个问题.
+     */
+    private Statistics statsCleared() {
         Statistics stats = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
         stats.clear();
+        return stats;
+    }
+
+    /** 只数这次动作真正发出去的语句. 灌数据的那几条在 clear() 之前, 不计入. */
+    private long statementsFor(Runnable action) {
+        Statistics stats = statsCleared();
         action.run();
         return stats.getPrepareStatementCount();
     }
@@ -312,6 +333,61 @@ class QueryCountIntegrationTest {
         assertThat(all).hasSize(6);
         assertThat(all.get(0)).containsKeys("username", "userId", "subjectId");
         assertThat(statementsFor(() -> adminService.getAllReviews())).isEqualTo(1);
+    }
+
+    // ========== 评分统计 ==========
+    //
+    // 这一组与上面两组不同, 度量的是**读进来多少个实体**, 而不是发了几条 SQL.
+    //
+    // 因为「把该番的评论全读回来在内存里数」与「让数据库 GROUP BY」这两种写法,
+    // 语句条数完全一样(都是一条 SELECT), 返回的三个数字也一模一样 ——
+    // 只数语句分不出它们. 分得开的是读入行数: 前者随评论条数线性增长,
+    // 后者恒为 0(投影不是实体), 这正是这次改动全部的意义所在.
+
+    @ParameterizedTest(name = "{0} 条评论")
+    @ValueSource(ints = {10, 50})
+    @DisplayName("评分统计: 均分/条数/十档分布都对, 且一个评论实体都没读进内存")
+    void ratingStatsAggregatesInTheDatabase(int n) {
+        // 1~10 分轮着来: n=10 时每档 1 条, n=50 时每档 5 条, 两种规模的均分都是 5.5 ——
+        // 数据量翻五倍而结果不变, 才是"与评论条数无关"该有的样子
+        seedReviews(n, i -> i % 10 + 1);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM review WHERE subject_id = " + SUBJECT_BASE, Integer.class))
+                .as("评论要真的灌进去了, 否则下面断言的是空库")
+                .isEqualTo(n);
+
+        Statistics stats = statsCleared();
+        Map<String, Object> result = reviewService.getRatingStats(SUBJECT_BASE);
+
+        assertThat(result.get("count")).isEqualTo((long) n);
+        assertThat(result.get("average")).isEqualTo(5.5);
+        assertThat((int[]) result.get("distribution"))
+                .containsExactly(n / 10, n / 10, n / 10, n / 10, n / 10,
+                        n / 10, n / 10, n / 10, n / 10, n / 10);
+        assertThat(stats.getPrepareStatementCount()).as("一条 GROUP BY 问到底").isEqualTo(1);
+        assertThat(stats.getEntityLoadCount())
+                .as("改动前这里等于评论条数(%d) —— 统计不该把评论本身读出来", n)
+                .isZero();
+        assertThat(SqlRecorder.last())
+                .as("聚合是数据库做的, 生成的 SQL 里得真有 GROUP BY")
+                .containsIgnoringCase("group by");
+    }
+
+    /**
+     * 一条评论都没有的番 —— 真 SQL 的 GROUP BY 这时返回空集, 是另一条路径
+     * (内存遍历那版对空库同样不会出错, 所以这条不是在防改动本身, 是在防
+     * "把空集当成异常"或"除零"这类新写法).
+     */
+    @Test
+    @DisplayName("没人评分的番: 均分 0、条数 0、十档全 0")
+    void ratingStatsOnASubjectWithNoReviews() {
+        seedReviews(3, i -> 9);
+
+        Map<String, Object> result = reviewService.getRatingStats(SUBJECT_BASE + 999);
+
+        assertThat(result.get("count")).isEqualTo(0L);
+        assertThat(result.get("average")).isEqualTo(0.0);
+        assertThat((int[]) result.get("distribution")).hasSize(10).containsOnly(0);
     }
 
     // ========== 按标签查番剧 ==========

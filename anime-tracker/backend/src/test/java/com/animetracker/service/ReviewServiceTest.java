@@ -11,6 +11,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -20,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -29,8 +31,12 @@ import static org.mockito.Mockito.when;
  * <p>单独再写一遍不是重复劳动: 这两条路径是各自实现的, 谁抄漏了 catch 或漏了重查,
  * 只有各自的用例看得见.
  *
- * <p>末尾另有一组评论列表的分页参数用例. 分页参数怎么夹, 从返回值上是看不出来的
+ * <p>接着是一组评论列表的分页参数用例. 分页参数怎么夹, 从返回值上是看不出来的
  * (传 0 和传 1 拿到的都是第一页), 所以那几条断言的是真正下推给仓储的那个 Pageable.
+ *
+ * <p>末尾是评分统计的用例. 那里的关键是「统计没有把评论读进内存」这一条 ——
+ * 内存遍历与数据库聚合算出来的数字完全一样, 只有断言「那个会读实体的方法没被调用」
+ * 才分得开这两者.
  */
 class ReviewServiceTest {
 
@@ -190,5 +196,90 @@ class ReviewServiceTest {
         when(reviewRepository.findPageBySubjectIdWithUser(any(), any())).thenReturn(List.of());
 
         assertThat(reviewService.getSubjectReviews(1L, 200, 1, 20)).isEmpty();
+    }
+
+    // ========== 评分统计 ==========
+
+    /** 仓储那边 GROUP BY 出来的一行: [分数, 条数]. 类型跟着 Hibernate 走 —— Integer 与 Long. */
+    private static Object[] group(int rating, long n) {
+        return new Object[]{rating, n};
+    }
+
+    private Map<String, Object> statsOf(Object[]... rows) {
+        when(reviewRepository.countByRating(any())).thenReturn(List.of(rows));
+        return reviewService.getRatingStats(200);
+    }
+
+    @Test
+    @DisplayName("均分/条数/分布都由分组计数算出来")
+    void computesStatsFromGroupedCounts() {
+        Map<String, Object> stats = statsOf(group(8, 3), group(9, 1), group(10, 1));
+
+        assertThat(stats).containsOnlyKeys("average", "count", "distribution");
+        assertThat(stats.get("count")).isEqualTo(5L);
+        // (8*3 + 9 + 10) / 5 = 43 / 5
+        assertThat(stats.get("average")).isEqualTo(8.6);
+
+        int[] distribution = (int[]) stats.get("distribution");
+        assertThat(distribution).hasSize(10);
+        assertThat(distribution[7]).as("8 分 3 条").isEqualTo(3);
+        assertThat(distribution[8]).as("9 分 1 条").isEqualTo(1);
+        assertThat(distribution[9]).as("10 分 1 条").isEqualTo(1);
+        assertThat(distribution[0]).as("1 分没人打").isZero();
+        assertThat(Arrays.stream(distribution).sum()).isEqualTo(5);
+    }
+
+    /**
+     * 这条是本次改动的核心: 统计**不能**再把评论本身读出来.
+     *
+     * <p>从返回值上看不出差别 —— 两种写法算出的数字一模一样 —— 所以只能断言
+     * "那个会把每行评论读成实体的方法一次都没被调用". 少了它, 将来有人把实现改回
+     * 内存遍历, 其余用例照样全绿.
+     */
+    @Test
+    @DisplayName("统计不再把该番的评论读进内存, 只问数据库要分组计数")
+    void neverLoadsTheReviewsThemselves() {
+        statsOf(group(8, 3));
+
+        verify(reviewRepository, never()).findBySubjectIdOrderByCreatedAtDesc(any());
+        verify(reviewRepository).countByRating(200);
+    }
+
+    @Test
+    @DisplayName("没人评分: 均分 0、条数 0、十档全 0, 而不是 500 或 null")
+    void emptySubjectGivesZeros() {
+        Map<String, Object> stats = statsOf();
+
+        assertThat(stats.get("average")).isEqualTo(0.0);
+        assertThat(stats.get("count")).isEqualTo(0L);
+        assertThat((int[]) stats.get("distribution")).containsExactly(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+
+    @Test
+    @DisplayName("均分保留一位小数, 且是四舍五入 (1.25 -> 1.3)")
+    void roundsToOneDecimal() {
+        // (1*3 + 2) / 4 = 1.25 —— Math.round(12.5) = 13, 不是截断
+        Map<String, Object> stats = statsOf(group(1, 3), group(2, 1));
+
+        assertThat(stats.get("average")).isEqualTo(1.3);
+    }
+
+    /**
+     * 库里的分数理论上只该是 1~10 (DTO 上有 @Min/@Max), 但注解管不住手工改库和
+     * 历史数据, 而表上没有 CHECK 约束. 改前的 distribution[rating - 1] 碰上越界值
+     * 直接数组越界 -> 500, 详情页跟着打不开. 这里要求它活下来.
+     */
+    @Test
+    @DisplayName("越界的历史分数不进直方图, 但不会让接口崩, 也仍然算进均分与条数")
+    void outOfRangeLegacyRatingSurvives() {
+        Map<String, Object> stats = statsOf(group(0, 1), group(8, 2), group(11, 1));
+
+        assertThat(stats.get("count")).as("越界的也算条数").isEqualTo(4L);
+        // (0 + 16 + 11) / 4 = 6.75 -> 6.8
+        assertThat(stats.get("average")).isEqualTo(6.8);
+
+        int[] distribution = (int[]) stats.get("distribution");
+        assertThat(distribution[7]).isEqualTo(2);
+        assertThat(Arrays.stream(distribution).sum()).as("只有 1~10 分进直方图").isEqualTo(2);
     }
 }

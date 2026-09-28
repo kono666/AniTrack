@@ -103,16 +103,48 @@ public class ReviewService {
         return result;
     }
 
-    /** 获取番剧评分统计 */
+    /**
+     * 获取番剧评分统计 —— 均分、条数、十档分布全部由数据库聚合出来.
+     *
+     * <p><b>改前是什么写法、为什么是坑</b>
+     *
+     * <p>原来是 findBySubjectIdOrderByCreatedAtDesc(subjectId), 把该番的**每一条评论**
+     * 都读成实体, 再在内存里 stream 求平均、size 求条数、循环数出十档分布. 这三个数字
+     * 各是一句 COUNT/AVG 就能回答的事, 却要先把评论正文、时间、作者外键整行搬进 JVM ——
+     * 而这是详情页的热路径, 每打开一次走一遍, 代价随该番的评论数线性变差.
+     * 那句 ORDER BY created_at 更是白排的: 统计与顺序无关, 数据库却得先给结果排序.
+     *
+     * <p><b>为什么是一条 GROUP BY, 而不是 AVG + COUNT + GROUP BY 三条</b>
+     *
+     * <p>GROUP BY rating 的每一行是「分数 → 条数」. 把这些行按分数加权相加就是均值的分子,
+     * 条数相加就是总数, 而这些行本身就是直方图. 一条查询同时回答三个问题, 结果最多十行,
+     * 与评论条数无关; 拆成三条只是把同样的扫描做三遍.
+     *
+     * <p>响应结构与改前逐字一致(average / count / distribution 三个键, distribution 仍是
+     * 下标 0~9 对应 1~10 分的 int[10]) —— 前端 AnimeDetail.vue 的柱子标签是 `i + 1`.
+     */
     public Map<String, Object> getRatingStats(Integer subjectId) {
-        List<Review> reviews = reviewRepository.findBySubjectIdOrderByCreatedAtDesc(subjectId);
-        double avg = reviews.stream().mapToInt(Review::getRating).average().orElse(0);
-        long count = reviews.size();
-
+        long count = 0;
+        long sum = 0;
         int[] distribution = new int[10];
-        for (Review r : reviews) {
-            distribution[r.getRating() - 1]++;
+
+        for (Object[] row : reviewRepository.countByRating(subjectId)) {
+            int rating = ((Number) row[0]).intValue();
+            long n = ((Number) row[1]).longValue();
+            count += n;
+            sum += (long) rating * n;
+            // 十档只放得下 1~10 分. ReviewRequest.rating 上有 @Min(1)/@Max(10), 但注解
+            // 只挡得住走接口的请求 —— 手工改库、历史遗留行、将来放宽校验都绕得过去,
+            // 而 review 表上没有 CHECK 约束. 改前的 distribution[rating - 1] 碰上这种值
+            // 就是数组越界, 整个统计接口 500、详情页跟着打不开.
+            // 现在把它挡在直方图之外, 但仍然计进 count 与 average: 少一根画不出来的柱子,
+            // 好过整页崩掉, 而且均值不该因为一根柱子放不下就跟着失真.
+            if (rating >= 1 && rating <= 10) {
+                distribution[rating - 1] += (int) n;
+            }
         }
+
+        double avg = count == 0 ? 0.0 : (double) sum / count;
 
         Map<String, Object> stats = new HashMap<>();
         stats.put("average", Math.round(avg * 10.0) / 10.0);
