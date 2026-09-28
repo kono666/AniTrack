@@ -1,0 +1,221 @@
+# ============================================================
+#  CI —— 每次推送到 main / 每个 PR 都跑一遍
+#
+#  三个 job 各自回答一个不同的问题:
+#    backend   —— 代码逻辑还对吗? (183 个后端用例)
+#    frontend  —— 组件还对吗? 前端还构建得出来吗?
+#    image     —— 这东西真的能部署吗? (构建镜像 + 起真 compose 栈冒烟)
+#
+#  最后一个是有意加的. Dockerfile 和 docker-compose.yml 在写完之后是「看起来对」的状态:
+#  本机没有 Docker, 谁也没法执行一次. 部署配置最大的特点就是「写错了不会报错,
+#  只会在别人机器上炸」—— 所以这里用真实 PostgreSQL 把它跑起来, 顺便把
+#  /actuator/health 的三件事端到端钉住: 免登录、依赖坏了会说 DOWN、迁移能跑完.
+#
+#  刻意不做的事:
+#   - 不跑 scripts/verify-agent.py (它要真实 LLM 额度, 属于手工验证, 不该让每个 PR 都烧钱)
+#   - 不做镜像推送 (没有镜像仓库; 这一版的目标只是「构建得出来 + 跑得起来」)
+# ============================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # 允许在 Actions 页面手动点一次, 排查问题时不用先编一个空提交
+  workflow_dispatch:
+
+# 只需要读代码. 显式写出来, 免得 fork 来的 PR 拿到超出所需的权限
+permissions:
+  contents: read
+
+# 同一个分支连推几次时, 取消掉还在跑的旧一轮 —— 新提交的结论才有意义
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端 · 单元与集成测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: anime-tracker/backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          # 缓存 ~/.m2/repository. key 会跟着 pom.xml 的哈希走, 改依赖才会重下
+          cache: maven
+
+      # -B 关掉交互与 ANSI 进度条 (日志里不要塞控制字符), -ntp 关掉下载进度行
+      - name: 跑测试
+        run: mvn -B -ntp test
+
+      # 测试挂了的时候, 光看控制台那几行不够 —— 完整报告留下来
+      - name: 存测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: anime-tracker/backend/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  frontend:
+    name: 前端 · 测试与构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: anime-tracker/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: anime-tracker/frontend/package-lock.json
+
+      # 用 ci 而不是 install: 它严格按 package-lock.json 装, 锁文件与 package.json
+      # 一旦对不上就直接失败. install 会「顺手把锁文件改了」, 那等于把 CI 变成
+      # 又一个能产出提交的地方 —— CI 只该验证, 不该改文件
+      - name: 装依赖
+        run: npm ci
+
+      # vitest run = 跑一遍就退出. 不写 run 的话默认进 watch 模式, 会在 CI 里一直挂着
+      - name: 跑测试
+        run: npm run test
+
+      - name: 构建
+        run: npm run build
+
+      - name: 存构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: anime-tracker/frontend/dist/
+          retention-days: 7
+
+  image:
+    name: 镜像 · 构建 + compose 冒烟
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # 测试先过再花时间构建镜像 —— 测试都红的时候没必要再等一次镜像构建
+    needs: [backend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 两阶段构建里最慢的是「下 Maven 依赖」那一层. 缓存交给 GitHub Actions 的
+      # 缓存服务, 第二次之后的运行能省掉几分钟 —— 否则每次提交都要重下一遍依赖.
+      - name: 构建后端镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: ./anime-tracker/backend
+          # 本机构建默认不跑测试 —— 上面 backend job 已经跑过一次了, 没必要再来一遍.
+          # 这里要证明的是「能打出可运行的镜像」.
+          tags: anitrack-backend:latest
+          # load: 把镜像留在本机 docker 里, 下一步的 compose 才有得用
+          # (不 load 的话构建完只存在于 buildx 的缓存里, docker compose 看不到)
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 这两个值在本次运行里现生成.
+      # 不在仓库里写死任何看起来像密钥的东西 —— 就算它只是给一次性的冒烟容器用,
+      # 躺在仓库里的 JWT_SECRET=... 也一定会在某个时刻被人复制到别处.
+      - name: 生成一次性凭据
+        run: |
+          {
+            echo "CI_JWT_SECRET=$(openssl rand -hex 32)"
+            echo "CI_ADMIN_PASSWORD=ci$(openssl rand -hex 6)"
+          } >> "$GITHUB_ENV"
+
+      # compose 会自动读同目录下的 .env, 所以部署时那一套变量在这里原样走一遍
+      - name: 生成 CI 用的 .env
+        env:
+          # 非密钥, 只是本次冒烟的管理员用户名
+          CI_ADMIN_USERNAME: ciadmin
+        run: |
+          cat > .env <<EOF
+          DB_NAME=anitrack
+          DB_USER=anitrack
+          DB_PASS=ci${CI_JWT_SECRET:0:12}
+          JWT_SECRET=${CI_JWT_SECRET}
+          ADMIN_USERNAME=${CI_ADMIN_USERNAME}
+          ADMIN_PASSWORD=${CI_ADMIN_PASSWORD}
+          ADMIN_EMAIL=ci@example.com
+          API_PORT=8080
+          EOF
+
+      - name: 起 compose 栈并等它健康
+        # --wait 会一直等到每个服务都 healthy 才返回, 比「up 完 sleep 30」可靠:
+        # 后者在慢机器上就是随机失败, 在快机器上就是白等.
+        # 等不到会直接返回非零 —— 这一步本身就证明了 Dockerfile 里那条 HEALTHCHECK 是对的.
+        run: docker compose up -d --wait --wait-timeout 240
+
+      - name: 冒烟
+        env:
+          CI_ADMIN_USERNAME: ciadmin
+          BASE: http://localhost:8080
+        run: |
+          set -euo pipefail
+
+          # 每个断言都打印一行, 失败时日志里能直接看出卡在哪一条
+          assert_status() {
+            local expect="$1" url="$2"
+            local got
+            got=$(curl -s -o /tmp/body -w '%{http_code}' "$url")
+            if [ "$got" != "$expect" ]; then
+              echo "FAIL: $url 期望 $expect, 实际 $got"
+              cat /tmp/body; echo
+              exit 1
+            fi
+            echo "ok: $url -> $got"
+          }
+
+          echo "--- 1. 整体探活 (免登录) ---"
+          assert_status 200 "$BASE/actuator/health"
+          grep -q '"status":"UP"' /tmp/body || { echo "FAIL: health 不是 UP"; cat /tmp/body; exit 1; }
+
+          echo "--- 2. 两组探针 (readiness 带 db 组件, 200 说明库连得上且迁移已完成) ---"
+          assert_status 200 "$BASE/actuator/health/liveness"
+          assert_status 200 "$BASE/actuator/health/readiness"
+
+          echo "--- 3. 除 health 外的 actuator 端点不给匿名 (env 会原样打印配置) ---"
+          assert_status 401 "$BASE/actuator/env"
+          assert_status 401 "$BASE/actuator/beans"
+
+          echo "--- 4. 空库上由环境变量建出管理员, 且能登录 ---"
+          code=$(curl -s -o /tmp/login -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${CI_ADMIN_USERNAME}\",\"password\":\"${CI_ADMIN_PASSWORD}\"}" \
+            "$BASE/api/user/login")
+          test "$code" = "200" || { echo "FAIL: 管理员登录 $code"; cat /tmp/login; exit 1; }
+          grep -q '"code":200' /tmp/login || { echo "FAIL: 登录响应体不对"; cat /tmp/login; exit 1; }
+          echo "ok: 管理员登录 200"
+
+          echo "--- 5. 迁移建出来的表能读 (证明结构不只是 validate 过得去) ---"
+          assert_status 200 "$BASE/api/review/list?subjectId=1"
+
+          echo "全部冒烟通过"
+
+      # 失败了才有必要看日志 —— 平时打出来只会把有效信息淹掉
+      - name: 失败时打印容器日志
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+
+      # 一定要收尾: 残留的容器不影响 runner (用完即销毁), 但这条能让日志干净,
+      # 也顺手证明 down 是可用的
+      - name: 收尾
+        if: always()
+        run: docker compose down -v
