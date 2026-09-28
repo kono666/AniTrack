@@ -35,7 +35,16 @@ public class Anime {
     @Column(name = "total_episodes")
     private Integer totalEpisodes;   // 总集数
 
-    @Column(columnDefinition = "DECIMAL(3,1)")
+    // 精度与刻度写死在 columnDefinition 里, 而不是用 @Column(precision/scale):
+    // 这里要的是一列定点小数, 写法必须与迁移脚本完全一致 (见 db/migration/[h2|postgres]/V1__init_schema.sql).
+    //
+    // 为什么是 NUMERIC 而不是 DECIMAL —— 这两个词在 SQL 里是同一个意思, 但两个数据库的
+    // 驱动报出来的 JDBC 类型码并不一样, 而 Hibernate 的 validate 恰恰是拿类型码比对的:
+    //   H2:          DECIMAL(3,1) -> Types#DECIMAL(3),  NUMERIC(3,1) -> Types#NUMERIC(2)
+    //   PostgreSQL:  numeric(3,1) -> Types#NUMERIC(2)
+    // 也就是说只有写成 NUMERIC, 两边才会都报 2. 这是实测出来的(Hibernate 6.3 + H2 2.2 + PG 16),
+    // 换成 DECIMAL 会让开发库过、生产库直接起不来 —— 恰好是最难在本地发现的那类问题.
+    @Column(columnDefinition = "NUMERIC(3,1)")
     private Double rating;           // 评分 1-10
 
     @Column(name = "rating_count")

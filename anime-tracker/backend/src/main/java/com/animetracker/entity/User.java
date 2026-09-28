@@ -37,9 +37,11 @@ public class User {
      *
      * ⚠ 一个实测出来的坑: ddl-auto=update 只在**新建表**时创建这个唯一约束,
      * 对已存在的表它只补列、不补约束 (实测: 迁移后的库里只有 PK 和 username 的
-     * 唯一索引, email 上没有). 所以老库需要手工执行一次
-     * {@code ALTER TABLE `user` ADD CONSTRAINT uk_user_email UNIQUE (email);}
-     * 完整说明见 database/schema.sql.
+     * 唯一索引, email 上没有).
+     *
+     * 现在补这一刀由迁移脚本负责: 全新的库在建表脚本 (db/migration/[h2|postgres]/V1__init_schema.sql)
+     * 里就有这条约束, 老库由 V2__align_legacy_schema.sql 补上, 启动时自动执行,
+     * 不再需要谁去手工敲 ALTER TABLE.
      * 在这之前, 邮箱唯一性由 UserService.register() 的 existsByEmail 保证 ——
      * 它能挡住重复注册, 但并发请求之间仍有微小窗口, 数据库约束才是最终防线.
      */

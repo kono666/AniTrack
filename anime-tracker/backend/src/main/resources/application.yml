@@ -43,11 +43,18 @@ spring:
       path: /h2-console
   jpa:
     hibernate:
-      ddl-auto: update
+      # 表结构从此由 Flyway 负责 (脚本在 db/migration/h2), Hibernate 不再改表.
+      # 换成 validate 之后, 「实体改了、脚本没跟上」会在启动时直接报错,
+      # 而不是像 update 那样静默地少建一个约束 (email 唯一约束就是这么漏过一次的).
+      ddl-auto: validate
     show-sql: false
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    # 只加载本环境这一套方言脚本. 两个目录各成一套、互不混用 ——
+    # 混用会让「某个脚本到底在哪个环境跑过」变得说不清楚.
+    locations: classpath:db/migration/h2
 
 # JWT 密钥 —— 开发环境兜底值.
 #
@@ -99,8 +106,13 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: update  # 首次部署后可改为 validate
+      # 与 dev 同理: 结构归 Flyway (脚本在 db/migration/postgres), Hibernate 只做校验.
+      # 首次部署也不再需要「先让 update 建表、之后再改成 validate」这个两步走 ——
+      # 表由 V1 建好, 启动时校验即可.
+      ddl-auto: validate
     show-sql: false
+  flyway:
+    locations: classpath:db/migration/postgres
   h2:
     console:
       enabled: false
@@ -136,6 +148,30 @@ app:
 # ============================================================
 # 公共配置 (所有 profile 生效)
 # ============================================================
+spring:
+  # ============================================================
+  # 数据库迁移 (Flyway)
+  #
+  # 表结构从此由 src/main/resources/db/migration 下的编号脚本负责, Hibernate 不再改表
+  # (各 profile 的 ddl-auto 已改成 validate)。每个环境用哪套脚本在各自的 profile 里指定。
+  #
+  # 这一步解决的是「代码改完了、库没跟上」这类最难查的问题: 改动不再靠 Hibernate
+  # 猜着执行, 而是变成仓库里一个能 review、能回放、编号唯一且执行过的脚本不会被修改
+  # (Flyway 会校验校验和)的文件。
+  #
+  # baseline-on-migrate: 给「Flyway 之前就存在的库」留一条生路。
+  #   那种库里已经有表和数据, 但没有 flyway_schema_history 表 —— 直接跑 V1 会因为
+  #   「表已存在」失败。打开这个开关后, Flyway 遇到这种库不执行任何脚本, 只写一条
+  #   「基线已到 1」的记录, 然后从 V2 开始跑。
+  #   全新的空库不走基线逻辑, 老老实实从 V1 开始建表 —— 一套配置覆盖两种情况。
+  #
+  # baseline-version: 定在 1 而不是默认的 0, 因为 V1 就是「老库当初由 ddl-auto 建出来的
+  #   那个结构」。定成 0 的话老库会去执行 V1, 照样撞上「表已存在」。
+  # ============================================================
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 1
+
 jwt:
   # 密钥有效期 (毫秒), 默认 7 天. 密钥本身在各 profile 内定义 (见上),
   # 因为「开发可以兜底、生产必须显式提供」这个差异只能按环境表达.
