@@ -242,4 +242,35 @@ describe('Assistant page', () => {
     expect(wrapper.text()).toContain('找治愈番')
     expect(wrapper.text()).toContain('4 条')
   })
+
+  it('中断正在生成的流: 生成到一半离开页面时', async () => {
+    // 改前没有 onBeforeUnmount, 切走之后那条 SSE 连接还开着:
+    // 后端继续推、继续烧 AI 调用, 而每推一帧都在改一个已经不在页面上的组件.
+    const release = scriptedStream([], { answer: '好了', rounds: 1 }, { hold: true })
+    const wrapper = await mountPage()
+    await typeAndSend(wrapper)
+
+    const signal = streamChat.mock.calls[0][2]
+    expect(signal).toBeDefined()
+    expect(signal.aborted).toBe(false)
+
+    wrapper.unmount()
+
+    expect(signal.aborted).toBe(true)
+    release()
+  })
+
+  it('点停止也要中断, 且不影响之后继续提问', async () => {
+    // 这条是上一条的对照: 不能为了「离开页面就中断」把正常流程也弄坏
+    const release = scriptedStream([], { answer: '好了', rounds: 1 }, { hold: true })
+    const wrapper = await mountPage()
+    await typeAndSend(wrapper)
+
+    const signal = streamChat.mock.calls[0][2]
+    await wrapper.find('.composer-stop').trigger('click')
+    expect(signal.aborted).toBe(true)
+
+    release()
+    await flushPromises()
+  })
 })

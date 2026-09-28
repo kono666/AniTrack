@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useUserStore } from '../stores/user'
+import { loadStoredUser, clearStoredUser } from '../utils/userStorage'
 
 const api = axios.create({
   baseURL: '/api',
@@ -8,7 +9,9 @@ const api = axios.create({
 
 // 请求拦截器：自动携带 JWT Token
 api.interceptors.request.use(config => {
-  const user = JSON.parse(localStorage.getItem('anime_user') || 'null')
+  // 拦截器在每一次请求前都会跑, 这里抛异常等于所有请求都发不出去 ——
+  // 所以同样交给 loadStoredUser() 兜住脏数据
+  const user = loadStoredUser()
   if (user?.token) {
     config.headers.Authorization = `Bearer ${user.token}`
   }
@@ -21,7 +24,7 @@ api.interceptors.response.use(
   error => {
     if (error.response?.status === 401) {
       // 清除 localStorage 和 Pinia store (需要使用动态import避免循环依赖)
-      localStorage.removeItem('anime_user')
+      clearStoredUser()
       import('../stores/user.js').then(m => m.useUserStore().logout())
       // 使用 router 跳转而非 window.location (保留 SPA 状态)
       if (!window.location.pathname.includes('/login') &&

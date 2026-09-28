@@ -41,7 +41,9 @@
     </div>
 
     <!-- Filter Tabs -->
-    <div class="p-tabs">
+    <!-- 出错时不显示筛选栏: 这些计数是从 trackings 算出来的, 加载失败时全是空的,
+         摆着一排「0」只会让人以为追番记录真的没了 -->
+    <div class="p-tabs" v-if="!error">
       <button v-for="f in filters" :key="f.key" class="p-tab" :class="{ active: filter === f.key }" @click="filter = f.key">
         {{ f.label }}
         <span v-if="counts[f.key] !== undefined" class="p-tab-count">{{ counts[f.key] }}</span>
@@ -53,7 +55,16 @@
     </div>
 
     <!-- Anime List -->
-    <div v-if="filtered.length > 0" class="p-list">
+    <!-- 错误态优先于空态: 改前请求失败时 trackings 是空的, 页面显示的是
+         「还没有追番记录」—— 把「没拉到」说成了「你没有」, 用户会以为数据丢了 -->
+    <EmptyState
+      v-if="error"
+      icon="⚠️"
+      :message="error"
+      action-label="重试"
+      @action="loadProfile"
+    />
+    <div v-else-if="filtered.length > 0" class="p-list">
       <div
         v-for="item in filtered"
         :key="item.id"
@@ -102,6 +113,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { getTrackingList, getOverallStats, saveTracking } from '../api'
+import { loadErrorMessage } from '../utils/loadError'
 import { PhUserCircle } from '@phosphor-icons/vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -109,6 +121,7 @@ import EmptyState from '../components/EmptyState.vue'
 const router = useRouter()
 const userStore = useUserStore()
 const loading = ref(true)
+const error = ref('')
 const trackings = ref([])
 const stats = ref(null)
 const filter = ref('all')
@@ -170,8 +183,14 @@ async function quickUpdate(item, field, val) {
   } catch (e) { $toast('更新失败', 'error') }
 }
 
-onMounted(async () => {
+onMounted(loadProfile)
+
+// 单独取名是为了让错误态上的「重试」能重新跑这整段(账号信息来自 store,
+// 失败的是列表和统计这两个接口)
+async function loadProfile() {
   if (!userStore.loggedIn) { router.push('/login'); return }
+  loading.value = true
+  error.value = ''
   try {
     const [listRes, statsRes] = await Promise.all([getTrackingList(), getOverallStats()])
     trackings.value = (listRes.data.data || []).map(t => ({
@@ -179,9 +198,13 @@ onMounted(async () => {
       animeYear: t.animeDate ? t.animeDate.substring(0, 4) : null,
     }))
     stats.value = statsRes.data.data || {}
-  } catch (e) { console.error(e) }
+  } catch (e) {
+    error.value = loadErrorMessage(e, '加载追番记录')
+    trackings.value = []
+    stats.value = {}
+  }
   loading.value = false
-})
+}
 </script>
 
 <style scoped>

@@ -117,7 +117,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   PhPlus, PhTrash, PhList, PhPaperPlaneTilt, PhStop,
 } from '@phosphor-icons/vue'
@@ -182,6 +182,21 @@ onMounted(async () => {
   if (loggedIn.value) {
     await loadConversations()
   }
+})
+
+/**
+ * 离开页面时中断还在跑的流.
+ *
+ * 之前没有这个钩子, 后果是: 生成到一半切到别的路由, 那条 SSE 连接还开着,
+ * 后端还在推, 而每推一帧回调都会去改一个已经不在页面上的组件的状态. 用户看到的是
+ * 「切走了还在偷偷跑」, 服务端那边则是一份没人要的计算 —— AI 调用是要花钱的,
+ * 让它跑完一整轮工具调用只为了把结果丢进虚空, 没有道理.
+ *
+ * 中断后 streamChat 会以 AbortError 拒绝, send() 的 catch 已经把这种情况认成
+ * 「已停止生成」, 所以不需要额外处理.
+ */
+onBeforeUnmount(() => {
+  controller?.abort()
 })
 
 async function loadInfo() {

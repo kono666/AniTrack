@@ -17,6 +17,8 @@
  * 残缺的尾巴留到下一次. 这是手写 SSE 解析最容易写错的地方.
  */
 
+import { loadStoredUser } from '../utils/userStorage'
+
 /** 事件名 -> 后端推送的内容 */
 export const SSE_EVENTS = {
   TOOL_CALL: 'tool_call',
@@ -72,13 +74,15 @@ function parseData(raw) {
   }
 }
 
-/** 从 localStorage 取 token, 与 axios 拦截器保持同一份来源 */
+/**
+ * 从 localStorage 取 token.
+ *
+ * 这里原本自己包了个 try/catch —— 说明「storage 里的东西可能是坏的」这件事
+ * 早就被发现过一次了, 只是当时只补了这一个调用点. 现在统一走 loadStoredUser(),
+ * 四处调用方共用同一套解析与清理规则.
+ */
 function authToken() {
-  try {
-    return JSON.parse(localStorage.getItem('anime_user') || 'null')?.token || null
-  } catch {
-    return null
-  }
+  return loadStoredUser()?.token || null
 }
 
 /**
@@ -129,27 +133,39 @@ export async function streamChat(payload, onEvent, signal) {
   let done = null
   let failure = null
 
-  while (true) {
-    const { value, done: streamEnd } = await reader.read()
-    if (value) {
-      buffer += decoder.decode(value, { stream: true })
-    }
-
-    const { events, rest } = parseSseBuffer(buffer)
-    buffer = rest
-
-    for (const evt of events) {
-      const data = parseData(evt.data)
-      if (evt.name === SSE_EVENTS.DONE) {
-        done = data
-      } else if (evt.name === SSE_EVENTS.ERROR) {
-        // 后端把错误也走 200 的流推回来, 记下来在收流后抛, 避免上游还在推
-        failure = new Error(data?.message || 'AI 服务执行出错')
+  try {
+    while (true) {
+      const { value, done: streamEnd } = await reader.read()
+      if (value) {
+        buffer += decoder.decode(value, { stream: true })
       }
-      onEvent?.(evt.name, data)
-    }
 
-    if (streamEnd) break
+      const { events, rest } = parseSseBuffer(buffer)
+      buffer = rest
+
+      for (const evt of events) {
+        const data = parseData(evt.data)
+        if (evt.name === SSE_EVENTS.DONE) {
+          done = data
+        } else if (evt.name === SSE_EVENTS.ERROR) {
+          // 后端把错误也走 200 的流推回来, 记下来在收流后抛, 避免上游还在推
+          failure = new Error(data?.message || 'AI 服务执行出错')
+        }
+        onEvent?.(evt.name, data)
+      }
+
+      if (streamEnd) break
+    }
+  } finally {
+    // 三条出口都要把锁放掉: 正常读完、中途抛错、以及被 abort(离开页面 / 点停止).
+    //
+    // 之前这里没有 finally, 于是这个 reader 会一直握着那条流 —— 流已经没人读了,
+    // 但锁还在, 连接也就一直不回收. 用户连着问几轮、每次中途切走, 就攒下一批
+    // 谁也读不到的死连接.
+    //
+    // 注意释放锁**不等于**中断请求: 它只是把这条流交还出去. 真正让连接断开的是
+    // 调用方的 controller.abort()(见 Assistant.vue 的 onBeforeUnmount 与 stop).
+    reader.releaseLock()
   }
 
   if (failure) throw failure

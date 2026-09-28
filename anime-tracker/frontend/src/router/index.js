@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { loadStoredUser } from '../utils/userStorage'
 
 const routes = [
   { path: '/', name: 'Home', component: () => import('../views/Home.vue') },
@@ -41,6 +42,21 @@ const routes = [
     component: () => import('../views/admin/Reviews.vue'),
     meta: { requiresAuth: true, requiresAdmin: true },
   },
+
+  // ── 兜底: 必须放在最后 ────────────────────────────
+  //
+  // 这条吃下所有没被上面匹配到的路径. 没有它的时候, 访问一个不存在的地址
+  // (手输错、旧书签、别人分享的失效链接)会得到一个**全白的页面** ——
+  // router 匹配不到任何路由, 而 App.vue 里没有可渲染的东西, 控制台也没有任何提示.
+  // 对作品集来说这类访问并不罕见(有人就是会去戳地址栏), 白屏会被读成「网站坏了」.
+  //
+  // 语法用 :pathMatch(.*)* 而不是 :pathMatch(.*): 前者才能匹配到多级路径
+  // (/a/b/c 之类), 后者只吃一级. 尾部那个 *(可重复)是关键.
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    component: () => import('../views/NotFound.vue'),
+  },
 ]
 
 const router = createRouter({
@@ -55,10 +71,13 @@ const router = createRouter({
  * - requiresAdmin: 非管理员重定向到首页
  */
 router.beforeEach((to, from, next) => {
-  // 从 localStorage 读取用户状态 (与 stores/user.js 保持一致)
-  const stored = localStorage.getItem('anime_user')
-  const user = stored ? JSON.parse(stored) : null
-  const isLoggedIn = user && user.token
+  // 从 localStorage 读取用户状态 (与 stores/user.js 走同一个入口)
+  //
+  // 必须用 loadStoredUser() 而不是自己 JSON.parse: 守卫是每一次跳转的必经之路,
+  // 这里抛异常等于整个站白屏, 而 storage 里的内容用户和任何脚本都能改.
+  // 解析失败时它返回 null 并把坏数据清掉, 于是最坏的结果只是「回到未登录态」.
+  const user = loadStoredUser()
+  const isLoggedIn = user !== null
 
   if (to.meta.requiresAuth && !isLoggedIn) {
     // 保存目标路径, 登录后可跳回

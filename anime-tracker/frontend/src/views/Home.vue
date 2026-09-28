@@ -1,7 +1,7 @@
 <template>
   <div class="home-page">
     <!-- Hero Carousel -->
-    <HeroBanner :items="heroItems" />
+    <HeroBanner v-if="!error" :items="heroItems" />
 
     <div class="page-container">
       <!-- Today's Schedule -->
@@ -31,7 +31,19 @@
 
       <LoadingSpinner v-if="loading" />
 
-      <template v-if="!loading">
+      <!-- 加载失败. 排在内容前面, 而且把下面整块内容挡住 ——
+           改前 Promise.all 一失败, 所有列表都是空的, 页面呈现出「这个站什么都没有」:
+           空的热门、空的最近更新、只剩一个「全部」的分类栏. 用户不可能知道
+           是后端挂了还是站里确实没数据 -->
+      <EmptyState
+        v-else-if="error"
+        icon="⚠️"
+        :message="error"
+        action-label="重试"
+        @action="loadHome"
+      />
+
+      <template v-else>
         <!-- Popular This Season -->
         <HorizontalScroll title="🔥 本季热门" link="/search?view=rank">
           <div
@@ -115,6 +127,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getRanking, getCalendar, getTags, getByTag } from '../api'
+import { loadErrorMessage } from '../utils/loadError'
 import { useReveal } from '../composables/useReveal'
 import HeroBanner from '../components/HeroBanner.vue'
 import HorizontalScroll from '../components/HorizontalScroll.vue'
@@ -133,6 +146,7 @@ const recentList = ref([])
 const todayAnime = ref([])
 const tags = ref([])
 const selectedTag = ref('')
+const error = ref('')
 const tagResults = ref([])
 const tagPage = ref(1)
 const pageSize = 24
@@ -172,7 +186,12 @@ async function selectTag(tag) {
 const cache = { data: null, time: 0 }
 const CACHE_TTL = 5 * 60 * 1000
 
-onMounted(async () => {
+onMounted(loadHome)
+
+// 单独取名(原来是直接写在 onMounted 里的匿名函数)是为了让错误态上的「重试」
+// 有东西可调 —— 重试就是把这一次加载原样再跑一遍
+async function loadHome() {
+  error.value = ''
   // 命中缓存直接渲染
   if (cache.data && (Date.now() - cache.time) < CACHE_TTL) {
     const c = cache.data
@@ -182,6 +201,7 @@ onMounted(async () => {
     return
   }
 
+  let coreLoaded = false
   try {
     // Phase1: 核心数据先加载 (快, 不阻塞页面)
     const [rankRes, dateRes, tagRes] = await Promise.all([
@@ -196,7 +216,12 @@ onMounted(async () => {
     recentList.value = dateData
     tags.value = tagRes.data.data || []
     loading.value = false  // 页面立即可见
-  } catch (e) { console.error(e); loading.value = false }
+    coreLoaded = true
+  } catch (e) {
+    // 改前只 console.error: 于是所有列表保持空, 页面看起来像「站里没数据」
+    error.value = loadErrorMessage(e, '加载首页')
+    loading.value = false
+  }
 
   // Phase2: 日历后台加载 (慢, 不阻塞)
   try {
@@ -208,10 +233,16 @@ onMounted(async () => {
     todayAnime.value = todayEntry?.items || []
   } catch (e) { /* 日历失败不影响主页 */ }
 
-  // 写缓存
-  cache.data = { hero: heroItems.value, popular: popularList.value, recent: recentList.value, today: todayAnime.value, tags: tags.value }
-  cache.time = Date.now()
-})
+  // 写缓存 —— 只在核心数据真的加载成功时才写.
+  //
+  // 改前这里是无条件写的: 首页加载失败时, 这份「全是空列表」的结果会被当成有效
+  // 数据缓存 5 分钟. 于是错误被缓存成了事实 —— 用户点重试(或者切走再回来)拿到的
+  // 还是那份空缓存, 连一次新的请求都不会发出去.
+  if (coreLoaded) {
+    cache.data = { hero: heroItems.value, popular: popularList.value, recent: recentList.value, today: todayAnime.value, tags: tags.value }
+    cache.time = Date.now()
+  }
+}
 </script>
 
 <style scoped>

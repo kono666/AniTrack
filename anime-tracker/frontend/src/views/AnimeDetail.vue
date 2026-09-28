@@ -145,6 +145,17 @@
 
   <div v-else class="page-container">
     <LoadingSpinner v-if="loading" />
+    <!-- 加载失败与「编号不存在」是两件事, 改前它们共用下面那一句:
+         断网或后端 500 时, 用户看到的是「番剧不存在或已下架」——
+         一句关于**这部番**的结论, 而事实是**这次请求**没成功.
+         对用户来说差别很大: 前者会让他以为链接失效了, 后者他重试一下就好 -->
+    <EmptyState
+      v-else-if="error"
+      icon="⚠️"
+      :message="error"
+      action-label="重试"
+      @action="load"
+    />
     <div v-else class="not-found">番剧不存在或已下架</div>
   </div>
 </template>
@@ -159,6 +170,7 @@ import {
   getTrackingStatus, saveTracking, deleteTracking,
   getWatchedEpisodes, toggleEpisode, getAnimeHeat, getByTag
 } from '../api'
+import { loadErrorMessage } from '../utils/loadError'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -175,6 +187,7 @@ const heat = ref(null)
 const loading = ref(true)
 const relatedAnime = ref([])
 const coverFailed = ref(false)
+const error = ref('')
 
 const fallbackImg = 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#18181b"><rect width="300" height="400" rx="8"/><text x="150" y="195" text-anchor="middle" fill="#3f3f46" font-size="14">暂无</text><text x="150" y="215" text-anchor="middle" fill="#27272a" font-size="48">🎬</text></svg>')
 
@@ -196,6 +209,10 @@ function fmt(d){ return d ? new Date(d).toLocaleDateString('zh-CN') : '' }
 function barPct(cnt, dist){ const m = Math.max(...dist,1); return Math.max(2, (cnt/m)*100) }
 
 async function load(){
+  // 重试要能回到「加载中」, 否则点了重试界面没有任何变化(load 原先只在挂载时跑,
+  // loading 的初值就是 true, 所以不需要自己置位)
+  loading.value = true
+  error.value = ''
   try{
     const [dr,er,sr,rr] = await Promise.all([getAnimeDetail(sid),getEpisodes(sid),getRatingStats(sid),getSubjectReviews(sid,userStore.user?.id||0)])
     subject.value = dr.data.data
@@ -212,7 +229,10 @@ async function load(){
       const rd=mr.data.data; if(rd?.exists){ myReview.id=rd.id; myReview.rating=rd.rating; myReview.content=rd.content||'' }
       try{ const [w,h] = await Promise.all([getWatchedEpisodes(sid),getAnimeHeat(sid)]); watchedEpisodes.value=w.data.data||[]; heat.value=h.data.data||null }catch(e){}
     }else{ try{ const h=await getAnimeHeat(sid); heat.value=h.data.data||null }catch(e){} }
-  }catch(e){ console.error(e) }
+  }catch(e){
+    // 改前只 console.error, 于是 subject 保持 null, 页面落到「番剧不存在或已下架」
+    error.value = loadErrorMessage(e, '加载番剧')
+  }
   loading.value=false
 }
 

@@ -195,4 +195,51 @@ describe('streamChat', () => {
     expect(SSE_EVENTS.TOOL_CALL).toBe('tool_call')
     expect(SSE_EVENTS.DONE).toBe('done')
   })
+
+  /**
+   * 下面两条钉的是 reader 的锁.
+   *
+   * `stream.locked` 是唯一能外部观察到的证据: getReader() 之后它就是 true,
+   * releaseLock() 之后变回 false. 改前没有 finally, 于是流已经读完(或已经报错)
+   * 而锁还挂在上面 —— 连接不回收, 用户每问一轮就攒一条谁也读不到的死连接.
+   */
+  it('正常读完后就放掉 reader 的锁', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event:done\ndata:{"answer":"ok"}\n\n'))
+        controller.close()
+      },
+    })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200, body: stream, json: async () => null,
+    })
+
+    await streamChat({ message: 'hi' })
+
+    expect(stream.locked).toBe(false)
+  })
+
+  it('读到一半出错时也要放掉 reader 的锁', async () => {
+    // 用户中途离开页面 / 点停止时, 真实 fetch 的响应体就是以这种方式报错的
+    // (AbortError), 所以这条走的正是那条路径的形状
+    const encoder = new TextEncoder()
+    let inner
+    const stream = new ReadableStream({
+      start(controller) {
+        inner = controller
+        controller.enqueue(encoder.encode('event:tool_call\ndata:{"round":1}\n\n'))
+      },
+    })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200, body: stream, json: async () => null,
+    })
+
+    const promise = streamChat({ message: 'hi' }, () => {})
+    await vi.waitFor(() => expect(stream.locked).toBe(true))
+    inner.error(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+    expect(stream.locked).toBe(false)
+  })
 })
