@@ -182,4 +182,68 @@ class AnimeServicePagingTest {
         assertThatCode(() -> animeService.searchAnime("番", 0, 2)).doesNotThrowAnyException();
         assertThat(idsOf(listOf(animeService.searchAnime("番", 0, 2)))).containsExactly(1, 2);
     }
+
+    // ========== 筛选接口的分页 ==========
+    //
+    // 筛选走的是另一个仓储方法(按 rank 排), 而且在分页前还要过一遍筛选条件,
+    // 所以它不能只靠上面那组用例覆盖到.
+
+    /** 前三条 2026-01, 后两条 2026-04 */
+    private static List<Anime> fiveAnimeWithSeasons() {
+        return List.of(
+                Anime.builder().id(1).title("a").season("2026-01").build(),
+                Anime.builder().id(2).title("b").season("2026-01").build(),
+                Anime.builder().id(3).title("c").season("2026-01").build(),
+                Anime.builder().id(4).title("d").season("2026-04").build(),
+                Anime.builder().id(5).title("e").season("2026-04").build());
+    }
+
+    /**
+     * 顺序必须是**先筛、后排、再切页**.
+     *
+     * <p>先切页的话, 第 2 页会切在未筛选的 5 条上得到 [3,4,5], 再用条件筛只剩 [3],
+     * total 也变成 1 —— 前端据此算出来的总页数是错的. 这条用例用一个"筛选后
+     * 恰好跨页"的数据集把这个顺序钉死: 三条 2026-01 的番, 每页 2 条.
+     */
+    @Test
+    @DisplayName("筛选后分页: 第 2 页只拿到筛选结果里的第 3 条, total 是筛选后的 3 而不是 5")
+    void filterPagingFiltersBeforeItSlices() {
+        when(animeRepository.findByOrderByRankAsc()).thenReturn(fiveAnimeWithSeasons());
+
+        Map<String, Object> firstPage = animeService.getFilteredPage(null, "2026-01", null, null, null, 1, 2);
+        assertThat(idsOf(listOf(firstPage))).containsExactly(1, 2);
+        assertThat(firstPage.get("total")).isEqualTo(3);
+
+        Map<String, Object> secondPage = animeService.getFilteredPage(null, "2026-01", null, null, null, 2, 2);
+        assertThat(idsOf(listOf(secondPage))).containsExactly(3);
+        assertThat(secondPage.get("total")).isEqualTo(3);
+
+        // 键名与搜索接口一模一样, 前端两个接口共用同一段读取逻辑
+        assertThat(firstPage).containsOnlyKeys("list", "total", "page");
+    }
+
+    @Test
+    @DisplayName("筛选接口同样夹越界值: page=0 退化成第 1 页, 超大页码给空页而不是抛异常")
+    void filterPagingClampsOutOfRangeValues() {
+        when(animeRepository.findByOrderByRankAsc()).thenReturn(fiveAnimeWithSeasons());
+
+        assertThatCode(() -> animeService.getFilteredPage(null, null, null, null, null, 0, 2))
+                .doesNotThrowAnyException();
+        assertThat(idsOf(listOf(animeService.getFilteredPage(null, null, null, null, null, 0, 2))))
+                .containsExactly(1, 2);
+        assertThat(listOf(animeService.getFilteredPage(null, null, null, null, null, Integer.MAX_VALUE, 20)))
+                .isEmpty();
+        assertThat(listOf(animeService.getFilteredPage(null, null, null, null, null, 99, 20)))
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("筛选一条都不匹配时返回空页, 但 total 仍是 0 而不是 null")
+    void filterPagingOnEmptyResult() {
+        when(animeRepository.findByOrderByRankAsc()).thenReturn(fiveAnimeWithSeasons());
+
+        Map<String, Object> result = animeService.getFilteredPage(null, "2049-07", null, null, null, 1, 20);
+        assertThat(listOf(result)).isEmpty();
+        assertThat(result.get("total")).isEqualTo(0);
+    }
 }

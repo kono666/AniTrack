@@ -259,6 +259,27 @@ public class AnimeService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 分页版的筛选, 返回结构与搜索接口一致: {@code {list, total, page}}.
+     *
+     * <p>为什么筛选也要分页: 它此前一次返回**全部**匹配行 —— 无参数时就是整张表
+     * (线上 470 行, 前端 Search.vue 读的是 {@code res.data.data.list}, 会一次全渲染).
+     * 数据再长下去, 一个请求就能让两边各自扛一份任意大的结果集, 与 1.3 里
+     * 给 limit 封顶要挡的是同一件事.
+     *
+     * <p>顺序是**先筛后排再切页**, 这也是这里不能再让控制器自己切的原因:
+     * 先切页会把"第几页"切到未筛选的集合上, 于是 total 变成页大小、后面的页
+     * 少几条. 交给 {@link #buildSearchResult} 一并处理, 顺便复用它已经修好的
+     * 越界夹取与 long 起点(见那里的注释).
+     *
+     * <p>传给 Agent 工具的仍是 {@link #getFiltered} 那份完整列表 —— 工具那边由
+     * {@code max-tool-result-chars} 截断, 不需要分页语义.
+     */
+    public Map<String, Object> getFilteredPage(String year, String season, String status,
+                                               String tag, String sort, int page, int limit) {
+        return buildSearchResult(getFiltered(year, season, status, tag, sort), page, limit);
+    }
+
     @Cacheable(value = "tags", key = "'all'")
     public List<Map<String, Object>> getAllTags() {
         // 新表有数据 → 走快速JOIN

@@ -150,14 +150,43 @@ public class BangumiController {
         return ApiResponse.success(animeService.getFilterMeta());
     }
 
+    /**
+     * 按年份 / 季度 / 状态 / 标签筛选, 分页返回.
+     *
+     * <p>返回结构从「一个裸数组」改成了 {@code {list, total, page}} —— 与
+     * {@code /api/bangumi/search} 完全一致, 前端 Search.vue 读的就是这个形状
+     * (批次 6 的筛选页分页会直接复用它). 改之前这里一次返回全部匹配行,
+     * 无参数时即整张表.
+     *
+     * <p>page / limit 的注解与 search 那边同一套: 少了类级 {@code @Validated}
+     * 它们会被静默忽略(见类注释), 越界的 page 则是 (page-1)*limit 溢出/负起点
+     * 那条老路. 下界用 @Min 封, service 里再夹一道, 两层都留着.
+     */
+    @SuppressWarnings("unchecked")
     @GetMapping("/filter")
-    public ApiResponse<List<AnimeDTO>> getFiltered(
+    public ApiResponse<Map<String, Object>> getFiltered(
             @RequestParam(required = false) String year,
             @RequestParam(required = false) String season,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String tag,
-            @RequestParam(defaultValue = "rank") String sort) {
-        return ApiResponse.success(
-                animeMapper.toListItems(animeService.getFiltered(year, season, status, tag, sort)));
+            @RequestParam(defaultValue = "rank") String sort,
+            @RequestParam(defaultValue = "1")
+            @Min(value = 1, message = "页码从 1 开始") Integer page,
+            @RequestParam(defaultValue = "20")
+            @Min(value = 1, message = "每页条数不能小于 1")
+            @Max(value = 50, message = "每页条数不能超过 50") Integer limit) {
+
+        Map<String, Object> result =
+                animeService.getFilteredPage(year, season, status, tag, sort, page, limit);
+        List<Anime> list = (List<Anime>) result.get("list");
+        int total = ((Number) result.getOrDefault("total", 0)).intValue();
+
+        Map<String, Object> body = Map.of(
+                "list", animeMapper.toListItems(list),
+                "total", total,
+                // 报告 service 夹过之后的页码: 越界请求拿到的是第 1 页,
+                // 这里如实回一页, 而不是把请求里那个越界值原样回显
+                "page", result.get("page"));
+        return ApiResponse.success(body);
     }
 }

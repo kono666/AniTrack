@@ -155,4 +155,61 @@ class ClientErrorIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.list").isEmpty());
     }
+
+    // ── 筛选接口的分页 ──────────────────────────────────────────
+    //
+    // 这一组同时钉两件事: 参数校验真的挂上了(少一个类级注解就静默失效),
+    // 以及返回结构确实是 {list,total,page} 而不是改之前那个裸数组 ——
+    // 后者没有测试盯着的话, 下次谁"顺手"改回去也没人会知道.
+
+    @Test
+    @DisplayName("筛选接口返回 {list,total,page} 而不是裸数组")
+    void filterReturnsThePagedShape() throws Exception {
+        mockMvc.perform(get("/api/bangumi/filter"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").isMap())
+                .andExpect(jsonPath("$.data.list").isArray())
+                .andExpect(jsonPath("$.data.total").isNumber())
+                .andExpect(jsonPath("$.data.page").value(1));
+    }
+
+    @Test
+    @DisplayName("筛选接口不传 limit 时用默认上限, 不会把整张表一次倒出来")
+    void filterAppliesADefaultLimit() throws Exception {
+        // 库可能是空的(这个测试库每次新建), 所以断言的是"不超过默认值"而不是条数
+        mockMvc.perform(get("/api/bangumi/filter").param("limit", "50"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.list.length()").value(
+                        org.hamcrest.Matchers.lessThanOrEqualTo(50)));
+    }
+
+    @Test
+    @DisplayName("筛选接口 page=0 -> 400（与搜索接口同一条规则，改动前这里没有校验）")
+    void filterRejectsZeroPage() throws Exception {
+        mockMvc.perform(get("/api/bangumi/filter").param("page", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("页码从 1 开始"));
+    }
+
+    @Test
+    @DisplayName("筛选接口 limit 越界 -> 400")
+    void filterRejectsOutOfRangeLimit() throws Exception {
+        mockMvc.perform(get("/api/bangumi/filter").param("limit", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("每页条数不能小于 1"));
+
+        mockMvc.perform(get("/api/bangumi/filter").param("limit", "51"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("每页条数不能超过 50"));
+    }
+
+    @Test
+    @DisplayName("筛选接口翻过尾页 -> 200 + 空列表, 不是 500")
+    void filterBeyondLastPageIsEmpty() throws Exception {
+        mockMvc.perform(get("/api/bangumi/filter").param("page", "9999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.list").isEmpty());
+    }
 }
