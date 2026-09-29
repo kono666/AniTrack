@@ -14,7 +14,7 @@
     "@fontsource/geist-sans": "^5.2.5",
     "@phosphor-icons/vue": "^2.2.1",
     "axios": "^1.6.2",
-    "pinia": "^2.1.7",
+    "pinia": "^4.0.3",
     "vue": "^3.3.13",
     "vue-router": "^4.2.5"
   },
