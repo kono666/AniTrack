@@ -70,7 +70,7 @@ jobs:
       # 测试挂了的时候, 光看控制台那几行不够 —— 完整报告留下来
       - name: 存测试报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: surefire-reports
           path: anime-tracker/backend/target/surefire-reports/
@@ -108,7 +108,7 @@ jobs:
         run: npm run build
 
       - name: 存构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: anime-tracker/frontend/dist/
