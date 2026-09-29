@@ -11,8 +11,11 @@ import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.AnimeTagRepository;
 import com.animetracker.repository.EpisodeRepository;
 import com.animetracker.repository.TagRepository;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.PageRequest;
@@ -20,8 +23,15 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.Year;
+import java.time.YearMonth;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import com.animetracker.util.AnimeAliases;
 import com.animetracker.util.AnimeFields;
 import com.animetracker.util.SearchPatterns;
@@ -45,6 +55,24 @@ public class AnimeService {
      * 加上与筛选页一致的分页(见批次 6), 而不是把这里的数字调大.
      */
     public static final int BY_TAG_LIMIT = 50;
+
+    /**
+     * Agent 工具 {@code filter_anime} 一次最多返回多少条.
+     *
+     * <p>与 {@link #BY_TAG_LIMIT} 同一个口径(50), 理由也一样: 一个工具调用换回多少行
+     * 该有个上界. 而它此前**没有**上界 —— 工具描述对外给的是"按条件筛选", 模型拿到的
+     * 是全部匹配行; 无参数调用时那就是整张表.
+     *
+     * <p><b>这是一处行为变化, 要说准.</b> 匹配数超过 50 时, 模型现在拿到的是所选排序下
+     * 的前 50 条, 而不是全部; 而 {@code count} 仍然是**真实匹配总数**(语义与改动前一致,
+     * 因为改动前 {@code count = list.size()} 恰好就是全集大小). 所以要判断"是不是还有
+     * 更多", 看 {@code count > list.size()} 即可 —— 这一点必须写进工具描述, 否则模型
+     * 会像当年 {@code by-tag} 那样, 以为拿到的是全集.
+     *
+     * <p>封顶省掉的是哪一步: 结果最终会被 {@code max-tool-result-chars} 截断, 但那个
+     * 截断发生在**全部行都读进来并映射完之后** —— 省不了读库与映射. 封顶省的是这一步.
+     */
+    public static final int FILTER_TOOL_LIMIT = 50;
 
     /**
      * 播出日倒序, 缺日期的排最后 —— <b>只在一条回退路径上还在用</b>.
@@ -78,6 +106,51 @@ public class AnimeService {
     private final BangumiApiClient bangumiApiClient;
     private final BangumiApiProperties props;
     private final RankingProperties rankingProperties;
+    private final CacheManager cacheManager;
+
+    /**
+     * 最近更新的后台回源线程.
+     *
+     * <p>与 {@code CachePreloader} 同一个理由: 不复用 {@code ForkJoinPool.commonPool}.
+     * 这里要连着发四次请求、每次之间睡 500ms(对 Bangumi 的礼貌限速), 而 sleep 中的任务
+     * 照样占着一个 worker —— 放在 commonPool 上会把别处的并行流排在后面. 单线程, 而且
+     * 池里只有它一个用户.
+     *
+     * <p>线程设成 daemon: 回源是"有更好、没有也能照常服务"的事, 不该拖住 JVM 退出.
+     */
+    private final ExecutorService latestRefreshExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "latest-refresh");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** 同一时刻只允许一次回源在跑. 否则缓存一过期, 并发的请求会各排一次队 */
+    private final AtomicBoolean latestRefreshInFlight = new AtomicBoolean();
+
+    /**
+     * 上次**发起**回源的时刻(毫秒), 用来做冷却.
+     *
+     * <p>没有它会有两条自激回路: ①对端不通时, 每个请求都会再排一次 —— 比改动前更吵,
+     * 因为改动前那个(失败的)结果会被 {@code @Cacheable} 缓存住, 后续请求直接命中,
+     * 根本不会再试; ②回源成功但拿到的新行仍然"旧", 于是清缓存 → 下次未命中 → 又判定
+     * 要回源. 冷却把这两条都剪断.
+     */
+    private final AtomicLong latestRefreshStartedAt = new AtomicLong();
+
+    /** 两次回源之间至少隔这么久 */
+    private static final long LATEST_REFRESH_COOLDOWN_MS = Duration.ofMinutes(10).toMillis();
+
+    /**
+     * 回源拿到新行之后要清掉的缓存.
+     *
+     * <p>为什么必须清: 不清的话, 这次请求缓存住的那份旧数据要等 TTL 到点才换掉, 于是
+     * "后台补到的新番"最长一小时后才出现在首页 —— 那就把改动前"用户至少能看见新数据"
+     * 这个性质弄丢了(改动前是阻塞 2 秒换一次新鲜, 现在是立刻返回但要看缓存脸色).
+     *
+     * <p>为什么不含 {@code calendar}: 它整份来自 Bangumi 的每日放送接口, 与本地
+     * {@code anime} 表里多了几行没有关系.
+     */
+    private static final List<String> LATEST_REFRESH_EVICTS = List.of("ranking", "latest", "tags");
 
     public AnimeService(AnimeRepository animeRepository,
                         EpisodeRepository episodeRepository,
@@ -85,7 +158,8 @@ public class AnimeService {
                         AnimeTagRepository animeTagRepository,
                         BangumiApiClient bangumiApiClient,
                         BangumiApiProperties props,
-                        RankingProperties rankingProperties) {
+                        RankingProperties rankingProperties,
+                        CacheManager cacheManager) {
         this.animeRepository = animeRepository;
         this.episodeRepository = episodeRepository;
         this.tagRepository = tagRepository;
@@ -93,6 +167,14 @@ public class AnimeService {
         this.bangumiApiClient = bangumiApiClient;
         this.props = props;
         this.rankingProperties = rankingProperties;
+        this.cacheManager = cacheManager;
+    }
+
+    @PreDestroy
+    void shutdownLatestRefreshExecutor() {
+        // 用 shutdownNow 而不是 shutdown: 这个任务大多数时间在 sleep, 优雅关闭等于
+        // 什么都不做. 中断掉它, sleep 会立刻抛出, 任务在几毫秒内结束.
+        latestRefreshExecutor.shutdownNow();
     }
 
     /** {@code sort=date} 的口径标记. 与 Agent 工具 {@code filter_anime} 对外给的枚举值是同一批字符串 */
@@ -295,6 +377,20 @@ public class AnimeService {
      * <p>序与 {@code sort=date} 的筛选、按标签浏览共用同一套 SQL 口径
      * (见 {@code AnimeQueries.ORDER_DATE_DESC_NULL_LAST}) —— 改动前这三处各自
      * 写了一份排序, 靠注释互相提醒"要和另一处保持一致". 保持一致的正确做法是只有一份.
+     *
+     * <p><b>回源为什么挪到了后台.</b> 这里原来在请求线程上直接发四次请求、每次之间
+     * {@code Thread.sleep(500)} —— 数据陈旧时一个用户的"看一眼首页"要被阻塞两秒以上,
+     * 而那两秒里它什么都没等到(它要的那一页数据其实手上就有). 现在立刻用手上这批作答,
+     * 回源交给 {@link #latestRefreshExecutor}, 拿到新行之后清掉榜单类缓存
+     * (见 {@link #LATEST_REFRESH_EVICTS}), 于是<b>下一个</b>请求就能看到新数据.
+     *
+     * <p>代价说清楚: 触发回源的那一次请求, 看到的仍然是旧数据(改动前它看到的是新鲜的,
+     * 代价是等两秒). 这是一次明确的取舍 —— 首页不再有"点一下卡两秒"的尖峰, 代价是
+     * 新数据晚一个请求出现.
+     *
+     * <p>另外两点: 回源期间不会再排队(见 {@link #latestRefreshInFlight}), 两次回源之间
+     * 有冷却(见 {@link #latestRefreshStartedAt}); 两者都不是"优化", 是让异步化不引入
+     * 新问题的必要条件 —— 理由各自写在字段上.
      */
     @Cacheable(value = "latest", key = "#limit")
     public List<Anime> getLatest(int limit) {
@@ -302,38 +398,106 @@ public class AnimeService {
             return Collections.emptyList();
         }
         List<Anime> local = animeRepository.findLatest(PageRequest.of(0, limit));
-        // 检查最新一条是否在3个月内, 超过则从API补充
-        boolean needRefresh = local.isEmpty();
-        if (!needRefresh && local.get(0).getDate() != null) {
-            try {
-                String topDate = local.get(0).getDate();
-                if (topDate.length() >= 7) {
-                    java.time.YearMonth topYm = java.time.YearMonth.parse(topDate.substring(0, 7));
-                    needRefresh = topYm.isBefore(java.time.YearMonth.now().minusMonths(3));
-                }
-            } catch (Exception e) { needRefresh = animeRepository.count() < limit; }
-        }
-
-        if (needRefresh) {
-            try {
-                int year = java.time.Year.now().getValue();
-                for (String kw : new String[]{String.valueOf(year), String.valueOf(year - 1), "新番", "剧场版"}) {
-                    SearchResponse resp = bangumiApiClient.searchSubjects(kw, 1, 20);
-                    if (resp != null && resp.getData() != null) {
-                        cacheAll(resp.getData());
-                    }
-                    Thread.sleep(500);
-                }
-                local = animeRepository.findLatest(PageRequest.of(0, limit));
-                log.info("最新: API补充后共 {} 条", animeRepository.count());
-            } catch (Exception e) {
-                log.warn("最新API补充失败: {}", e.getMessage());
-            }
+        if (needsRefresh(local, limit)) {
+            scheduleLatestRefresh();
         }
         return local;
     }
 
-    /** 每日放送：缓存2小时 (番剧排期不会频繁变动) */
+    /**
+     * 手上这批"最近更新"是不是旧到需要回源.
+     *
+     * <p>三条判据原样搬自改动前(判据本身不是这一遍要动的东西). 其中"第一行没有日期
+     * 就不回源"这条<b>看着可疑</b> —— 按 {@code ORDER_DATE_DESC_NULL_LAST}, 第一行没有
+     * 日期意味着整个库都没有日期, 而那种库确实该回源, 现在却永远不会. 没有顺手改,
+     * 是因为它改的是"什么时候联网", 与"回源在哪个线程上"是两件事, 混在一起出问题就
+     * 分不清是谁的. 记在这里.
+     */
+    private boolean needsRefresh(List<Anime> local, int limit) {
+        if (local.isEmpty()) {
+            return true;
+        }
+        String topDate = local.get(0).getDate();
+        if (topDate == null || topDate.length() < 7) {
+            return false;
+        }
+        try {
+            YearMonth topYm = YearMonth.parse(topDate.substring(0, 7));
+            return topYm.isBefore(YearMonth.now().minusMonths(3));
+        } catch (Exception e) {
+            // 日期格式不认识(理论上不该有): 退回按库存量判断
+            return animeRepository.count() < limit;
+        }
+    }
+
+    /**
+     * 排一次后台回源. 冷却期内、或已经有一次在跑时, 直接返回.
+     *
+     * <p>顺序是"先看冷却, 再抢 {@code inFlight}"而不是反过来: 两个检查都不改状态时
+     * 谁先谁后无所谓, 但冷却那一支是更常见的路径(缓存 TTL 到期后的一串请求都走它),
+     * 让它先返回可以少一次 CAS.
+     */
+    private void scheduleLatestRefresh() {
+        long now = System.currentTimeMillis();
+        if (now - latestRefreshStartedAt.get() < LATEST_REFRESH_COOLDOWN_MS) {
+            return;
+        }
+        if (!latestRefreshInFlight.compareAndSet(false, true)) {
+            return;
+        }
+        latestRefreshStartedAt.set(now);
+        latestRefreshExecutor.execute(this::refreshLatestFromApi);
+    }
+
+    /**
+     * 在 {@code latest-refresh} 线程上跑: 四个关键词各拉一页, 每次之间睡 500ms.
+     *
+     * <p>那 500ms 是对 Bangumi 的礼貌限速, <b>不是可以省的开销</b> —— 挪到后台省掉的是
+     * "让用户等", 不是"少睡一会儿".
+     *
+     * <p>缓存的清空放在最后, 而不是刚发完第一个请求就清: 清早了会把"当前这次请求即将
+     * 写进缓存的那份结果"一起清掉, 于是它写进去、我们清掉、下次请求又写一份同样的旧
+     * 数据 —— 白清. 而这一整段至少要跑两秒(四次 sleep), 当前请求早就返回并写完缓存了.
+     */
+    private void refreshLatestFromApi() {
+        try {
+            int year = Year.now().getValue();
+            for (String kw : new String[]{String.valueOf(year), String.valueOf(year - 1), "新番", "剧场版"}) {
+                SearchResponse resp = bangumiApiClient.searchSubjects(kw, 1, 20);
+                if (resp != null && resp.getData() != null) {
+                    cacheAll(resp.getData());
+                }
+                Thread.sleep(500);
+            }
+            for (String name : LATEST_REFRESH_EVICTS) {
+                // 不判空: 名单在 CacheConfig 里是写死的, 对不上时 getCache 返回 null,
+                // 就该在这里炸出来. 悄悄跳过等于把"缓存没清"变成一件没有症状的事.
+                Cache cache = cacheManager.getCache(name);
+                if (cache == null) {
+                    throw new IllegalStateException("缓存 " + name + " 不在 CacheConfig 的名单里");
+                }
+                cache.clear();
+            }
+            log.info("最新: 后台补充完成, 现在共 {} 条", animeRepository.count());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("最新后台补充失败: {}", e.getMessage());
+        } finally {
+            latestRefreshInFlight.set(false);
+        }
+    }
+
+    /**
+     * 每日放送.
+     *
+     * <p>这里原本写着"缓存2小时 (番剧排期不会频繁变动)", 而那是**假话**: 当时项目里
+     * 没有任何 {@code CacheManager} bean, 走的是 Spring Boot 默认的
+     * {@code ConcurrentMapCacheManager} —— 无界、永不失效, 只靠两处
+     * {@code allEntries=true} 清空. 接上 Caffeine 之后这句话才成立, 而 2 小时这个数字
+     * 现在归 {@code anitrack.cache.calendar.ttl} 管(见 config/CacheProperties),
+     * 不写在注释里 —— 写在注释里的数字会与配置漂移.
+     */
     @Cacheable(value = "calendar", key = "'today'")
     public List<CalendarDay> getCalendar() {
         List<CalendarDay> days = bangumiApiClient.getCalendar();
@@ -434,15 +598,16 @@ public class AnimeService {
     }
 
     /**
-     * 筛选的**完整**结果(**不截断**), 给"拿到之后还要自己再走一遍"的调用方.
+     * 筛选的**完整**结果(**不截断**).
      *
-     * <p>调用方是 Agent 工具 {@code filter_anime} 与测试. 它与改动前的区别是:
-     * 筛选条件与排序都已经下推到 SQL, 于是读进来的只剩**真正匹配**的行 ——
-     * 改前无参数时是整张表先进内存再在这里 filter. 但匹配数本身仍没有上界,
-     * 无参数调用还是会把整个匹配集合装进内存; 需要上界的调用方走
-     * {@link #getFilteredPage}.
+     * <p><b>它不在任何请求路径上了.</b> 唯一的对外调用方曾经是 Agent 工具
+     * {@code filter_anime}, 而那个工具现在走 {@link #getFilteredPage} 并封顶
+     * {@link #FILTER_TOOL_LIMIT} 条 —— 因为"匹配多少就返回多少"意味着无参数调用会把
+     * 整个匹配集合装进内存再交给模型. 现在只剩 {@code AnimeFilterIntegrationTest}
+     * 用它, 而那条用例的理由是具体的: {@code sortsByRankWithUnrankedLast} 要验的是
+     * "没名次的那条排最后<b>并且看得见</b>", 一截断它就落在截断线之外, 恰恰验不到.
      *
-     * <p>它就是"不要分页、要全部"那一档, 不是另一套筛选实现: 两者的查询是同一条
+     * <p>它与 {@link #getFilteredPage} 不是两套筛选实现: 查询是同一条
      * (见 {@link #fetchFiltered}), 差别只在传下去的 {@code Pageable} 是
      * {@code unpaged()} 还是一页.
      */

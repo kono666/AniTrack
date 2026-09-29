@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.data.domain.Pageable;
 
 import java.util.ArrayList;
@@ -70,7 +71,8 @@ class AnimeRankingWiringTest {
                 mock(AnimeTagRepository.class),
                 bangumiApiClient,
                 mock(BangumiApiProperties.class),
-                ranking);
+                ranking,
+                new ConcurrentMapCacheManager());
     }
 
     private static List<Anime> fiveRows() {

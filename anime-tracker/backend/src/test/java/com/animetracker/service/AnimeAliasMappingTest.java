@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 
 import java.util.List;
 import java.util.Optional;
@@ -53,7 +54,8 @@ class AnimeAliasMappingTest {
                 mock(AnimeTagRepository.class),
                 mock(BangumiApiClient.class),
                 mock(BangumiApiProperties.class),
-                new RankingProperties());
+                new RankingProperties(),
+                new ConcurrentMapCacheManager());
 
         when(animeRepository.save(any(Anime.class))).thenAnswer(inv -> {
             saved = inv.getArgument(0);

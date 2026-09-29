@@ -368,10 +368,10 @@ bangumi:
   api:
     base-url: https://api.bgm.tv
     user-agent: AniTrack/1.0 (https://github.com/anitrack)
-    subject-cache-hours: 24
-    episode-cache-hours: 24
-    search-cache-hours: 1
-    calendar-cache-hours: 1
+    # 这里原有 subject/episode/search/calendar 四个 *-cache-hours, 已经删掉:
+    # 它们被绑进 BangumiApiProperties 却从没有任何一处读(四个 getter 零调用),
+    # 而 getCalendar 上那句"缓存2小时"也从来没实现过 —— 是一段看起来在生效的死配置.
+    # 缓存存活时间现在统一归 anitrack.cache(见下面那段), 理由写在 CacheProperties 里.
 
 # ============================================================
 # 全量回填 (一次性把 Bangumi 的全部动画条目拉进本地库)
@@ -403,6 +403,27 @@ anitrack:
   ranking:
     prior-votes: ${RANKING_PRIOR_VOTES:200}
     prior-score: ${RANKING_PRIOR_SCORE:7.0}
+
+  # 四个缓存的存活时间与容量上限 (实现是 Caffeine, 见 config/CacheConfig).
+  # 取值理由写在 config/CacheProperties 的类注释里 —— 每一档都是产品口味, 所以可配.
+  #
+  #   ttl           写入后多久失效. 支持 30s / 10m / 6h / 1d 这种写法.
+  #   maximum-size  最多留多少个键, 是"键写错时最多占多少内存"的上界.
+  #
+  # 这两个字段在 Spec 里都有默认值, 所以下面只写其中一个也成立.
+  cache:
+    ranking:
+      ttl: 6h
+      maximum-size: 200
+    latest:
+      ttl: 1h
+      maximum-size: 200
+    tags:
+      ttl: 24h
+      maximum-size: 50
+    calendar:
+      ttl: 2h
+      maximum-size: 50
 
 # ============================================================
 # 大模型接入 (AI 助手)

@@ -10,6 +10,7 @@ import com.animetracker.repository.TagRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.data.domain.Pageable;
 
 import java.util.List;
@@ -60,7 +61,8 @@ class AnimeServicePagingTest {
                 mock(AnimeTagRepository.class),
                 mock(BangumiApiClient.class),
                 mock(BangumiApiProperties.class),
-                new RankingProperties());
+                new RankingProperties(),
+                new ConcurrentMapCacheManager());
 
         stubBrowse(fiveAnime());
     }

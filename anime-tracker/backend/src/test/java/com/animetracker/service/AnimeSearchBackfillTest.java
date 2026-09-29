@@ -15,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -72,7 +73,8 @@ class AnimeSearchBackfillTest {
                 mock(AnimeTagRepository.class),
                 bangumiApiClient,
                 mock(BangumiApiProperties.class),
-                new RankingProperties());
+                new RankingProperties(),
+                new ConcurrentMapCacheManager());
 
         when(animeRepository.save(any(Anime.class))).thenAnswer(inv -> {
             Anime a = inv.getArgument(0);

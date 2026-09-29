@@ -162,7 +162,12 @@ public class AnimeTools implements ToolProvider {
         return ToolDefinition.builder()
                 .name("filter_anime")
                 .description("按年份、季度、状态、标签多维筛选番剧。"
-                        + "用户提出组合条件时用它，例如「2024年的完结番」「去年的悬疑番」。")
+                        + "用户提出组合条件时用它，例如「2024年的完结番」「去年的悬疑番」。"
+                        // 上限必须写给模型看. 不写的话它会以为 list 就是全集 ——
+                        // 那正是 by-tag 当年踩过的坑(契约看着没变, 调用方却按全集理解).
+                        + "一次最多返回 " + AnimeService.FILTER_TOOL_LIMIT + " 条；"
+                        + "count 是符合条件的总数，count 大于实际返回的条数时说明还有更多，"
+                        + "可以再加筛选条件(年份/季度/状态/标签)缩小范围。")
                 .access(Access.PUBLIC)
                 .stringParam("year", "年份，例如 2024。不限定则不传", false)
                 .stringParam("season", "季度，格式为 yyyy-MM，例如 2024-10。不限定则不传", false)
@@ -176,10 +181,17 @@ public class AnimeTools implements ToolProvider {
                     String tag = blankToNull(call.str("tag", null));
                     String sort = call.str("sort", "rating");
 
-                    List<Anime> list = animeService.getFiltered(year, season, status, tag, sort);
+                    // 走分页版并封顶, 理由是省掉"读进来再丢掉"那一步
+                    // (见 AnimeService.FILTER_TOOL_LIMIT). 注意 count 在这里是
+                    // **真实匹配总数**, 与上面 get_by_tag 那个 count(本次返回的条数)
+                    // 不是一个意思 —— 这里要能回答"是不是还有更多", 那边只需要回答
+                    // "给了你几条".
+                    Map<String, Object> page = animeService.getFilteredPage(
+                            year, season, status, tag, sort, 1, AnimeService.FILTER_TOOL_LIMIT);
                     Map<String, Object> out = new LinkedHashMap<>();
-                    out.put("count", list.size());
-                    out.put("list", ToolViews.animeBriefList(list));
+                    out.put("count", page.get("total"));
+                    out.put("list", ToolViews.animeBriefList(
+                            ToolViews.extractAnimeList(page.get("list"))));
                     return out;
                 })
                 .build();

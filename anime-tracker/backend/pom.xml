@@ -88,6 +88,14 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-cache</artifactId>
         </dependency>
+        <!-- 缓存实现. 不加这一份的话 Boot 退回 ConcurrentMapCacheManager: 无界、
+             永不失效, 只靠 @CacheEvict(allEntries=true) 清空 —— 而 ranking 的键是
+             'rank_' + #limit, 每个不同的 limit 各占一个永不释放的条目.
+             版本由 spring-boot-starter-parent 管(3.5.16 -> caffeine 3.2.4), 不写死. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
         <!-- DevTools: 热重载 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
