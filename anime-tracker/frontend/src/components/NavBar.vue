@@ -3,7 +3,7 @@
     <!-- Left: Brand -->
     <router-link to="/" class="navbar-brand" @click="closeMenu">
       <span class="brand-icon">🎬</span>
-      <span class="brand-text">momo</span>
+      <span class="brand-text">AniTrack</span>
     </router-link>
 
     <!-- Center: Search -->

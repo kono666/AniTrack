@@ -1,7 +1,7 @@
 <template>
   <div class="auth-page">
     <div class="auth-card">
-      <h2>✨ 注册 momo</h2>
+      <h2>✨ 注册 AniTrack</h2>
       <form class="auth-form" @submit.prevent="handleRegister">
         <!-- new-password 而不是 password: 这是**新建**密码的场合, 说成
              password 会让浏览器把已存的旧密码填进注册表单 -->
