@@ -113,7 +113,9 @@
   --radius-lg: 16px;
   --shadow: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.2);
   --shadow-lg: 0 10px 40px rgba(0,0,0,.5);
-  --shadow-card: 0 0 0 1px var(--card-border), 0 2px 8px rgba(0,0,0,.3);
+  /* 这里原本还有个 --shadow-card, 值是 `0 0 0 1px var(--card-border), …` ——
+     它给卡片装了一圈"假边框", 而卡片自己又写着 `border: 1.5px solid transparent`。
+     两个值各说各话。现在卡片用的是真边框, 这圈环没有意义了, 删掉。 */
 
   /* ── Nav ── */
   --navbar-bg: rgba(13,12,11,.85);
@@ -169,11 +171,15 @@
   --hero-badge-fg: #f5e7e6;
   --cover-scrim: rgba(0,0,0,.78);
   --cover-fg: #faf1f0;
+  --cover-fg-dim: rgba(250,241,240,.68);  /* 压在图上的次要文字(年份/集数) */
   --cover-ink: #141212;              /* 压在 --cover-fg 上的深字 */
   --cover-star: #ebbf59;
-  --cover-tag-tv: rgba(18,15,15,.78);
-  --cover-tag-movie: rgba(18,15,15,.78);
-  --cover-tag-other: rgba(18,15,15,.78);
+  /* 类型角标的底与描边. 改前是 --cover-tag-tv/movie/other 三个 token **同值**,
+     类型区分实际上没做 —— 那张卡片上留了一句"角标之间的进一步区分交给卡片改版
+     那一步"。现在区分靠"填充 / 描边 / 无框"而不是色相: 彩色是这个方案里专门留给
+     金银铜榜位的, 而三个彩色药丸并排出现, 抢的是封面自己的戏。 */
+  --cover-tag-bg: rgba(18,15,15,.78);
+  --cover-tag-line: rgba(250,241,240,.45);
 }
 
 /* ── Light Mode Override ──
@@ -218,7 +224,6 @@ body.light {
 
   --shadow: 0 1px 3px rgba(0,0,0,.08);
   --shadow-lg: 0 10px 40px rgba(0,0,0,.1);
-  --shadow-card: 0 0 0 1px var(--card-border), 0 2px 8px rgba(0,0,0,.06);
   --navbar-bg: rgba(252,241,240,.85);
 
   --tag-bg: rgba(0,0,0,.05);

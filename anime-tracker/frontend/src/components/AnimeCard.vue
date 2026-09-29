@@ -28,7 +28,8 @@
         @error="onImgError"
       />
 
-      <!-- Type badge (top-left) -->
+      <!-- Type badge (top-left). 三种类型的区别见样式里 .type-* 那段注释 ——
+           靠填充/描边/无框, 不靠颜色 -->
       <div v-if="typeLabel" class="card-type-badge" :class="typeClass">{{ typeLabel }}</div>
 
       <!-- Rating badge (top-right) -->
@@ -54,7 +55,12 @@
         <span v-if="episodeCount" class="meta-dot">·</span>
         <span v-if="episodeCount" class="meta-eps">{{ episodeCount }}集</span>
         <span v-if="hasScore" class="meta-dot">·</span>
-        <span v-if="hasScore" class="meta-score">⭐{{ scoreDisplay }}</span>
+        <!-- 改前这里是文本拼接的 "⭐9.1" —— emoji 的字形跟着系统字体走, 同一个站
+             在 Windows 和 macOS 上是两个星星, 大小和基线还对不齐。换成已经在用的
+             PhStar, 和右上角评分角标里那颗是同一个图标。 -->
+        <span v-if="hasScore" class="meta-score">
+          <PhStar :size="11" weight="fill" />{{ scoreDisplay }}
+        </span>
       </div>
     </div>
   </div>
@@ -114,20 +120,26 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
 </script>
 
 <style scoped>
+/* 描边语言: 静置时是一道**真的**细线。改前写的是 `1.5px solid transparent` ——
+   也就是卡片其实没有边框, 那圈线是 --shadow-card 里的 `0 0 0 1px` 装的。
+   两个值各说各话, 改一个另一个不会跟着动; 现在边框就是边框。 */
 .anime-card {
   background: var(--card);
   border-radius: var(--radius);
   overflow: hidden;
   cursor: pointer;
-  transition: transform .3s cubic-bezier(.4,0,.2,1), box-shadow .3s cubic-bezier(.4,0,.2,1), border-color .3s;
-  box-shadow: var(--shadow-card);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--shadow);
   position: relative;
-  border: 1.5px solid transparent;
+  transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
 }
+/* 悬停位移从 -6px 收到 -3px, 图从 scale(1.08) 收到 1.04。
+   一整屏卡片同时弹 6px 已经不是"反馈"而是"抖动"了; 编辑感要的是克制。
+   缓动也从三处各写各的 cubic-bezier 收成 --transition 一个。 */
 .anime-card:hover {
-  transform: translateY(-6px);
-  box-shadow: 0 16px 48px rgba(0,0,0,.5), 0 0 0 1px var(--primary-line);
+  transform: translateY(-3px);
   border-color: var(--primary-line);
+  box-shadow: var(--shadow-lg);
 }
 
 /* Image */
@@ -137,14 +149,20 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   aspect-ratio: 3/4;
   overflow: hidden;
   background: var(--bg-secondary);
+  /* 卡片自己的签名: 封面右下角切一刀。
+     为什么用 clip-path 而不是拿一个三角色块盖上去: 盖上去的那个必须知道底下垫的
+     是什么颜色, 一旦这张图是透明的就穿帮; 而切角露出来的是卡片自己的 --card 底色,
+     和下方正文连成一片, 不管图什么样都成立。
+     两个角标一个在左上、一个在右上, 右下是唯一空着的一角。 */
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%);
 }
 .anime-card-img {
   width: 100%; height: 100%; object-fit: cover;
-  transition: transform .6s cubic-bezier(.25,.46,.45,.94), opacity .4s;
+  transition: transform .6s var(--ease), opacity var(--transition);
   opacity: 0;
 }
 .anime-card-img.loaded { opacity: 1; }
-.anime-card:hover .anime-card-img.loaded { transform: scale(1.08); }
+.anime-card:hover .anime-card-img.loaded { transform: scale(1.04); }
 
 /* Placeholder */
 .card-placeholder {
@@ -161,20 +179,25 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   100% { background-position: -200% 0; }
 }
 
-/* Type badge (top-left) */
+/* Type badge (top-left).
+   角标压在封面图上, 所以这几个色**不随主题变**(见 tokens.css 的 cover 组):
+   底下的图不认主题, 换一套更亮的底色只会让白字糊掉。 */
 .card-type-badge {
   position: absolute; top: 8px; left: 8px; z-index: 3;
   font-size: 10px; font-weight: 800; letter-spacing: .5px;
   padding: 3px 8px; border-radius: 4px;
-  color: var(--cover-fg); backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
-/* 类型标签压在封面图上, 所以这三个**不随主题变**(见 tokens.css 的注释):
-   底下的图不认主题, 换一套更亮的底色只会让白字糊掉。
-   三个 token 现在同值(一块黑纱), 类型由文字本身区分 —— 蓝/粉/紫三个彩色药丸
-   并排出现时, 抢的是封面自己的戏。角标之间的进一步区分交给卡片改版那一步 */
-.type-tv { background: var(--cover-tag-tv); }
-.type-movie { background: var(--cover-tag-movie); }
-.type-other { background: var(--cover-tag-other); }
+/* 三种类型靠"填充 / 描边 / 无框"区分, 不靠色相 ——
+   彩色在这套方案里是专门留给金银铜榜位的, 而蓝粉紫三个药丸并排出现时,
+   抢的是封面自己的戏。填充 vs 描边这套用法, 和 c68 给选中态定的是同一套语言。
+   TV 是绝大多数, 给它最安静的一档; 剧场版少见, 值得一个实心块。 */
+.type-tv {
+  background: var(--cover-tag-bg); color: var(--cover-fg);
+  border: 1px solid var(--cover-tag-line);
+}
+.type-movie { background: var(--cover-fg); color: var(--cover-ink); }
+.type-other { background: var(--cover-tag-bg); color: var(--cover-fg); }
 
 /* Rating badge (top-right) */
 .card-rating-badge {
@@ -198,7 +221,7 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
 }
 .anime-card:hover .card-overlay { opacity: 1; }
 .card-overlay-info { display: flex; gap: 10px; margin-bottom: 6px; }
-.overlay-year, .overlay-eps { font-size: 11px; color: rgba(255,255,255,.6); }
+.overlay-year, .overlay-eps { font-size: 11px; color: var(--cover-fg-dim); }
 .overlay-action {
   font-size: 12px; color: var(--cover-fg); font-weight: 700;
   opacity: 0; transform: translateY(8px);
@@ -226,7 +249,7 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   margin-top: 6px; display: flex; align-items: center; gap: 3px;
 }
 .meta-dot { color: var(--text-muted); margin: 0 2px; }
-.meta-score { color: var(--star); font-weight: 700; }
+.meta-score { color: var(--star); font-weight: 700; display: inline-flex; align-items: center; gap: 3px; }
 
 /* 窄屏收一点内边距和字号.
    这两条原先写在 assets/css/anime-card.css 的媒体查询里, 但那个文件是在
