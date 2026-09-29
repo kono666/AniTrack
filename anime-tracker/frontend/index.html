@@ -4,9 +4,41 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AniTrack - 动漫追番</title>
+
+  <!-- 基本 SEO 与分享信息. 刻意**没有** og:image: 仓库里还没有一张适合当分享图的静态资源,
+       与其填一个不存在的路径 (分享出去就是裂图), 不如先不写这一条. -->
+  <meta name="description" content="动漫追番与评测平台：搜索番剧、记录追番进度、写评测，并带一个能查库的 AI 助手。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:title" content="AniTrack - 动漫追番" />
+  <meta property="og:description" content="动漫追番与评测平台：搜索番剧、记录追番进度、写评测，并带一个能查库的 AI 助手。" />
+
+  <!-- 移动端浏览器会把地址栏也染成这个颜色. 默认取深色的 --bg (#09090b, tokens.css:15);
+       浅色主题下由下面那段内联脚本换成 #fafafa (tokens.css:91). -->
+  <meta name="theme-color" content="#09090b" />
+
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
 </head>
 <body>
+  <!-- 主题必须在**首屏渲染之前**定下来, 否则会闪一下: NavBar 是挂载之后才把 light 类
+       加到 body 上的, 而 Vue 的挂载发生在首屏之后 —— 存的是浅色主题时, 用户会先看到
+       一帧深色、再跳成浅色.
+       为什么放在 <body> 的第一个子元素而不是 <head>: 这一段需要 document.body 已经存在
+       才能往上加类, 而解析到 <head> 时 body 还没被创建出来.
+       读取包在 try 里: 隐私模式或禁用存储时 localStorage 会直接抛异常,
+       不能让它阻断首屏 —— 那种情况下按默认的深色走. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('theme') === 'light') {
+          document.body.classList.add('light')
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', '#fafafa')
+        }
+      } catch (e) { /* 存储不可用: 保持默认深色 */ }
+    })()
+  </script>
+
   <div id="app"></div>
   <script type="module" src="/src/main.js"></script>
 </body>

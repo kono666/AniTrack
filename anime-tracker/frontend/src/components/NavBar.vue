@@ -108,8 +108,14 @@ function toggleMenu() { menuOpen.value = !menuOpen.value }
 function closeMenu() { menuOpen.value = false }
 
 // Theme
-const light = ref(localStorage.getItem('theme') === 'light')
-if (light.value) document.body.classList.add('light')
+// body 上的 light 类**不在这里加** —— 那是首屏之后才发生的事, 存浅色主题时会闪一下.
+// 首屏那一次由 index.html 里的内联脚本负责; 这里只读初始值, 给按钮状态用.
+// 读的时候包 try: 隐私模式/禁用存储下 localStorage 会直接抛, 不该让整个导航栏挂掉
+// (与 index.html 那段内联脚本保持一致).
+function storedTheme() {
+  try { return localStorage.getItem('theme') } catch (e) { return null }
+}
+const light = ref(storedTheme() === 'light')
 function toggleLight() {
   light.value = !light.value
   document.body.classList.toggle('light', light.value)
