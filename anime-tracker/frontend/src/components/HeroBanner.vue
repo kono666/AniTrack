@@ -60,15 +60,22 @@
       ></button>
     </div>
 
-    <!-- Arrows -->
-    <button v-if="items.length > 1" class="hero-arrow hero-arrow-left" aria-label="上一张" @click="jump(-1)">‹</button>
-    <button v-if="items.length > 1" class="hero-arrow hero-arrow-right" aria-label="下一张" @click="jump(1)">›</button>
+    <!-- Arrows. 改前里面是两个字符 ‹ ›(U+2039/203A) —— 它们是按钮里**唯一**的内容,
+         也就是"位置上只有图标", 按图标那一轮定的规矩换成矢量。
+         字符版还有个实际的麻烦: 这两个字形在各家系统字体里的大小和基线都不一样,
+         42px 的圆里靠 font-size 居中是对不准的, 只能看着差不多。 -->
+    <button v-if="items.length > 1" class="hero-arrow hero-arrow-left" aria-label="上一张" @click="jump(-1)">
+      <PhCaretLeft :size="18" weight="bold" aria-hidden="true" />
+    </button>
+    <button v-if="items.length > 1" class="hero-arrow hero-arrow-right" aria-label="下一张" @click="jump(1)">
+      <PhCaretRight :size="18" weight="bold" aria-hidden="true" />
+    </button>
   </div>
 </template>
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { PhStar } from '@phosphor-icons/vue'
+import { PhStar, PhCaretLeft, PhCaretRight } from '@phosphor-icons/vue'
 import { useRouter } from 'vue-router'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 
@@ -153,7 +160,8 @@ onUnmounted(() => {
 .hero-track {
   display: flex;
   height: 100%;
-  transition: transform .5s cubic-bezier(.4,0,.2,1);
+  /* 值没变(原来的 cubic-bezier(.4,0,.2,1) 就是 --ease), 只是不再抄一份常量 */
+  transition: transform .5s var(--ease);
 }
 .hero-slide {
   min-width: 100%;
@@ -197,19 +205,30 @@ onUnmounted(() => {
   margin-bottom: 16px;
   letter-spacing: .5px;
 }
+/* 标题换到显示体。改前是 `font-weight:900` 落在正文体(IBM Plex Sans)上 ——
+   那个字体最粗只到 700, 所以 900 是浏览器伪粗体合成出来的: 笔画被机械地加粗,
+   在小字号下几乎看不出, 在 36px 上很明显。显示体(Saira Condensed)有真 800,
+   而且窄体的轮廓正好是"编辑感"要的那种大标题(字号维持 36px 不动, 窄体本身
+   会让它显得更窄, 但那属于换字体的正常结果, 不顺手改版式)。 */
 .hero-title {
-  font-size: 36px; font-weight: 900;
+  font-family: var(--font-display);
+  font-size: 36px; font-weight: 800;
   color: var(--cover-fg); line-height: 1.2;
   margin-bottom: 4px;
   text-shadow: 0 2px 12px rgba(0,0,0,.5);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* 下面两行的字色改前是写死的 rgba(255,255,255,.45) 与 .7 —— 同一块头图上,
+   两个"压在封面上的次要文字"等于两个自己定的值。--cover-fg-dim 本来就是为这个
+   位置准备的 token(AnimeCard 的年份/集数是同一个角色), 收成它一个。
+   顺带把副标题从 .45 提到 .68 —— 45% 的白压在一张被 blur 过的深色封面上,
+   是那种"能看见但读着费劲"的对比度。 */
 .hero-subtitle {
-  font-size: 14px; color: rgba(255,255,255,.45);
+  font-size: 14px; color: var(--cover-fg-dim);
   margin-bottom: 16px;
 }
-.hero-meta { display: flex; gap: 18px; margin-bottom: 14px; font-size: 13px; color: rgba(255,255,255,.7); }
+.hero-meta { display: flex; gap: 18px; margin-bottom: 14px; font-size: 13px; color: var(--cover-fg-dim); }
 .hero-score { color: var(--cover-star); font-weight: 700; }
 .hero-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 22px; }
 .hero-tag {
@@ -254,13 +273,15 @@ onUnmounted(() => {
   position: absolute; top: 50%; transform: translateY(-50%);
   z-index: 3; width: 42px; height: 42px; border-radius: 50%;
   background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.15);
-  color: var(--cover-fg); font-size: 22px; cursor: pointer;
+  color: var(--cover-fg); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: all var(--transition);
   backdrop-filter: blur(8px);
 }
 /* 悬停用白色加亮而不是换色相 —— 箭头压在封面图上, 色相会跟底下的图打架 */
 .hero-arrow:hover { background: rgba(255,255,255,.22); border-color: rgba(255,255,255,.38); }
+/* SVG 是行内元素, 底下会留基线那道缝 —— flex 居中挡不住它, 得显式 block */
+.hero-arrow svg { display: block; }
 .hero-arrow-left { left: 16px; }
 .hero-arrow-right { right: 16px; }
 
@@ -275,7 +296,9 @@ onUnmounted(() => {
   .hero-content { gap: 24px; padding: 24px 16px; }
   .hero-title { font-size: 24px; }
   .hero-cover { width: 130px; }
-  .hero-arrow { width: 34px; height: 34px; font-size: 18px; }
+  /* 图标尺寸改由 CSS 给(原来那条 font-size 是给字符 ‹ › 用的, 对 SVG 无效) */
+  .hero-arrow { width: 34px; height: 34px; }
+  .hero-arrow svg { width: 15px; height: 15px; }
 }
 @media (max-width: 480px) {
   .hero { height: 280px; }

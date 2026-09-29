@@ -104,9 +104,11 @@ defineExpose({ show, remove })
 .toast-info { border-left: 3px solid var(--primary); }
 .toast-warning { border-left: 3px solid var(--warning); }
 
-/* Transitions */
-.toast-enter-active { transition: all .35s cubic-bezier(.4,0,.2,1); }
-.toast-leave-active { transition: all .2s ease; }
+/* Transitions.
+   进场用收尾型缓动(它从下方 16px 处升上来, 前段快、后段落定), 出场比进场快一档
+   (用户已经看完/关掉了, 不该再等) —— 和导航下拉菜单是同一套说法。 */
+.toast-enter-active { transition: all var(--dur-slow) var(--ease-out); }
+.toast-leave-active { transition: all var(--dur) var(--ease); }
 .toast-enter-from { opacity: 0; transform: translateY(16px) scale(.95); }
 .toast-leave-to { opacity: 0; transform: translateX(60px) scale(.9); }
 </style>

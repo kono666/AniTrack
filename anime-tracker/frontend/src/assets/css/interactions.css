@@ -37,3 +37,57 @@ textarea:focus-visible,
   outline-offset: 2px;
   border-radius: 4px;
 }
+
+/* ── 滚动入场 ──
+   这段 CSS 改前是用模板字符串写在 composables/useReveal.js 里的, 组件挂载时
+   document.head.appendChild 进去。搬到这里有两个原因:
+
+   1. 它原本**不在任何 layer 里**。style.css 声明的那五层, 在一条不在层里的规则
+      面前没有任何还手之力 —— 一份"入场动画"因此压过了全站所有更具体的规则。
+      具体的后果是首页分类那一屏: 卡片同时带着 data-reveal 和 :hover, 而
+      `.anime-card:hover { transform: translateY(-3px) }` 与
+      `[data-reveal].revealed { transform: translateY(0) }` 权重完全相同(0,2,0),
+      谁在源码里靠后谁赢 —— 注入的那份永远是最晚进 head 的, 所以**卡片的悬停
+      位移一直是失效的**。搬进 @layer utilities 之后它的优先级反而降了一档,
+      这正是对的: 一个元素的入场状态不该盖过它自己的悬停状态。
+   2. 注入发生在**首屏之后**: 元素先以正常状态画出来, 脚本跑起来才一起跳成
+      opacity:0 再淡入 —— 入场动画最不该有的就是开头那一帧闪现。
+
+   注意这套规则挂在 data-reveal 这个**属性**上, 而属性是指令在挂载时加的。
+   所以脚本没跑成(报错/被拦)时元素根本没有这个属性, 也就不会被藏起来 ——
+   "JS 挂了页面白屏"这条退路不靠 CSS, 靠的是它只认属性。
+   指令本身(IntersectionObserver)在 directives/reveal.js —— 它也从 composables/
+   搬了家: 一个只导出指令对象、没有响应式状态的东西不该叫 `useXxx`。 */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity var(--dur-reveal) var(--ease-out), transform var(--dur-reveal) var(--ease-out);
+}
+[data-reveal].revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── 减少动效 ──
+   系统里开了这个设置的人, 要的是"别动", 不是"动得慢一点"。三处一起处理:
+
+   * 入场动画**整体关掉** —— 连初始态一起覆盖。只关 transition 是不够的:
+     元素会先不可见, 等 observer 触发才出现, 那是一次"东西凭空冒出来",
+     比动画本身更难受。
+   * 「查看全部」那个箭头的悬停位移(section-header.css)。
+   * 轮播的手动滑动在 HeroBanner.vue 里已经关掉了(自动播放则在 JS 里直接不启动),
+     这里不重复。
+
+   **刻意不管的**: 卡片悬停时那 3–4px 的位移、以及按下时的 0.97 缩放。
+   它们不是"内容在动", 是"你手底下的东西给了个回应" —— 位移小、由指针直接触发、
+   不产生视差或大面积扫动; 而拿掉它们, 卡片就只剩光标变化这一个反馈, 等于用
+   减少动效换走了"这里可以点"这个信息。这是一条判断, 不是遗漏。 */
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal],
+  [data-reveal].revealed {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .sec-more:hover .sec-more-arrow { transform: none; }
+}

@@ -21,12 +21,18 @@
 
     <!-- Right: Nav links + User -->
     <div class="navbar-links">
+      <!-- 这两个图标只在窄屏是"内容": ≤768px 时下面的 .nav-link-label 被隐藏,
+           图标成了唯一能说明这一项是什么的东西, 所以它们不能按"标签前面的
+           装饰"删掉。宽屏下它们确实只是装饰 —— 但同一个元素在两个断点下身份
+           不同, 删了没法在窄屏补回来。
+           AI 助手用 PhRobot: 和 ChatMessage 里助手头像用的是同一个图标 ——
+           站内两处指同一件事时用同一个形状, 比换个更漂亮的火花重要。 -->
       <router-link to="/" class="nav-link" exact-active-class="nav-link--active" @click="closeMenu">
-        <PhCompass :size="18" weight="duotone" />
+        <PhCompass :size="18" weight="bold" />
         <span class="nav-link-label">发现</span>
       </router-link>
       <router-link to="/assistant" class="nav-link" active-class="nav-link--active" @click="closeMenu">
-        <PhSparkle :size="18" weight="duotone" />
+        <PhRobot :size="18" weight="bold" />
         <span class="nav-link-label">AI 助手</span>
       </router-link>
       <!-- User Dropdown -->
@@ -51,20 +57,20 @@
             </div>
             <div class="dropdown-divider"></div>
             <router-link to="/profile" class="dropdown-item" @click="closeMenu">
-              <PhUser :size="16" weight="duotone" /> 个人主页
+              <PhUser :size="16" weight="bold" /> 个人主页
             </router-link>
             <router-link v-if="userStore.user?.role === 'ADMIN'" to="/admin" class="dropdown-item" @click="closeMenu">
-              <PhGear :size="16" weight="duotone" /> 管理后台
+              <PhGear :size="16" weight="bold" /> 管理后台
             </router-link>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item" @click="toggleLight">
-              <PhSunHorizon v-if="!light" :size="16" weight="duotone" />
-              <PhMoonStars v-else :size="16" weight="duotone" />
+              <PhSunHorizon v-if="!light" :size="16" weight="bold" />
+              <PhMoonStars v-else :size="16" weight="bold" />
               {{ light ? '暗色模式' : '亮色模式' }}
             </button>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item dropdown-danger" @click="handleLogout">
-              <PhSignOut :size="16" weight="duotone" /> 退出登录
+              <PhSignOut :size="16" weight="bold" /> 退出登录
             </button>
           </div>
         </Transition>
@@ -83,10 +89,15 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
+/* 字重统一成两档: 身份标记(品牌标、用户头像)用 fill, 其余功能性图标一律 bold。
+   模板里这 12 处图标改前混着 fill / bold / duotone 三种 —— duotone 在小尺寸下
+   会把一个 16px 的图形切成两层灰, 是"图标语言不统一"最明显的一处。
+   小尺寸用粗一档、大尺寸用细一档, 和 c71 定空态图标时(40px 用 light)是同一条规则。
+   （原先这里还有个 PhSparkle 给 AI 助手用 —— 火花是 AI 产品的陈词滥调, 已换掉。）*/
 import {
   PhCompass, PhMagnifyingGlass, PhGear,
   PhUserCircle, PhSunHorizon, PhMoonStars, PhCaretDown,
-  PhUser, PhSignOut, PhSparkle, PhFilmSlate
+  PhUser, PhSignOut, PhRobot, PhFilmSlate
 } from '@phosphor-icons/vue'
 
 const router = useRouter()
@@ -192,10 +203,31 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 /* ── Brand ── */
 /* 图标从 emoji 换成 SVG 之后 font-size 不再起作用, 尺寸改由 CSS 给 —— 这样
    下面那条"滚动时缩小"还能照常生效(它原本改的就是字号, 现在改成宽高). */
-.brand-icon { display: block; width: 22px; height: 22px; color: var(--primary); transition: width .25s, height .25s; }
-/* 改前是紫→粉的渐变描字。那是 AI 生成界面最常见的签名之一, 也是这个站
-   "模板感"最直观的一处 —— 换成实心墨色。真正的品牌处理放到导航改版那一步。 */
-.brand-text { color: var(--text); }
+.brand-icon {
+  display: block;
+  width: 22px; height: 22px;
+  color: var(--primary);
+  transition: width var(--dur) var(--ease), height var(--dur) var(--ease);
+}
+/* 站名的两处改动:
+   1. 字色改前是紫→粉的渐变描字(AI 生成界面最常见的签名, 也是这个站"模板感"
+      最直观的一处), 换配色那一步已经改成实心墨色。
+   2. 字体换成显示体(窄体)。改前它继承 navbar.css 的 `font-size:20px;
+      font-weight:800`, 而 800 落在**正文体**上 —— IBM Plex Sans 最粗只到 700
+      (见 main.js 的注记), 所以那个字重是浏览器伪粗体合成出来的。现在 700 是
+      这个字体真有的字重, 加上窄体, 站名从"一行粗字"变成一块刊头。
+   字号也一并收到这里独占: 改前 .brand-text 自己没有字号, 靠从 .navbar-brand
+   继承, 于是"窄屏 16px"在 navbar.css、"滚动时 16px"在这里, 同一个元素的大小
+   由两个文件各管一段。 */
+.brand-text {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  line-height: 1;
+  color: var(--text);
+  transition: font-size var(--dur) var(--ease);
+}
 
 /* ── Nav Links with Indicator ── */
 .nav-link {
@@ -303,8 +335,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 .dropdown-danger:hover { background: var(--danger-soft); color: var(--danger); }
 
 /* ── Dropdown Transition ── */
-.dropdown-enter-active { transition: all .15s ease; }
-.dropdown-leave-active { transition: all .1s ease; }
+/* 进入用收尾型缓动(前段快、后段落定), 退出比进入更快: 打开是"给你看一样东西",
+   关掉是"你已经看完了" —— 后者不该再等。 */
+.dropdown-enter-active { transition: all var(--dur) var(--ease-out); }
+.dropdown-leave-active { transition: all var(--dur-fast) var(--ease); }
 .dropdown-enter-from { opacity: 0; transform: translateY(-6px) scale(.96); }
 .dropdown-leave-to { opacity: 0; transform: translateY(-4px) scale(.98); }
 
@@ -332,16 +366,24 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 .nav-btn-primary:hover { background: var(--primary-hover); opacity: 0.95; }
 
 /* ── Scroll Shrink ── */
+/* 滚动收缩的时长归到 --dur, 缓动用 --ease(两端都要看得清的状态切换, 不是入场)。 */
 .navbar {
-  transition: height .25s ease, padding .25s ease, background .25s ease;
+  transition: height var(--dur) var(--ease), padding var(--dur) var(--ease), background var(--dur) var(--ease);
 }
 .nav-scrolled {
   height: 48px !important;
-  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  /* 改前这里写死 `0 1px 3px rgba(0,0,0,.08)` —— 这个值恰好就是浅色主题的 --shadow,
+     而深色主题的 --shadow 是 rgba(0,0,0,.4)。用 token 而不是再抄一遍数字:
+     同一个"浮起来一层"的语义, 两套主题各有各的深浅。 */
+  box-shadow: var(--shadow);
 }
 .nav-scrolled .brand-icon { width: 18px; height: 18px; }
-.nav-scrolled .brand-text { font-size: 16px; transition: font-size .25s; }
-.nav-scrolled .nav-search-input { padding: 6px 0; font-size: 13px; transition: all .25s; }
+/* 收缩后的字号只改值, 过渡由上面 .brand-text 那条就够 —— 改前这里另写了一条
+   `transition: font-size .25s`, 而它只在 .nav-scrolled 存在时才生效, 于是
+   **展开回去的那一段没有过渡**(类名一移除, 过渡规则和字号变化同时消失)。
+   过渡要写在基态上, 两个方向才都有。 */
+.nav-scrolled .brand-text { font-size: 17px; }
+.nav-scrolled .nav-search-input { padding: 6px 0; font-size: 13px; transition: all var(--dur) var(--ease); }
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
@@ -352,6 +394,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 @media (max-width: 480px) {
   .nav-search-wrap { max-width: 140px; margin: 0 8px; }
-  .brand-text { font-size: 16px; }
+  /* 窄屏的站名大小回到这里(原来挂在 navbar.css 的 .navbar-brand 上, 靠继承生效) */
+  .brand-text { font-size: 18px; }
 }
 </style>

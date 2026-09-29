@@ -184,7 +184,9 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
    底下的图不认主题, 换一套更亮的底色只会让白字糊掉。 */
 .card-type-badge {
   position: absolute; top: 8px; left: 8px; z-index: 3;
-  font-size: 10px; font-weight: 800; letter-spacing: .5px;
+  /* 10px 这么小的字用 800 只会糊: 正文字体最粗到 700, 800 是合成出来的伪粗体.
+     小字号一律 700 —— 反过来, 20px 以上的"显示级"文字才该换显示体并上 800 */
+  font-size: 10px; font-weight: 700; letter-spacing: .5px;
   padding: 3px 8px; border-radius: 4px;
   backdrop-filter: blur(8px);
 }
@@ -205,7 +207,7 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   display: flex; align-items: center; gap: 3px;
   padding: 4px 9px; border-radius: 6px;
   background: var(--cover-scrim); backdrop-filter: blur(8px);
-  color: var(--cover-star); font-size: 12px; font-weight: 800;
+  color: var(--cover-star); font-size: 12px; font-weight: 700;
 }
 .card-rating-badge.no-score {
   color: var(--text-muted); font-size: 10px; font-weight: 500;

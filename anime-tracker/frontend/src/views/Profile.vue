@@ -261,7 +261,10 @@ async function loadProfile() {
 .p-email { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
 .p-stats { display: flex; gap: 32px; }
 .p-stat { text-align: center; }
-.ps-num { font-size: 22px; font-weight: 800; color: var(--text); }
+/* 统计数字换到显示体: 22px 是显示级字号, 而 800 落在正文字体上时是伪粗体
+   (IBM Plex Sans 最粗 700)。上面那条 .p-name 不用改 —— 它是 <h1>, 显示体
+   由 base.css 的 h1 规则给它。 */
+.ps-num { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--text); }
 .ps-lbl { font-size: 11px; color: var(--text-muted); display: block; }
 
 /* ── Tabs ── */

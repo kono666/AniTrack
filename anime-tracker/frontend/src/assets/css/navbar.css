@@ -16,14 +16,16 @@
   top: 0;
   z-index: 1000;
 }
+/* 这里只管"品牌块怎么排", 不管字长什么样 —— 字号/字重/字体全在 NavBar.vue 的
+   .brand-text 上(不在层里的 scoped 规则本来就压过本文件所在的 layer)。
+   改前这两条写在这里: `font-size:20px; font-weight:800`。它们靠继承落到站名上,
+   于是站名的字号有**两个**归属地(这里给基础值、组件里给滚动后的值), 而 800
+   还落在一个最粗只到 700 的正文字体上 —— 那是个伪粗体。
+   品牌字原本是紫→粉的渐变描字(AI 模板最常见的那个签名), 换配色那一步已改成实心墨色。 */
 .navbar-brand {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 20px;
-  font-weight: 800;
-  /* 品牌字原本是紫→粉的渐变描字(AI 模板最常见的那个签名)。改成实心墨色:
-     这个站的名字不需要靠变色来被认出来。 */
   color: var(--text);
 }
 .navbar-links { display: flex; gap: 4px; align-items: center; }
@@ -64,6 +66,4 @@
   .navbar { padding:0 16px; }
   .navbar-links a, .navbar-links button { font-size:12px; padding:6px 10px; }
 }
-@media (max-width: 480px) {
-  .navbar-brand { font-size:16px; }
-}
+/* 窄屏站名的字号跟着挪进了 NavBar.vue 的 scoped —— 那里才是它唯一的归属地 */

@@ -65,7 +65,10 @@
   transition: color var(--transition);
 }
 .sec-more:hover { color: var(--text); }
-.sec-more-arrow { transition: transform var(--transition); }
+/* 箭头用收尾型缓动: 它自己会停在 3px 外侧, 前段快、后段慢慢停, 看起来像"被推出去
+   然后落定", 比匀速更像一个动作。系统开了减少动效时这条位移被 interactions.css
+   里的那段媒体查询关掉(那里是统一处理这类装饰性位移的地方) */
+.sec-more-arrow { transition: transform var(--dur) var(--ease-out); }
 .sec-more:hover .sec-more-arrow { transform: translateX(3px); }
 
 @media (max-width: 768px) {

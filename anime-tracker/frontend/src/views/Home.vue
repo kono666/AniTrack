@@ -181,7 +181,9 @@ import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
 import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
-import { useReveal } from '../composables/useReveal'
+// 指令直接引进来用 —— 在 <script setup> 顶层, 这个命名会自动变成可写的 `v-reveal`
+// (改前是 `const { vReveal } = useReveal()`, 而那个包装层只为了往 head 里注入样式)
+import { vReveal } from '../directives/reveal'
 import HeroBanner from '../components/HeroBanner.vue'
 import HorizontalScroll from '../components/HorizontalScroll.vue'
 import SectionHeader from '../components/SectionHeader.vue'
@@ -189,8 +191,6 @@ import AnimeCard from '../components/AnimeCard.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Pagination from '../components/Pagination.vue'
-
-const { vReveal } = useReveal()
 
 const $router = useRouter()
 const loading = ref(true)
@@ -357,7 +357,12 @@ async function loadHome() {
   position: absolute; top: -8px; left: -8px; z-index: 3;
   width: 32px; height: 32px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 15px; font-weight: 900; color: var(--rank-fg);
+  /* 改前 font-weight:900 落在**正文体**上 —— IBM Plex Sans 最粗只到 700, 900 是
+     浏览器伪粗体合成的(笔画被机械加粗)。榜位数字是"显示级"的元素, 所以挪到显示体,
+     那里 800 是真的字重。判据见下面其它几处: 只有 h1–h3 会从 base.css 继承显示体,
+     其余元素想要显示体就得自己写。 */
+  font-family: var(--font-display);
+  font-size: 15px; font-weight: 800; color: var(--rank-fg);
   background: var(--text-muted);
   box-shadow: 0 2px 8px rgba(0,0,0,.3);
 }

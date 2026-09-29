@@ -317,8 +317,10 @@ onMounted(load)
 .d-cover{ width:220px; border-radius:12px; aspect-ratio:3/4; object-fit:cover; box-shadow:0 16px 64px rgba(0,0,0,.5); border:2px solid rgba(255,255,255,.06); }
 /* 这两个角标压在封面上 → 用 --cover-* 那组, 不跟主题变.
    一深一浅是有意的: 评分是"读一个数", 排名是"贴一个标", 权重不同。 */
-.d-cover-score{ position:absolute; bottom:-8px; right:-8px; padding:4px 12px; border-radius:12px; background:var(--cover-scrim); color:var(--cover-star); font-size:14px; font-weight:800; border:1.5px solid rgba(255,255,255,.1); backdrop-filter:blur(8px); }
-.d-cover-rank{ position:absolute; top:-8px; left:-8px; padding:4px 10px; border-radius:8px; background:var(--cover-fg); color:var(--cover-ink); font-size:12px; font-weight:800; }
+/* 这两处原本是 800 —— 而正文字体最粗只到 700, 800 是伪粗体合成出来的。
+   14px/12px 属于小字号, 一律用真的 700; 20px 以上才换显示体(见下面 .ds-val)。 */
+.d-cover-score{ position:absolute; bottom:-8px; right:-8px; padding:4px 12px; border-radius:12px; background:var(--cover-scrim); color:var(--cover-star); font-size:14px; font-weight:700; border:1.5px solid rgba(255,255,255,.1); backdrop-filter:blur(8px); }
+.d-cover-rank{ position:absolute; top:-8px; left:-8px; padding:4px 10px; border-radius:8px; background:var(--cover-fg); color:var(--cover-ink); font-size:12px; font-weight:700; }
 .d-hero-actions{ width:100%; }
 /* 这个按钮在**头图上**(深色孤岛里), 不是在普通卡片上 —— 所以它不能用
    --primary: 浅色主题下 --primary 是近黑, 近黑的按钮压在近黑的头图上会糊成一片。
@@ -335,7 +337,9 @@ onMounted(load)
 .d-subtitle{ font-size:14px; color:rgba(255,255,255,.35); margin-bottom:20px; }
 .d-stats{ display:flex; gap:28px; margin-bottom:18px; }
 .d-stat{ display:flex; flex-direction:column; align-items:center; }
-.ds-val{ font-size:20px; font-weight:800; color:var(--cover-fg); }
+/* 头图上那排"评分/排名/总集数"的大数字 —— 20px、显示级, 所以换显示体,
+   那里 800 是真字重(改前 800 压在正文字体上 = 伪粗体) */
+.ds-val{ font-family:var(--font-display); font-size:20px; font-weight:800; color:var(--cover-fg); }
 .ds-lbl{ font-size:11px; color:rgba(255,255,255,.35); margin-top:2px; }
 .d-tags{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
 .d-tag{ padding:5px 14px; border-radius:16px; background:rgba(255,255,255,.08); color:rgba(255,255,255,.7); font-size:12px; font-weight:500; border:1px solid rgba(255,255,255,.06); backdrop-filter:blur(4px); }
@@ -367,7 +371,7 @@ onMounted(load)
 }
 .ep-tile:hover{ border-color:var(--primary); background:var(--card-hover); transform:translateY(-2px); }
 .ep-tile.watched{ background:var(--primary-soft); border-color:var(--primary-line); }
-.ep-tile-num{ font-size:20px; font-weight:900; color:var(--text-secondary); font-variant-numeric:tabular-nums; }
+.ep-tile-num{ font-family:var(--font-display); font-size:20px; font-weight:800; color:var(--text-secondary); font-variant-numeric:tabular-nums; }
 /* 看过 = 满墨。--primary 是墨色, 拿它当"强调文字"跟 --text 没差别,
    而这个状态需要跟未看的 --text-secondary 拉开距离 */
 .ep-tile.watched .ep-tile-num{ color:var(--text); }
@@ -403,7 +407,7 @@ onMounted(load)
 
 .review-list{ display:flex; flex-direction:column; }
 .rv-item{ display:flex; gap:12px; padding:16px 0; border-bottom:1px solid var(--border); }
-.rv-avatar{ width:36px; height:36px; border-radius:50%; background:var(--primary); color:var(--primary-foreground); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; flex-shrink:0; }
+.rv-avatar{ width:36px; height:36px; border-radius:50%; background:var(--primary); color:var(--primary-foreground); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; flex-shrink:0; }
 .rv-body{ flex:1; min-width:0; }
 .rv-top{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
 .rv-username{ font-weight:700; font-size:13px; color:var(--text); }
