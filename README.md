@@ -330,7 +330,9 @@ https://你的域名/actuator/health
 
 ### 备份与恢复
 
-`backup` 服务每天 `pg_dump` 一次（起栈时先做一次，不用等第一个周期），保留 14 天，文件放在 `pgbackup` 这个卷里——**与数据库的卷分开**。脚本与它的取舍写在 [`anime-tracker/scripts/backup/backup.sh`](anime-tracker/scripts/backup/backup.sh)，一句话概括：先写 `.part`、验完整（`pg_dump` 的收尾标记）、才改名，所以那个目录里不会出现半截的备份文件。
+`backup` 服务每天 `pg_dump` 一次（起栈时先做一次，不用等第一个周期），保留 14 天，文件放在 `pgbackup` 这个卷里——**与数据库的卷分开**。脚本与它的取舍写在 [`anime-tracker/scripts/backup/backup.sh`](anime-tracker/scripts/backup/backup.sh)，一句话概括：先写 `.part`、验完整、才改名，所以那个目录里不会出现半截的备份文件。
+
+「验完整」是两条，缺一不可：`pg_dump` 的收尾标记（证明它跑完了）**和**里面确实有建表语句（证明它不是一份空库）。第二条是 CI 抓出来的：早先那个版本只等 `postgres` 健康，于是在「数据库刚能接受连接、后端的 Flyway 还没开始跑」的那个瞬间 dump 了一份 4.0K 的空文件——它带着完整的收尾标记，通过了当时的全部检查，还被 `healthcheck` 判成了健康。现在 `backup` 依赖的是**后端健康**（也就是迁移跑完之后），脚本另外也会把空 schema 的 dump 直接丢掉并在一分钟后重试。
 
 ```bash
 docker compose exec backup ls -lh /backup                     # 看看有哪些

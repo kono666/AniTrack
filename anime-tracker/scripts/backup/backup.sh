@@ -34,6 +34,11 @@ INTERVAL="${BACKUP_INTERVAL_SECONDS:-86400}"
 DIR="${BACKUP_DIR:-/backup}"
 PREFIX="${BACKUP_PREFIX:-anitrack}"
 
+# 丢掉一份 dump 之后隔多久重试.
+# 刻意不做成环境变量: 它是一个恢复路径, 不是一项策略 —— 没有人需要按自己的
+# 情况调它, 而多一个可配置项就多一个"填错了也没人发现"的地方.
+RETRY_SECONDS=60
+
 log() { echo "[backup] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
 mkdir -p "$DIR"
@@ -49,20 +54,38 @@ while true; do
     stamp=$(date '+%Y%m%d-%H%M%S')
     file="$DIR/$PREFIX-$stamp.sql.gz"
     tmp="$file.part"
+    delay="$INTERVAL"
 
     # --clean --if-exists: 让 dump 可以直接灌回一个已有数据的库(先删后建),
     #   恢复时不用先手动清库. --no-owner: 恢复的目标库里不一定有同名角色,
     #   带上 owner 会让整个恢复因为一个不存在的角色而失败.
     if pg_dump --no-owner --no-privileges --clean --if-exists | gzip -9 > "$tmp"; then
-        # 完整性自检. pg_dump 正常收尾时会写这一行, 只有它跑完才有.
-        # 这一步挡的是 pipefail 也挡不住的情况: pg_dump 自己"成功"退出,
-        # 但连接中途断过、或者它写出的是个空库.
-        if gzip -dc "$tmp" | tail -n 5 | grep -q 'PostgreSQL database dump complete'; then
-            mv "$tmp" "$file"
-            log "完成 $(du -h "$file" | cut -f1)  $(basename "$file")"
-        else
+        # 完整性自检, 两条:
+        #
+        # 一、收尾标记. pg_dump 正常收尾时会写这一行, 只有它跑完才有.
+        #     这一步挡的是 pipefail 也挡不住的情况: pg_dump 自己"成功"退出,
+        #     但连接中途断过.
+        # 二、里面得有建表语句.
+        #
+        # 第二条是 CI 抓出来的: 备份容器原先只等 postgres 健康, 于是在
+        # "PG 能接受连接"的瞬间就 dump 了 —— 而那时后端的 Flyway 还没开始跑,
+        # 库里一张表都没有. 这份 4.0K 的 dump 通过了收尾标记检查(它确实是
+        # pg_dump 完整产出的), 却被当成了备份, 连 healthcheck 都因此判了 healthy.
+        #
+        # 空库的 dump 与半截的 dump 是同一种东西: 看起来像备份. 上面那条
+        # 取舍对它们一视同仁 —— 丢掉. 只是这一份的成因不是"传输出错", 而是
+        # "来得太早", 所以值得再试一次, 而不是等一整天.
+        if ! gzip -dc "$tmp" | tail -n 5 | grep -q 'PostgreSQL database dump complete'; then
             rm -f "$tmp"
             log "失败: dump 没有收尾标记(不完整), 已丢弃"
+        elif ! gzip -dc "$tmp" | grep -q '^CREATE TABLE'; then
+            rm -f "$tmp"
+            delay="$RETRY_SECONDS"
+            log "跳过: 库里一张表都没有(应用还没跑完迁移, 或者备份跑在了迁移前面)."
+            log "      空 schema 的 dump 恢复不出任何东西, 已丢弃; ${RETRY_SECONDS}s 后重试"
+        else
+            mv "$tmp" "$file"
+            log "完成 $(du -h "$file" | cut -f1)  $(basename "$file")"
         fi
     else
         rm -f "$tmp"
@@ -75,5 +98,6 @@ while true; do
     #  循环里被删掉 —— 保留期是"至少 14 天", 不是"正好 14 天".)
     find "$DIR" -maxdepth 1 -name "$PREFIX-*.sql.gz" -type f -mtime "+$KEEP_DAYS" -delete 2>/dev/null || true
 
-    sleep "$INTERVAL"
+    # delay 默认是 INTERVAL, 只有"空库"那条路径会把它改成 RETRY_SECONDS
+    sleep "$delay"
 done

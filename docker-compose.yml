@@ -191,6 +191,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      backend:
+        # 也等后端健康 —— 这一条是 CI 逼出来的, 不是想当然加的.
+        #
+        # 只等 postgres 的那一版跑出来的第一份备份是**空库**: 备份容器在
+        # "PG 能接受连接"的瞬间就 dump 了, 而此刻后端的 Flyway 还没开始跑.
+        # CI 上的实测时间线 (UTC):
+        #     03:46:33  backup 容器起来, 立刻 dump 出 4.0K 的空 schema 文件
+        #     03:46:38  后端才打印出 Flyway 的 banner —— 晚了 5 秒
+        # 于是断言 "dump 里要有建表语句" 就红了.
+        #
+        # 值得记一笔的是当时的探针状态: 那份空文件让 healthcheck 判了 healthy.
+        # "目录里有备份文件" 和 "备份是可用的" 是两件事, 而重新排序之后,
+        # 前者的成立才蕴含后者(脚本也只发布会带 schema 的 dump).
+        #
+        # 用的是 service_healthy 而不是 service_started: 后端"起来了"不等于
+        # "迁移跑完了", 而这里要等的恰恰是迁移跑完.
+        condition: service_healthy
     environment:
       # pg_dump 认这几个标准变量, 不需要在命令行里传连接串
       # (连接串会出现在 docker compose config 的输出里, 也就更容易被贴进聊天窗口)
@@ -209,6 +226,11 @@ services:
       # 这个服务的病态不是进程死掉(restart 会把它拉起来), 而是循环还在转、
       # 备份却一直失败 —— 那种情况下容器是 running 的, 只有这里的 healthy/unhealthy
       # 能把这件事说出来.
+      #
+      # 这条探针的强度取决于脚本发布什么: 备份脚本只会把**带建表语句的** dump
+      # 发布出来(空的直接丢弃, 见 backup.sh), 所以"有文件"在这里等价于
+      # "有一份装得回东西的备份". 脚本要是改成什么垃圾都落盘, 这条探针就退化成
+      # 一句安慰了 —— 这两处是一起成立的, 改一处得看另一处.
       # 这里只看"有没有备份文件", 不关心文件名前缀 —— 前缀是可配置的,
       # 而这个探针要回答的问题与它无关.
       test: ["CMD-SHELL", "test -n \"$(ls -1 /backup/*.sql.gz 2>/dev/null)\""]
