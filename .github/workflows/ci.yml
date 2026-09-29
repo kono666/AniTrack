@@ -253,6 +253,61 @@ jobs:
         # 等不到会直接返回非零 —— 这一步本身就证明了 Dockerfile 里那条 HEALTHCHECK 是对的.
         run: docker compose up -d --wait --wait-timeout 240
 
+      # 往库里预置几条番剧, 让下面那段端到端**不依赖 api.bgm.tv**.
+      #
+      # 起因是 CI #81: 端到端那一步红了, 红的却不是脚本 —— 它 RESULT: PASS=54 FAIL=0,
+      # 是脚本后面那条「卡片断言有没有空转」的守卫判的红. 原因是 mock 模型挑中的工具是
+      # get_ranking, 而它先在本地库里找, 库是空的 (启动预加载器也要打 api.bgm.tv,
+      # 同样没通), 于是工具返回空, 守卫判它空转.
+      #
+      # 守卫的本意是对的 —— 「别让一段什么都没验的 CI 变绿」. 错的是它把
+      # **有没有东西可验**押在了一个外部服务上. 押在外网上的断言只有两种结局:
+      # 某天毫无预兆地变红, 或者被人顺手放宽到永远为真. 种几条数据之后,
+      # 「有没有行」由我们说了算: 真出现 0 行, 那就是工具链路坏了.
+      #
+      # 为什么是 25 条: mock 调 get_ranking 用的是默认 limit=10, 而 getRanking 是
+      # 「本地不足 min(limit,20) 条才回源」. 25 > 20, 所以不管 limit 取多少,
+      # 这一步之后它都不会再去打外网 —— 预置同时把这个外部依赖整个摘掉了.
+      #
+      # id 取 9xxxxxxx 区间: Bangumi 不会返回这个区间的 subject id, 所以这几行
+      # 既不会被回源覆盖, 也不会和真数据混起来.
+      # anime 表只有 id 与 title 两个 NOT NULL 列 (见 V1__init_schema.sql),
+      # 其余字段留空不影响排序读取.
+      #
+      # 一处已知的、故意留着的不完美: 预加载器在启动时会先调一次 getRanking(30),
+      # 那时库还是空的, 于是 rank_30 这个缓存键里存了一份空结果. 工具用的是
+      # rank_10, 与它不同键, 所以对这一段没有影响 —— 但如果将来有人从
+      # /api/bangumi/ranking?limit=30 去查, 拿到的会是那份空缓存.
+      - name: 预置番剧数据 (让端到端的卡片断言离线可判)
+        env:
+          DB_NAME: anitrack
+          DB_USER: anitrack
+        run: |
+          set -euo pipefail
+
+          docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -q <<'SQL'
+          INSERT INTO anime (id, title, title_cn, cover_url, rating, rating_count,
+                             total_episodes, date, status, tags)
+          SELECT 99000000 + g,
+                 'CI Seeded Anime ' || g,
+                 'CI 预置番剧 ' || g,
+                 'https://example.invalid/ci-' || g || '.jpg',
+                 ((100 - g)::numeric / 10)::numeric(3, 1),
+                 1000 - g,
+                 12,
+                 '2020-01',
+                 '完结',
+                 'CI,预置'
+            FROM generate_series(1, 25) AS g;
+          SQL
+
+          # 种完自己数一遍. 不数的话, 万一这条 INSERT 静默没生效,
+          # 失败会以「工具结果里没有番剧行」的样子出现在几步之后, 指错方向.
+          n=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAq \
+                -c "SELECT count(*) FROM anime WHERE id BETWEEN 99000001 AND 99000025" | tr -d '\r')
+          test "$n" = "25" || { echo "FAIL: 预置数据只进了 $n 条 (期望 25)"; exit 1; }
+          echo "ok: 预置 $n 条番剧 (id 99000001..99000025)"
+
       - name: 冒烟 (全部经 nginx)
         env:
           CI_ADMIN_USERNAME: ciadmin
@@ -478,17 +533,24 @@ jobs:
           # 但 CI 知道自己给的是 mock, 可以在这里查.
           #
           # 为什么非查不可: 脚本里那几十条卡片断言都是
-          # 「**如果**有带 type=anime 标记的行, 就必须带卡片」的形式. 于是当
-          # api.bgm.tv 不通、工具返回空的时候, 那些断言会**全部空转通过** ——
-          # RESULT 照样 FAIL=0, 退出码照样 0, 而卡片那条链路压根没被检查过.
-          # 一个绿色的、但什么都没验的 CI, 比一个红色的更糟.
+          # 「**如果**有带 type=anime 标记的行, 就必须带卡片」的形式. 工具返回空的时候,
+          # 那些断言会**全部空转通过** —— RESULT 照样 FAIL=0, 退出码照样 0,
+          # 而卡片那条链路压根没被检查过. 一个绿色的、但什么都没验的 CI, 比一个红色的更糟.
+          #
+          # 这句「至少得有一行」是有底气的, 不再是碰运气: 上面「预置番剧数据」那一步
+          # 已经往库里种了 25 条, 而 mock 挑中的 get_ranking 是先在本地库找、够数就不打外网.
+          # 所以这一条现在是**离线**的 —— 真出现 0 行, 不再是"api.bgm.tv 不通",
+          # 而是工具结果到卡片这条链路真的断了.
+          #
+          # (CI #81 之前这里写的是「多半是 api.bgm.tv 不通或被限流 —— 不是代码的问题」,
+          #  那句话等于承认这条断言会随机变红. 现在它不该再红得无缘无故.)
           tagged=$(grep -o 'carrying tagged anime rows=[0-9]*' /tmp/agent.log \
                    | grep -o '[0-9]*$' | tail -1 || true)
           test -n "$tagged" \
             || { echo "FAIL: 日志里找不到 'carrying tagged anime rows' 这一行"; exit 1; }
           test "$tagged" -ge 1 \
             || { echo "FAIL: 工具结果里没有带 type=anime 的行 (=$tagged), 卡片断言全部空转了."
-                 echo "      多半是 api.bgm.tv 不通或被限流 —— 不是代码的问题, 但也不能算通过."
+                 echo "      库里有预置数据, get_ranking 不该返回空 —— 查工具结果的组装与 ToolCards."
                  exit 1; }
           echo "ok: mock 真的调到了工具, 结果带 $tagged 组番剧行 (卡片断言不是空转)"
 
