@@ -363,10 +363,28 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 同一个查询参数出现两次时, Spring 取**第一个**, 后面那个被静静丢掉 ——
+          # 于是断言跑的是一个跟写下来的不一样的请求, 而报出来的样子完全像被测代码错了.
+          # 已经踩过一次: "$FILTER&page=2&limit=3" 里的 limit 与 FILTER 自带的那份撞车,
+          # 页码按 50 算, offset 超过总行数, 第 2 页恒空, 看起来却像排序错了.
+          # 发请求的三个助手(assert_status / expect_order / expect_total)都先过这一道,
+          # 让这种 URL 当场失败, 而不是空转成一个"看起来像被测代码错了"的断言.
+          #
+          # 定义放在最前面: 它是被 assert_status 用的, 而 assert_status 在第一节就要调用.
+          no_repeated_query_param() {  # <url>
+            local key dup
+            dup=$(printf '%s' "${1#*\?}" | tr '&' '\n' | sed 's/=.*//' | sort | uniq -d)
+            for key in $dup; do
+              echo "FAIL: 这条 URL 里参数 $key 出现了多次, 后一个会被丢掉"
+              echo "  实际: $1"; exit 1
+            done
+          }
+
           # 每个断言都打印一行, 失败时日志里能直接看出卡在哪一条
           assert_status() {
             local expect="$1" url="$2"
             local got
+            no_repeated_query_param "$url"
             got=$(curl -s -o /tmp/body -w '%{http_code}' "$url")
             if [ "$got" != "$expect" ]; then
               echo "FAIL: $url 期望 $expect, 实际 $got"
@@ -564,6 +582,7 @@ jobs:
           # 顺序断言: 比对整条 id 序列
           expect_order() {  # <名字> <期望 id 序列> <url>
             local name="$1" expect="$2" url="$3" body got
+            no_repeated_query_param "$url"
             body=$(curl -s "$url")
             got=$(printf '%s' "$body" | jq_ '" ".join(str(i["id"]) for i in d["list"])')
             test "$got" = "$expect" \
@@ -575,6 +594,7 @@ jobs:
           # 条数断言: 用在只关心"命中了哪些行"的地方
           expect_total() {  # <名字> <期望条数> <url>
             local name="$1" expect="$2" url="$3" body total
+            no_repeated_query_param "$url"
             body=$(curl -s "$url")
             total=$(printf '%s' "$body" | jq_ 'd["total"]')
             test "$total" = "$expect" \
@@ -607,7 +627,13 @@ jobs:
             echo "ok: by-tag 每部番只出一行, 且 $* 都在 -> $got"
           }
 
-          FILTER="$BASE/api/bangumi/filter?status=ci-smoke&limit=50"
+          # 分页那条断言要自己给 limit, 所以基址**不能**带 limit: 拼上去会变成
+          # ?limit=50&...&limit=3, 而 Spring 对重复参数取**第一个** —— 于是页码按
+          # limit=50 算, offset(50) 超过总行数(5), 第 2 页永远是空的.
+          # 这个坑真踩过: 它让"第 2 页接着第 1 页"这条断言从未在 PG 上跑起来
+          # (c63 那次 CI), 而报出来的样子像排序错了 —— 期望两行、实际一个空列表.
+          FILTER_Q="$BASE/api/bangumi/filter?status=ci-smoke"
+          FILTER="$FILTER_Q&limit=50"
 
           expect_order "按名次排(有名次在前, 无名次按 id 兜底)" \
                        "99000034 99000035 99000031 99000032 99000033" "$FILTER&sort=rank"
@@ -631,9 +657,10 @@ jobs:
           # (URL 里的 %25 是 % 的转义, 与 SQL 侧的 ! 转义是两件事.)
           expect_total "year=20% (百分号不是通配符)" 0 "$FILTER&year=20%25"
 
-          # 分页: 第 2 页是同一个序的第二段, 既不重也不漏
+          # 分页: 第 2 页是同一个序的第二段, 既不重也不漏.
+          # 走 FILTER_Q 而不是 FILTER —— 理由见上面那段(重复 limit).
           expect_order "第二页(每页 3 条)接着第一页" \
-                       "99000034 99000031" "$FILTER&sort=date&page=2&limit=3"
+                       "99000034 99000031" "$FILTER_Q&sort=date&page=2&limit=3"
 
           # EXISTS 半连接: 一部番挂在"百合"的三种写法下, 只该出**一行**.
           # 顶层 JOIN 这里会给出 [99000035 99000034 99000035 99000034 ...] ——
