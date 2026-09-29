@@ -78,17 +78,39 @@ final class AnimeQueries {
      * {@code SELECT DISTINCT} 的每个 {@code ORDER BY} 表达式都出现在选择列表里,
      * 而上面那些排序用的是 CASE, 不是被选中的列, 会直接报错.
      *
+     * <p><b>为什么是 {@code IN} 子查询而不是等价的 {@code EXISTS}.</b> 两者语义完全相同
+     * (都是半连接、每部番至多一行), 差别只在优化器怎么排这个连接 —— 而 H2 排得很不一样.
+     * 原先写的是 {@code EXISTS (SELECT at.id FROM AnimeTag at WHERE at.animeId = a.id AND ...)},
+     * 关联列 {@code a.id} 在外层, H2 把它排成了对 {@code anime} 的**全表扫描**:
+     * 每读到一行就拿它的主键去 {@code anime_tag} 里探一次(EXPLAIN 里的
+     * {@code ANIME.tableScan}, 条件里才是 {@code EXISTS(...)}). 几百行时看不出来,
+     * 满库之后每次按标签浏览要探两万九千次, 而且是在二级索引与其主键之间来回
+     * ({@code MVSecondaryIndex$MVStoreCursor.get → MVPrimaryIndex.getRow}),
+     * 连页缓存都被冲垮 —— 实测同一份库、同一个请求 {@code /by-tag?tag=TV}:
+     * 改前 0.90 s, 改后 **124.29 s**, 138 倍, 而输出一字不差. 对照组
+     * {@code /filter?year=2024} 两次都是 0.14~0.19 s, 排除"机器变慢了".
+     *
+     * <p>写成 {@code a.id IN (...)} 之后子查询与外层不再有任何相关列, H2 可以把它整个
+     * 算成一个 id 集合、再拿主键索引去配(EXPLAIN:
+     * {@code PUBLIC.PRIMARY_KEY_ED6: ID IN(SELECT DISTINCT X.ANIME_ID FROM ANIME_TAG X ...)}),
+     * 也就是改动前"先取一批 id 再按 id 查番剧"那条老路的代价量级.
+     *
+     * <p><b>这是两边优化器不一致的典型, 选型依据只有 H2 一侧.</b> 同一条 JPQL 在
+     * PostgreSQL 上很可能两种写法都好, 但本机没有 PG(CI 的 compose 只种 25 行,
+     * 验的是"不炸"而不是"快")—— 所以这个改动的 PG 侧属于**已知的验证空缺**,
+     * 不是"验过了". 之所以仍然照 H2 选: 它是本机唯一能拿到数的那个库, 也是开发库.
+     *
      * <p><b>为什么参数是 tag <em>id</em> 而不是标签名.</b> 名字先由
      * {@code TagRepository.findByNameIn} 解析成 id(那条查询走 uk_tag_name, 而且传进来的
      * 通常只有 1~3 个名字 —— 一个中文名加它的英文写法), 好处是这里省掉一次 JOIN:
-     * {@code at.tag.id} 直接落到 {@code anime_tag.tag_id} 上, 走 idx_animetag_anime.
+     * {@code at.tag.id} 直接落在 {@code anime_tag.tag_id} 上, 走 idx_animetag_tag.
      * 反过来把名字塞进来就得在这里 JOIN tag 表, 换到的只是省一次"最多三行"的查询.
      *
      * <p><b>为什么不用空集合表达"不限标签".</b> 空 IN 列表在 H2 上是语法错误, 而
      * "不筛标签"完全可以在调用方选另一条查询来表达 —— 一个不存在的情况不该在这里编码.
      */
-    static final String TAG_EXISTS =
-            " EXISTS (SELECT at.id FROM AnimeTag at WHERE at.animeId = a.id AND at.tag.id IN :tagIds)";
+    static final String TAG_MATCHES =
+            " a.id IN (SELECT at.animeId FROM AnimeTag at WHERE at.tag.id IN :tagIds)";
 
     // ==================== 排序 ====================
 
@@ -207,15 +229,15 @@ final class AnimeQueries {
 
     /** 同上三条, 但限定在若干标签下. 按标签浏览走的也是 {@link #TAGGED_DATE}(三个筛选条件传 NULL) */
     static final String TAGGED_RANK =
-            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_EXISTS + ORDER_RANK_ASC_NULL_LAST;
+            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_MATCHES + ORDER_RANK_ASC_NULL_LAST;
 
     static final String TAGGED_DATE =
-            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_EXISTS + ORDER_DATE_DESC_NULL_LAST;
+            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_MATCHES + ORDER_DATE_DESC_NULL_LAST;
 
     static final String TAGGED_RATING =
-            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_EXISTS + ORDER_WEIGHTED_DESC;
+            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_MATCHES + ORDER_WEIGHTED_DESC;
 
-    static final String COUNT_TAGGED = COUNT_ANIME + FILTER_WHERE + " AND " + TAG_EXISTS;
+    static final String COUNT_TAGGED = COUNT_ANIME + FILTER_WHERE + " AND " + TAG_MATCHES;
 
     /**
      * 年份下拉框的取值: date 的前四位.

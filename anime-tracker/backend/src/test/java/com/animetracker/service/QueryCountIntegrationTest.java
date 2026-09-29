@@ -564,7 +564,8 @@ class QueryCountIntegrationTest {
      * 关联表里有指向已删除番剧的行时, 结果里不该多出东西.
      *
      * <p>{@code anime_tag} 与 {@code anime} 之间不是外键强约束, 这类悬挂行是会出现的
-     * (删除番剧时只删了主表). 改成 {@code EXISTS} 半连接之后这件事是白送的 ——
+     * (删除番剧时只删了主表). 改成半连接(现在是 {@code a.id IN (子查询)}, 见
+     * {@code AnimeQueries.TAG_MATCHES})之后这件事是白送的 ——
      * 子查询要求 {@code anime} 里真有那一行才算命中, 而改前那个版本是"先取一批
      * anime_id 再按 id 取番剧", 靠的是批量查的天然宽容. 断言留下, 是因为换写法时
      * 这一点会被无声地换掉.
@@ -728,24 +729,34 @@ class QueryCountIntegrationTest {
     }
 
     /**
-     * 按标签浏览: 用 {@code EXISTS} 半连接, 不是顶层 JOIN.
+     * 按标签浏览: 用 {@code IN} 子查询半连接, 既不是顶层 JOIN, 也不是 {@code EXISTS}.
      *
      * <p>顶层 JOIN 会让同时挂在"百合"和"Yuri"两个名字下的同一部番出现两次,
      * {@code total} 因此虚高, LIMIT/OFFSET 也会去数这些重复行 —— 翻页时相邻两页
      * 重叠、末尾几行永远看不到.
+     *
+     * <p><b>为什么连 {@code EXISTS} 也不许出现.</b> 它和 {@code IN} 子查询语义完全等价,
+     * 返回的行、读入的实体数一个都不差 —— 差别只在 H2 怎么排这个连接: {@code EXISTS}
+     * 排成了对 {@code anime} 的全表扫描 + 逐行拿主键回探 {@code anime_tag}, 满库时
+     * 同一个请求要 124 s, 而 {@code IN} 子查询是 0.90 s(完整的实测见
+     * {@code AnimeQueries.TAG_MATCHES} 的注释). 两种写法从返回值到行数到实体数
+     * 全都一模一样, **只有 SQL 文本分得出来** —— 所以这条断言是这个坑唯一的哨兵.
      */
     @Test
-    @DisplayName("按标签浏览的 SQL: 是 EXISTS 半连接, 不是顶层 JOIN")
-    void tagBrowseSqlUsesExists() {
+    @DisplayName("按标签浏览的 SQL: 是 IN 子查询半连接, 不是顶层 JOIN 也不是 EXISTS")
+    void tagBrowseSqlUsesInSubquery() {
         seedTaggedAnime(SUBJECT_BASE, "标签番", "2099-01-01", tagIdOf("qct-shape"));
 
         animeService.getByTags(Set.of("qct-shape"));
         String sql = lastSqlNormalized();
 
         assertThat(sql).containsIgnoringCase("from anime_tag")
-                .as("EXISTS 子查询里出现关联表是对的; 不该出现的是顶层 join")
+                .as("半连接子查询里出现关联表是对的; 不该出现的是顶层 join")
                 .doesNotContainIgnoringCase("join anime_tag");
-        assertThat(sql).containsIgnoringCase("exists");
+        assertThat(sql).as("要的是 a.id in (select ...) —— 与外层没有任何关联列的子查询")
+                .containsIgnoringCase("id in (select");
+        assertThat(sql).as("EXISTS 那条写法在 H2 上是全表扫描 + 逐行主键回探, 满库时慢 138 倍")
+                .doesNotContainIgnoringCase("exists");
     }
 
     /**

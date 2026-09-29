@@ -45,7 +45,9 @@ import static org.mockito.Mockito.when;
  * <p><b>这一组守的东西与改动前不一样了, 值得说清楚.</b> 改前是 tag 表 + anime_tag
  * 表各一次整表 {@code findAll()} 再在内存里 filter, 所以那时的重点是两条断言:
  * "那两个 findAll 不该出现"、以及"传进 {@code findAllById} 的 id 集合去重了没有".
- * 现在筛选与切片都在 SQL 里, 去重由 {@code EXISTS} 半连接天然保证(一部番至多出一行),
+ * 现在筛选与切片都在 SQL 里, 去重由半连接天然保证(一部番至多出一行; 用的是
+ * {@code a.id IN (子查询)} 而不是 {@code EXISTS} —— 为什么, 见
+ * {@code AnimeQueries.TAG_MATCHES} 里那段实测),
  * 那两条在这里已经无事可做 —— 它们搬去了真库那边, 变成"生成的 SQL 里有没有
  * {@code anime_tag}"与"读入实体数是不是恒定".
  *
@@ -113,7 +115,7 @@ class AnimeServiceTagTest {
      * <p>这正是当初要修的东西: 改前是 tag 表整表 + anime_tag 表整表各读一遍,
      * 再在内存里 filter. 表里几千行时, 每次按标签查番剧都要搬几千个对象.
      * 现在整条路只剩三条查询: 关联表空不空、标签名 → id、以及那一条带
-     * {@code EXISTS} 的取页查询.
+     * 标签子查询的取页查询.
      */
     @Test
     @DisplayName("按标签查: 不再对 tag / anime_tag 整表 findAll")
@@ -128,7 +130,7 @@ class AnimeServiceTagTest {
         assertThat(result).extracting(Anime::getId).containsExactly(BASE_ID + 1, BASE_ID);
         verify(tagRepository, never()).findAll();
         verify(animeTagRepository, never()).findAll();
-        // 那条"按 id 取番剧"的老路也一并退休了: 现在是 EXISTS 半连接, 不再先取一批 id 再二次查询
+        // 那条"先在 Java 里取一批 id 再按 id 取番剧"的老路也一并退休了: 现在是同一条语句里的子查询
         verify(animeRepository, never()).findAllById(any());
     }
 
@@ -138,8 +140,8 @@ class AnimeServiceTagTest {
      *
      * <p>断言的是传下去的那个 id 集合: 服务层的职责到此为止, 把解析出的 id 一起
      * 交给**一条**查询. 以前这里是"逐个标签各查一次 anime_id, 再用 LinkedHashSet
-     * 在内存里合并去重"; 现在合并与去重都是 {@code at.tag.id IN :tagIds} 与
-     * {@code EXISTS} 的事 —— 同一部番挂两个名字也只会出一行.
+     * 在内存里合并去重"; 现在合并与去重都是 {@code at.tag.id IN :tagIds} 与半连接
+     * 子查询的事 —— 同一部番挂两个名字也只会出一行.
      */
     @Test
     @DisplayName("多个标签名: 解析出的 id 一起交给一条查询, 并集在库里做")
