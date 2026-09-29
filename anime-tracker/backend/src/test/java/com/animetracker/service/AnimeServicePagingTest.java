@@ -176,7 +176,7 @@ class AnimeServicePagingTest {
     @Test
     @DisplayName("关键词分支同样受保护 (两条分支共用一个分页函数)")
     void keywordBranchIsProtectedToo() {
-        when(animeRepository.searchByKeyword(any())).thenReturn(fiveAnime());
+        when(animeRepository.searchByKeywordPattern(any())).thenReturn(fiveAnime());
 
         // 本地 5 条 >= limit 2, 直接就在本地分页返回, 不会去碰 API mock
         assertThatCode(() -> animeService.searchAnime("番", 0, 2)).doesNotThrowAnyException();

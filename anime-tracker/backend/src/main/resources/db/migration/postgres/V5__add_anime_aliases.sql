@@ -1,0 +1,56 @@
+-- ============================================================================
+--  AniTrack · V5 给 anime 加一列别名（PostgreSQL）
+--
+--  背景：搜索只匹配 title（Bangumi 日文原名）与 title_cn（中文名）。于是「EVA」
+--  「Neon Genesis Evangelion」「Shin Seiki Evangerion」这类罗马音/英文/其它地区译名
+--  一个都搜不到：接口按关键词回 0 条 → 回源 Bangumi（它按别名匹配，能搜到）→ 落库
+--  → **又用同一条只匹配中/日名的 LIKE 查本地** → 还是 0 条。数据落了库，界面是空的。
+--
+--  这些别名一直躺在 Bangumi 的 infobox 里：
+--    {"key":"别名","value":[{"v":"Neon Genesis Evangelion"},{"v":"EVA"},...]}
+--  只是 SubjectDTO 没声明 infobox 字段，加上 ignoreUnknown=true，整块被 Jackson 丢掉。
+--  所以这不是「没有数据可用」，是数据送到了门口没接。
+--
+--  这一列就是那批别名的落点：逗号分隔，与 tags 同一套存法（只有 LIKE 读它，不切分，
+--  所以别名自身带逗号也不影响匹配）。写它的地方只有一处 —— AnimeService.applySubject
+--  （全项目唯一的 DTO→实体映射，见那个方法的注释）。
+--
+--  存量约 470 行走懒加载，不建回填任务：谁被搜到、被详情页打开、被定时增量捞到，
+--  谁就补上。因为详情页此前对「本地已有这行」直接早返回、永不回源，懒加载那条路
+--  这次一并修好了（见 AnimeService.getAnimeDetail）。
+--
+--  为什么 NULL 不加 NOT NULL：NULL 是有意义的业务状态 ——「这一行的别名还没补过」，
+--  正是详情页判断要不要回源一次的依据。写成 NOT NULL 或给默认值就丢掉这个信息了。
+--
+--  为什么不建索引：查询是 LIKE '%关键词%'，前缀不定，B 树索引帮不上忙；要它有用得
+--  开 pg_trgm 建 GIN 索引，而这张表目前 470 行，全表扫描比维护一棵只有写入开销、
+--  没有读取收益的树更便宜。（与 V4 末尾「故意没建的」两条同一个判断方式。）
+--  这一条在 PG 上比 H2 更值得写清楚：PG 上 LIKE '%...%' 是全表扫描，将来数据真涨到
+--  几万行，该做的是 pg_trgm 的 GIN 索引，而不是给这一列建一棵用不上的 B 树。
+--
+--  为什么长度写死 1000 而不是用 text：实体上是 @Column(length = 1000)，两边必须一致
+--  —— ddl-auto=validate 拿列的类型/长度与实体比对，不一致会在**启动时**直接失败。
+--  1000 的来历见 util/AnimeAliases.MAX_STORED_LENGTH：别名一条通常 5~10 项、几百字符
+--  （含英文全名与多地区译名），留了近一倍余量；Java 侧另有一道截断兜底，两者缺一不可
+--  —— 别名异常长时 INSERT 会失败，而那发生在「搜索回源落库」这条路上，等于把一次
+--  搜索打成 500，比搜不到更糟。
+--
+--  为什么写 IF NOT EXISTS：这份脚本在一台「Flyway 之前就存在的老库」上也会被执行到
+--  （那种库被 baseline 到 1，然后从 V2 起逐个补跑，见 application.yml 里 baseline 那段的
+--  注释），而它可能因为历史上手工建过这一列而已经存在。没有 IF NOT EXISTS，那次启动会
+--  直接以 "column already exists" 失败。
+--
+--  为什么新开 V5 而不是改 V1：V1~V4 已在开发库和线上执行过，Flyway 记着校验和 —— 改动
+--  已执行脚本的任何一个字节，下次启动都会以 "Migration checksum mismatch" 拒绝启动，
+--  唯一的修法是手工去改 flyway_schema_history 表。已经跑过的迁移是历史，只能往后加。
+--
+--  为什么这次两份脚本逐字相同：ALTER TABLE ... ADD COLUMN IF NOT EXISTS 是 PostgreSQL
+--  9.6+ 与 H2 都支持的写法（生产用 PG 16），所以没有方言差异要绕。V3 那边不能这么省事，
+--  是因为 PG 的 ALTER TABLE ... ADD CONSTRAINT 没有 IF NOT EXISTS。另外 VARCHAR(1000)
+--  在两个库上都不需要引号也不用区分 text/VARCHAR —— V1 里 summary 那种「PG 写 text 配
+--  H2 的无限长 VARCHAR」的麻烦，这一列一点都不沾。
+--
+--  与 h2/V5__add_anime_aliases.sql 一一对应（语句逐字相同，用例守着这一点）。
+-- ============================================================================
+
+ALTER TABLE anime ADD COLUMN IF NOT EXISTS aliases VARCHAR(1000);

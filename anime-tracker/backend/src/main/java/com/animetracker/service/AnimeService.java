@@ -19,7 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import com.animetracker.util.AnimeAliases;
 import com.animetracker.util.AnimeFields;
+import com.animetracker.util.SearchPatterns;
 import com.animetracker.util.TagTranslationUtil;
 
 import java.util.*;
@@ -84,28 +86,88 @@ public class AnimeService {
 
     // ==================== 搜索 ====================
 
-    /** 搜索：先本地，本地不够再调 API */
+    /** 回源时每次问 Bangumi 要多少条的下限（沿用改动前的 20） */
+    private static final int REMOTE_PAGE_SIZE_FLOOR = 20;
+
+    /**
+     * 一次搜索请求最多发几次回源请求.
+     *
+     * <p>必须有这个上限：page 可以从 URL 手填（Search.vue 支持 {@code ?page=N}），
+     * 没有上限时 {@code page=9999} 会让一个公开 GET 打出近万次外部 HTTP 请求 ——
+     * 与控制器给 limit 封顶要挡的是同一类事. 取 5 是因为正常翻页（一次往下一页）
+     * 每页只需要 1 次回源，5 次足够覆盖"从第 1 页连点几下"的情形.
+     */
+    private static final int MAX_REMOTE_REQUESTS_PER_SEARCH = 5;
+
+    /**
+     * 搜索：先本地，本地不够再按页回源.
+     *
+     * <p>改动前这里有两个坑，它们是同一个 bug 的两半：
+     * <ol>
+     *   <li>回源只取第 1 页（{@code searchSubjects(keyword, 1, ...)}），于是搜索结果
+     *       翻到第 2 页永远是空的；</li>
+     *   <li>回源落库之后**又用同一条 LIKE 重查本地**，而那条 LIKE 只匹配中/日名
+     *       —— 用户按别名/罗马音搜到的东西，落了库依然搜不出来，界面一片空白。</li>
+     * </ol>
+     * 第 2 条的另一半在 {@link AnimeRepository#searchByKeywordPattern}（新增 aliases 列）
+     * 与 {@link com.animetracker.util.AnimeAliases}（把 infobox 的别名接住）里修.
+     *
+     * <p>为什么判据是「{@code (page+1) * limit} 条」而不是改动前的「{@code limit} 条」：
+     * 本地是**累计前缀**，第 N 页的切片偏移只有在前 N 页都缓存过时才成立. 而且 total 是在
+     * 这里回源时才知道的（Bangumi 返回真实总数），所以必须每页都比当前页多备一页 ——
+     * 否则会出现自相矛盾的一幕：第 1 页回源后报 total=200、翻页控件显示 10 页；第 2 页本地
+     * 已够 40 条不再回源、于是报 total=40、控件缩成 2 页 —— 用户卡在第 2 页出不去.
+     * 多备一页之后每页恰好发 1 次回源，total 稳定为 Bangumi 的真实值.
+     */
     public Map<String, Object> searchAnime(String keyword, int page, int limit) {
         boolean hasKeyword = keyword != null && !keyword.trim().isEmpty();
 
-        if (hasKeyword) {
-            // 有关键词：本地搜
-            List<Anime> local = animeRepository.searchByKeyword(keyword.trim());
-            if (local.size() >= limit) {
-                return buildSearchResult(local, page, limit);
-            }
-            // 本地不够，调 API 补充
-            SearchResponse resp = bangumiApiClient.searchSubjects(keyword, 1, Math.max(limit, 20));
-            if (resp != null && resp.getData() != null && !resp.getData().isEmpty()) {
-                cacheAll(resp.getData());
-                local = animeRepository.searchByKeyword(keyword.trim());
-            }
-            return buildSearchResult(local, page, limit);
-        } else {
+        if (!hasKeyword) {
             // 无关键词：返回全部本地数据（排行页用）
             List<Anime> all = animeRepository.findByOrderByRatingDesc();
             return buildSearchResult(all, page, limit);
         }
+
+        String kw = keyword.trim();
+        String pattern = SearchPatterns.contains(kw);
+        int safePage = Math.max(page, 1);
+        int safeLimit = Math.max(limit, 1);
+
+        List<Anime> local = animeRepository.searchByKeywordPattern(pattern);
+
+        // Bangumi 报的匹配总数，拿不到就是 null（回源失败/无命中），此时退回本地口径
+        Integer remoteTotal = null;
+
+        long needed = (long) (safePage + 1) * safeLimit;
+        if (local.size() < needed) {
+            // 页码与每页条数必须用**同一个** limit：BangumiApiClient 里 offset 与 limit
+            // 是共用的（offset = (page-1)*limit），这里给一个值、切片用另一个值的话，
+            // 回源拿回的行与本地切片的偏移就对不上. FLOOR 只是"别问得太小"，不影响对齐.
+            int pageSize = Math.max(safeLimit, REMOTE_PAGE_SIZE_FLOOR);
+            int requests = 0;
+            for (int p = 1; p <= safePage + 1 && local.size() < needed
+                    && requests < MAX_REMOTE_REQUESTS_PER_SEARCH; p++) {
+                // 这一页的额度本地已经有了就别再拉：cacheAll 的每一次 upsert 都是
+                // findById + UPDATE + 重写 anime_tag 若干行，重复拉一页等于白写几百行
+                if (local.size() >= (long) p * pageSize) {
+                    continue;
+                }
+                SearchResponse resp = bangumiApiClient.searchSubjects(kw, p, pageSize);
+                if (resp == null || resp.getData() == null || resp.getData().isEmpty()) {
+                    // 远端没有更多了：这是翻到头，不是错误
+                    break;
+                }
+                requests++;
+                if (resp.getTotal() != null) {
+                    remoteTotal = resp.getTotal();
+                }
+                cacheAll(resp.getData());
+                local = animeRepository.searchByKeywordPattern(pattern);
+            }
+        }
+
+        int total = remoteTotal != null ? Math.max(remoteTotal, local.size()) : local.size();
+        return buildSearchResult(local, safePage, safeLimit, total);
     }
 
     // ==================== 排行 / 最新 / 浏览 ====================
@@ -185,20 +247,32 @@ public class AnimeService {
 
     // ==================== 详情 / 剧集 ====================
 
+    /**
+     * 详情. 顺带负责给存量行补别名.
+     *
+     * <p>为什么"本地已有这行"还要回源一次: aliases 是后加的列(V5), 存量约 470 行的它都是
+     * NULL, 而补数据的策略是懒加载 —— 其中一条路就是"用户打开了它的详情页". 改动前这里对
+     * 本地已有的行直接早返回, 于是那条路是**死的**: 那些行永远不会再被回源, 别名永远补不上.
+     * 加的条件是"缺别名才回源", 所以每个 subject 至多多这一次请求 —— 补上之后 aliases 非空,
+     * 下次直接命中早返回.
+     */
     @Transactional
     public Anime getAnimeDetail(Integer subjectId) {
         Optional<Anime> cached = animeRepository.findById(subjectId);
-        if (cached.isPresent()) {
+        if (cached.isPresent() && cached.get().getAliases() != null) {
             return cached.get();
         }
-        // 本地没有，调 API.
+        // 本地没有，或者本地这行还没拿到过别名，调 API.
         // 走 upsertAnime 而不是自己 save: 顺手把标签也写进 anime_tag
         // (以前这条路径只存主表, 于是"点开过的番剧"在标签索引里是缺的).
         SubjectDTO dto = bangumiApiClient.getSubjectDetail(subjectId);
         if (dto != null) {
             return upsertAnime(dto);
         }
-        return null;
+        // 回源失败时退回本地已有的那行, 而不是 null: 改动前"本地没有+回源失败"才回 null,
+        // 现在多出来的这一档是"本地有、只是没别名", 那种情况下把已有的行丢掉是纯粹的倒退
+        // (控制器对 null 回 404, 对一个存在的行回详情).
+        return cached.orElse(null);
     }
 
     @Transactional
@@ -501,6 +575,13 @@ public class AnimeService {
                     .map(TagDTO::getName)
                     .collect(Collectors.joining(",")));
         }
+        // infobox 的别名. 抽不出别名时**不覆盖** —— 搜索接口不是每个条目都带 infobox,
+        // 无条件写会把详情接口先前拿到的别名抹成 null. 这条"有值才覆盖"的规矩与上面每个
+        // 字段是同一个理由, 只是别名更容易踩: 它在两个接口上的有无差异比其它字段更大.
+        String aliases = AnimeAliases.join(dto.getInfobox());
+        if (aliases != null) {
+            a.setAliases(aliases);
+        }
         applyDerivedFields(a, LocalDate.now());
     }
 
@@ -614,8 +695,30 @@ public class AnimeService {
         return ep;
     }
 
+    /** 本地口径: 上报的总数就是手上这批行数(排行/标签浏览/筛选那几条路都走这个) */
     private Map<String, Object> buildSearchResult(List<Anime> list, int page, int limit) {
-        int total = list.size();
+        return buildSearchResult(list, page, limit, list.size());
+    }
+
+    /**
+     * @param reportedTotal 上报给调用方的「共找到多少条」, 与下面切片的边界**不是**一回事.
+     *
+     *  <p>为什么要把这两个数拆开: 搜索是懒回源的, 本地只有"已经拉过的那几页", 而 Bangumi
+     *  知道真实总数. 前端 Search.vue 的注释写着它就是这么理解 total 的
+     *  ("它回的 total 是**全部**匹配数, 不是这一页的条数"), 翻页控件也按
+     *  {@code ceil(total/20)} 决定要不要出现. 所以 total 得报真实值, 否则搜别名的第一步
+     *  就只报 20 条 → 控件不渲染 → 第 2 页永远点不到.
+     *
+     *  <p>但切片边界只能用手上真实有的行数: 拿远端总数当边界的话, 第 5 页在本地只有 40 行
+     *  时会 {@code subList(80, 100)} 直接抛 IndexOutOfBounds, 把一次搜索打成 500.
+     *  两者拆开之后, 边界内的页照常返回, 超出本地已有范围的页返回空列表(优雅降级).
+     */
+    private Map<String, Object> buildSearchResult(List<Anime> list, int page, int limit, int reportedTotal) {
+        int size = list.size();
+        // 上报值不得小于手上真实有的行数: 回源失败时 reportedTotal 缺省就是 size,
+        // 而远端总数偶尔会比本地匹配数小(两次查询之间数据变了), 那种情况下报小的会让
+        // 用户看不到自己已经看到的那些页.
+        int total = Math.max(reportedTotal, size);
 
         // 越界的分页参数在这里夹回合法区间, 目的是不让它走到 subList 去抛越界.
         // 控制器那层已经有 @Min/@Max, 拦的是网页来的请求; 这里管的是绕过控制器的
@@ -626,9 +729,9 @@ public class AnimeService {
         // 起点用 long 算: page 只封了下界, page=Integer.MAX_VALUE 时
         // (page-1)*limit 会溢出成负数, 于是又绕回 subList(负, 正) 的那个越界.
         long startL = (long) (safePage - 1) * safeLimit;
-        int start = startL >= total ? total : (int) startL;
-        int end = (int) Math.min(startL + safeLimit, total);
-        List<Anime> pageList = start < total ? list.subList(start, end) : Collections.emptyList();
+        int start = startL >= size ? size : (int) startL;
+        int end = (int) Math.min(startL + safeLimit, size);
+        List<Anime> pageList = start < size ? list.subList(start, end) : Collections.emptyList();
 
         Map<String, Object> data = new HashMap<>();
         data.put("list", pageList);

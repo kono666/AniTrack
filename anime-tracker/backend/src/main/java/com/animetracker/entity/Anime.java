@@ -20,6 +20,17 @@ public class Anime {
     @Column(name = "title_cn", length = 200)
     private String titleCn;          // 中文名
 
+    // Bangumi infobox 的「别名」, 逗号分隔(罗马音/英文/其它地区译名).
+    // 存在是为了让搜索能匹配它们 —— 见 util/AnimeAliases 与 V5 迁移脚本.
+    //
+    // NULL 是有意义的业务状态: "这一行的别名还没补过". 详情页据此决定要不要回源一次
+    // (AnimeService.getAnimeDetail). 所以这一列刻意没有 NOT NULL / 默认值.
+    //
+    // 长度必须与 V5 脚本里的 VARCHAR(1000) 逐字一致: ddl-auto=validate 拿列的类型与
+    // 实体比对, 不一致会在**启动时**失败(开发库过、生产库起不来, 或反过来).
+    @Column(length = 1000)
+    private String aliases;          // 别名，逗号分隔
+
     @Column(columnDefinition = "TEXT")
     private String summary;          // 简介
 
