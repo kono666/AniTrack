@@ -285,6 +285,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 取一个标量. ON_ERROR_STOP 不能省: 不加的话 psql 出错也返回 0,
+          # "查询炸了"和"查出来是空"在 CI 里长得一模一样.
+          scalar() {
+            docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" \
+              -v ON_ERROR_STOP=1 -tAq -c "$1" | tr -d '\r'
+          }
+
           docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -q <<'SQL'
           INSERT INTO anime (id, title, title_cn, cover_url, rating, rating_count,
                              total_episodes, date, status, tags)
@@ -299,14 +306,51 @@ jobs:
                  '完结',
                  'CI,预置'
             FROM generate_series(1, 25) AS g;
+
+          -- 第二组: 边界形状. 上面那 25 行是"整齐"的 —— 全都有票、都有日期、全都没有
+          -- 名次, 于是搬进 SQL 的那几条排序里, 分组 CASE 永远只走 ELSE 那一支:
+          -- "有名次的排在前面"、"缺日期的排在最后"、"没票的垫底"这些分支在 PostgreSQL
+          -- 上一次都没被执行过. 而单元测试跑在 H2 上, 那里全绿**推不出** PG 上也对 ——
+          -- ORDER BY 里 NULL 排哪, 两个库的默认正好相反(见 AnimeQueries 类注释).
+          --
+          -- status 一律用 'ci-smoke': 真数据里不会有这个值, 于是
+          -- /filter?status=ci-smoke 命中的**恰好**是这五行. 冒烟里那些"顺序等于某某"
+          -- 的断言要的正是这个 —— 否则库里混着什么会让期望值变成猜的.
+          --
+          -- 故意让"有名次的两行"id 比"没名次的三行"**大**: 这样按名次排出来的序列
+          -- 不是 id 升序, 于是那条断言顺带说明"真的排了", 而不是"照插入顺序返回".
+          INSERT INTO anime (id, title, rating, rating_count, sort_rank,
+                             date, season, status, tags)
+          VALUES (99000031, 'CI No Rank No Date', 9.0,  500, NULL, NULL,         NULL,      'ci-smoke', 'CI-SMOKE'),
+                 (99000032, 'CI No Rank No Vote', 9.9,  0,   NULL, '2019-10-01', '2019-10', 'ci-smoke', 'CI-SMOKE'),
+                 (99000033, 'CI No Rank No Rate', NULL, 500, NULL, '2021-01-01', '2021-01', 'ci-smoke', 'CI-SMOKE'),
+                 (99000034, 'CI Ranked One',      8.0,  500, 1,    '2019-04-01', '2019-04', 'ci-smoke', 'CI-SMOKE'),
+                 (99000035, 'CI Ranked Two',      8.0,  500, 2,    '2019-07-01', '2019-07', 'ci-smoke', 'CI-SMOKE');
+
+          -- 第三组: 同一部番挂在"同一个概念的三种写法"下 —— 这是 EXISTS 半连接存在的
+          -- 唯一理由. 标签名会先经 TagTranslationUtil 展开(百合 → 百合 / Yuri /
+          -- Girls Love), 三个名字解析成三个 tag id; 顶层 JOIN 会让下面这两部番各出现
+          -- **三次**, total 虚高、翻页还会重叠. EXISTS 每部至多一行.
+          -- 冒烟里那条"每部只出一行"钉的就是它, 而这条断言只在 PG 上跑得到.
+          INSERT INTO tag (name) VALUES ('百合'), ('Yuri'), ('Girls Love')
+            ON CONFLICT (name) DO NOTHING;
+          INSERT INTO anime_tag (anime_id, tag_id)
+          SELECT a.id, t.id
+            FROM anime a
+            JOIN tag t ON t.name IN ('百合', 'Yuri', 'Girls Love')
+           WHERE a.id IN (99000034, 99000035);
           SQL
 
-          # 种完自己数一遍. 不数的话, 万一这条 INSERT 静默没生效,
-          # 失败会以「工具结果里没有番剧行」的样子出现在几步之后, 指错方向.
-          n=$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAq \
-                -c "SELECT count(*) FROM anime WHERE id BETWEEN 99000001 AND 99000025" | tr -d '\r')
-          test "$n" = "25" || { echo "FAIL: 预置数据只进了 $n 条 (期望 25)"; exit 1; }
-          echo "ok: 预置 $n 条番剧 (id 99000001..99000025)"
+          # 种完自己数一遍. 不数的话, 万一某条 INSERT 静默没生效,
+          # 失败会以「工具结果里没有番剧行」或者「命中 0 条」的样子出现在几步之后,
+          # 指错方向. 三组各数各的, 这样报出来的错能直接指到是哪一组没进去.
+          n=$(scalar "SELECT count(*) FROM anime WHERE id BETWEEN 99000001 AND 99000025")
+          test "$n" = "25" || { echo "FAIL: 第一组只进了 $n 条 (期望 25)"; exit 1; }
+          n=$(scalar "SELECT count(*) FROM anime WHERE status = 'ci-smoke'")
+          test "$n" = "5" || { echo "FAIL: 第二组(边界形状)只进了 $n 条 (期望 5)"; exit 1; }
+          n=$(scalar "SELECT count(*) FROM anime_tag WHERE anime_id IN (99000034, 99000035)")
+          test "$n" = "6" || { echo "FAIL: 第三组关联只进了 $n 条 (期望 2 部 × 3 个写法 = 6)"; exit 1; }
+          echo "ok: 预置 25 条常规 + 5 条边界形状 + 6 条标签关联"
 
       - name: 冒烟 (全部经 nginx)
         env:
@@ -484,6 +528,138 @@ jobs:
           test "$src" = "$dst" && test "$src" != "0" \
             || { echo "FAIL: 恢复后 user 表 $dst 行 ≠ 源库 $src 行"; exit 1; }
           echo "ok: 恢复演练通过 (user 表 $dst 行, 与源库一致)"
+
+          echo "--- 10. 读路径: 排序与筛选在 PostgreSQL 上真的跑得动, 而且排对了 ---"
+          #
+          # 这一节补的是单元测试补不到的洞. 那些测试跑在 H2 上, 而下面这几样
+          # H2 与 PostgreSQL **不保证一致**:
+          #   · ORDER BY 里 NULL 排哪 —— H2 当最小值, PG 当最大值, DESC 下正好相反
+          #   · CASE 包住排序列
+          #   · LIKE ... ESCAPE '!'
+          #   · EXISTS 半连接
+          # 所以 H2 上全绿推不出 PG 上也对. 而"推不出"的那部分一旦错了, 症状是
+          # 首页"最近更新"打开一屏没有日期的番、翻页时相邻两页重叠 —— 都不是报错,
+          # 只是结果不对, 在本地永远看不到. 所以断言打在**排好的结果**上.
+          #
+          # 数据是预置的第二、三组(见上一步), 靠 status='ci-smoke' 与真数据隔开,
+          # 顺序与条数因此是确定的. 期望值是**手算**的, 不是把当前输出抄下来 ——
+          # 抄下来就把"现在什么样"当成了"应该什么样", 只能抓住"变了", 抓不住"错了".
+          #
+          # 手算的口径(五行: 31 无名次无日期 9.0/500票, 32 无名次9.9分0票,
+          # 33 无名次无评分500票, 34 名次1 8.0/500票 date 2019-04-01,
+          # 35 名次2 8.0/500票 date 2019-07-01):
+          #   按名次 -> 34 35 (有名次, 名次升序) 然后 31 32 33 (无名次, id 兜底)
+          #   按日期 -> 33(2021-01) 32(2019-10) 35(2019-07) 34(2019-04) 31(无日期, 最后)
+          #   按评分 -> 31 34 35 (有票的按加权分, 同等票数下 9.0 > 8.0) 然后 32 33
+          #             —— 9.9 分 0 票的垫底, 正是加权要修的那件事
+
+          # 从 ApiResponse 里取一段. $1 是 python 表达式, 根是 d —— 也就是响应
+          # 里那个 "data" 字段(裸数组那类接口, 它本身就是一个 list).
+          # 写成一行是因为这是一段 YAML 块标量里的多行字符串 —— 缩进稍微一动
+          # python 就会 IndentationError, 而那种错的报错信息完全指不到 YAML 上.
+          # 末尾的 || true 是给 set -e 看的: 取不到就让调用方拿着空串去比对,
+          # 失败信息里会连原始 body 一起打出来, 比让 python 抛栈清楚.
+          jq_() { python3 -c "import json,sys;d=json.load(sys.stdin)['data'];print($1)" 2>/dev/null || true; }
+
+          # 顺序断言: 比对整条 id 序列
+          expect_order() {  # <名字> <期望 id 序列> <url>
+            local name="$1" expect="$2" url="$3" body got
+            body=$(curl -s "$url")
+            got=$(printf '%s' "$body" | jq_ '" ".join(str(i["id"]) for i in d["list"])')
+            test "$got" = "$expect" \
+              || { echo "FAIL: $name 的顺序不对"; echo "  期望: $expect"; echo "  实际: $got";
+                   echo "$body"; exit 1; }
+            echo "ok: $name -> $got"
+          }
+
+          # 条数断言: 用在只关心"命中了哪些行"的地方
+          expect_total() {  # <名字> <期望条数> <url>
+            local name="$1" expect="$2" url="$3" body total
+            body=$(curl -s "$url")
+            total=$(printf '%s' "$body" | jq_ 'd["total"]')
+            test "$total" = "$expect" \
+              || { echo "FAIL: $name 期望 $expect 条, 实际 '$total'"; echo "$body"; exit 1; }
+            echo "ok: $name -> $total 条"
+          }
+
+          # 裸数组那一种(by-tag 的契约没变, 仍然是数组).
+          # 断言的是"这两部都在, 而且每部只出现一次", 不是"恰好等于这两部":
+          # 前者已经足以抓住顶层 JOIN 那个 bug(它会把每部重复三遍), 又不会因为
+          # 将来库里多出一部真挂着"百合"的番而变红 —— 那与本条要验的事无关,
+          # 用精确相等就会把无关的数据变动变成一次 CI 失败.
+          expect_tagged_rows() {  # <tag> <必须出现的 id>...
+            local tag="$1"; shift
+            local body got rows uniq id
+            body=$(curl -s -G --data-urlencode "tag=$tag" "$BASE/api/bangumi/by-tag")
+            got=$(printf '%s' "$body" | jq_ '" ".join(str(i["id"]) for i in d)')
+            rows=$(printf '%s' "$got" | wc -w)
+            uniq=$(printf '%s' "$got" | tr ' ' '\n' | sort -u | grep -c . || true)
+            test "$rows" = "$uniq" \
+              || { echo "FAIL: by-tag 里同一部番出现了多次 (顶层 JOIN 的症状)"; \
+                   echo "  实际: $got"; echo "$body"; exit 1; }
+            for id in "$@"; do
+              case " $got " in
+                *" $id "*) ;;
+                *) echo "FAIL: by-tag 的结果里没有 $id (EXISTS 没命中?)"; \
+                   echo "  实际: $got"; echo "$body"; exit 1 ;;
+              esac
+            done
+            echo "ok: by-tag 每部番只出一行, 且 $* 都在 -> $got"
+          }
+
+          FILTER="$BASE/api/bangumi/filter?status=ci-smoke&limit=50"
+
+          expect_order "按名次排(有名次在前, 无名次按 id 兜底)" \
+                       "99000034 99000035 99000031 99000032 99000033" "$FILTER&sort=rank"
+          # 这一条是整节里最要紧的: 少了 ORDER BY 里那条 CASE, PG 会把 NULL 当最大值
+          # 排到最前, 期望序列就变成 99000031 打头 —— 而 H2 上同一个断言照样是绿的.
+          expect_order "按播出日排(缺日期的排最后)" \
+                       "99000033 99000032 99000035 99000034 99000031" "$FILTER&sort=date"
+          # 顺带证明 sort=rating 真的换了序: 它在工具描述里对外给了那么久, 以前却是个
+          # 假选项(传 rating 掉进 rank 分支, 拿回来的和 sort=rank 一模一样).
+          expect_order "按加权评分排(没票的垫底)" \
+                       "99000031 99000034 99000035 99000032 99000033" "$FILTER&sort=rating"
+
+          # 三个可选条件各自单独命中一次 —— :param IS NULL 那一套要**两边都走过**:
+          # 上面三条一条筛选条件都没给(全走 IS NULL 那一支), 这三条则都给了值.
+          expect_total "year=2019 (LIKE 前缀匹配)" 3 "$FILTER&year=2019"
+          expect_total "season=2019-04 (精确相等)" 1 "$FILTER&season=2019-04"
+
+          # 年份查的是前缀, 所以模式串里的 % 必须被转义. 转义一旦失效,
+          # "20%" 会退化成"匹配所有 20 开头的", 这里就会命中 3 条而不是 0 ——
+          # 也就是说这条断言对"转义有没有生效"是两向的, 不是单边的.
+          # (URL 里的 %25 是 % 的转义, 与 SQL 侧的 ! 转义是两件事.)
+          expect_total "year=20% (百分号不是通配符)" 0 "$FILTER&year=20%25"
+
+          # 分页: 第 2 页是同一个序的第二段, 既不重也不漏
+          expect_order "第二页(每页 3 条)接着第一页" \
+                       "99000034 99000031" "$FILTER&sort=date&page=2&limit=3"
+
+          # EXISTS 半连接: 一部番挂在"百合"的三种写法下, 只该出**一行**.
+          # 顶层 JOIN 这里会给出 [99000035 99000034 99000035 99000034 ...] ——
+          # 多出来的行会把 total 抬高、并让 LIMIT/OFFSET 去数重复行.
+          # (tag 用 --data-urlencode 交给 curl 编码, 不手写 %E7%99%BE... 那种串:
+          #  手写的百分号编码在有人改了标签名之后会静默失配.)
+          expect_tagged_rows "百合" 99000034 99000035
+
+          # filter-meta 走的是另一条 SQL(SUBSTRING 投影 + DISTINCT), 只断言
+          # "2019 在里面", 不断言整份列表 —— 那份列表取决于库里真有什么数据.
+          assert_status 200 "$BASE/api/bangumi/filter-meta"
+          curl -s "$BASE/api/bangumi/filter-meta" | grep -q '"2019"' \
+            || { echo "FAIL: filter-meta 的年份里没有 2019 (SUBSTRING 投影没生效?)"; exit 1; }
+          echo "ok: filter-meta 里有 2019"
+
+          # 两条不带筛选条件的公开读路径也走一遍. limit=200 就是 @Max(200) 那个上界,
+          # 顺带证明它没被写成 400.
+          assert_status 200 "$BASE/api/bangumi/ranking?sort=rank&limit=200"
+          assert_status 200 "$BASE/api/bangumi/ranking?sort=date&limit=200"
+          # 第一条必须有日期. 缺日期的行只要排到了最前, 这一条就红 ——
+          # 这正是"PG 把 NULL 当最大值"那个分叉在真实接口上的样子.
+          first_date=$(curl -s "$BASE/api/bangumi/ranking?sort=date&limit=200" \
+                       | jq_ 'd[0]["date"]')
+          test -n "$first_date" && test "$first_date" != "None" \
+            || { echo "FAIL: 最近更新的第一条没有日期 —— 缺日期的行排到了最前面"; exit 1; }
+          echo "ok: 最近更新的第一条有日期 ($first_date)"
 
           echo "全部冒烟通过"
 

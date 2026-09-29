@@ -104,12 +104,24 @@ public class BangumiController {
 
     // ══════════ 排行榜 ══════════
 
-    /** limit 同样只封下界: 负数会走到 subList(0, -n), 与搜索那边是同一个 500 */
+    /**
+     * 排行榜 / 最近更新.
+     *
+     * <p>{@code limit} 的上界 200 是<b>跟随前端现状</b>定的, 不是推导出来的:
+     * {@code Home.vue} 的"新番时间表"取的就是 {@code getRanking('date', 200)}.
+     * 在下推分页之前这里只封了下界, {@code ?limit=999999} 会把整张表倒出来
+     * (公开 GET, 不需要登录); 现在读的行数封在这一页上, 但响应体与实例化仍然
+     * 与 limit 同阶, 所以上界还是要有. 要调大它, 先看前端是不是真的需要.
+     *
+     * <p>{@code sort=date} 走的是"最近更新", 序与 {@code sort=rank} 不同
+     * (播出日倒序 vs 加权评分倒序), 但两者读的行数都封在 limit 上.
+     */
     @GetMapping("/ranking")
     public ApiResponse<List<AnimeDTO>> getRanking(
             @RequestParam(defaultValue = "rank") String sort,
             @RequestParam(defaultValue = "20")
-            @Min(value = 1, message = "条数不能小于 1") Integer limit) {
+            @Min(value = 1, message = "条数不能小于 1")
+            @Max(value = 200, message = "条数不能大于 200") Integer limit) {
 
         List<Anime> list = "date".equals(sort)
                 ? animeService.getLatest(limit)

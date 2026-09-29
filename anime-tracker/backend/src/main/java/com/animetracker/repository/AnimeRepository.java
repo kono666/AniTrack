@@ -1,75 +1,140 @@
 package com.animetracker.repository;
 
 import com.animetracker.entity.Anime;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
+import java.util.Collection;
 import java.util.List;
 
+/**
+ * 番剧表的读路径.
+ *
+ * <p><b>语句本身都在 {@link AnimeQueries} 里</b>, 这个接口只负责"哪个方法用哪条语句".
+ * 排序口径(尤其是 NULL 排哪)在那边只写一遍, 理由见那个类的注释 —— 这里重复一遍
+ * 最容易出的事: 同一个口径被抄成三份, 某一份少了半个 CASE, 接口照样返回 200,
+ * 只是偶尔排错、分页跟着漏行.
+ *
+ * <p><b>返回 {@code List<Anime>} 而不是 {@code Page<Anime>} 是刻意的.</b> 返回
+ * {@code Page} 会让 Spring Data 顺着方法名再发一条 count 查询, 而我们要的 count
+ * 必须由 {@link AnimeQueries#FILTER_WHERE} 同一份 WHERE 拼出来 —— 否则"这一页是谁"
+ * 与"一共有多少条"来自两套各自演化的条件, 迟早对不上. 所以取页与计数是两条显式的
+ * 方法, 由 service 配对调用.
+ *
+ * <p>{@code Pageable} 一律传不带 {@code Sort} 的 {@code PageRequest}: 排序写在查询里,
+ * 再带一个 Sort 会被拼成第二段 ORDER BY.
+ */
 public interface AnimeRepository extends JpaRepository<Anime, Integer> {
-    List<Anime> findByOrderByRankAsc();
-    List<Anime> findByOrderByDateDesc();
 
     /**
-     * 排行榜: 按**加权评分**倒序, 而不是评分原值.
+     * 排行榜 / 无关键词浏览: 按<b>加权评分</b>倒序取一页.
      *
-     * <p>为什么必须加权、m 与 C 为什么取那两个值, 见
-     * {@link com.animetracker.config.RankingProperties} —— 完整推导在那里.
-     * 这里只记三件与这条 SQL 本身有关的事.
+     * <p>排序表达式与那三件必须留意的事(没票的排最后而不是被过滤掉、{@code * 1.0}
+     * 不是多余的、{@code a.id} 兜底)都写在 {@link AnimeQueries#ORDER_WEIGHTED_DESC} 上.
      *
-     * <p><b>一, 没有票的条目排在最后, 而不是被过滤掉.</b> 排序分成两级: 先按
-     * "有没有票"分成 0/1 两组, 组内再按加权分倒序. 之所以不写成
-     * {@code WHERE rating_count > 0}, 是因为 {@code rating_count} 允许为 NULL
-     * (历史行, 以及 Bangumi 偶尔不返回 rating 块的条目), 过滤会把它们**悄悄删掉**
-     * —— 而这是排行榜唯一的数据源, 一旦库里多数行都是 NULL, 榜就空了, 接口还照样
-     * 返回 200. 分组排序同时保证"没票的不会霸榜"和"榜不会空", 是这两条约束里唯一
-     * 都满足的写法. 把 {@code <= 0} 也算成"没有票", 与
-     * {@link com.animetracker.util.AnimeFields#rankOf} 把 {@code rank <= 0} 归一成
-     * NULL 是同一个口径: <b>Bangumi 的 0 表示"没有这个值", 不是"值为零"</b>.
-     *
-     * <p><b>一之补, 那个 {@code CASE} 在第二排序键上又写了一遍, 不是重复.</b>
-     * 如果第二键直接写加权表达式, 没票的那些行算出来会是 NULL —— 而
-     * <b>NULL 在 {@code DESC} 里排哪, H2 与 PostgreSQL 的默认正好相反</b>
-     * (H2 把 NULL 当最小值, PG 当最大值; 与
-     * {@code AnimeService#getByTags} 那段注释警告的是同一件事). 也就是说"没票的行
-     * 之间谁在前"会随数据库而变, 而分页是在这个序上切片的. 写成
-     * {@code CASE ... THEN 0 ELSE 加权表达式 END} 之后, 没票的行第二键统一是常量 0
-     * (彼此相等, 交给 {@code a.id} 定序), 有票的行则必然大于 0 —— 整条 ORDER BY
-     * 里不再出现任何 NULL, 两个库上排出来的序完全一致. 这个坑是
-     * {@code AnimeRankingIntegrationTest#rowsWithoutVotesSortLastAndSurvive} 在 H2 上
-     * 抓出来的.
-     *
-     * <p><b>二, {@code * 1.0} 不是多余的.</b> {@code rating_count} 是整型, 整数除法
-     * 在 H2 与 PostgreSQL 上都会截断({@code 1/201} 得 0), 那样算出来的权重恒为 0,
-     * 整个表达式退化成 {@code rating} 原值 —— 也就是这次要修的那个 bug 原样复活,
-     * 而且不报错、不抛异常, 只是榜首又变回那条 1 票 10 分的番. 乘 1.0 把分子提成
-     * 浮点, 两个参数也声明成 {@code double}, 是同一个理由. 这条有测试钉着
-     * (见 {@code AnimeRankingIntegrationTest} 里"加权序与原始分序不一致"那一组).
-     *
-     * <p><b>三, 最后按 {@code a.id} 兜底</b>, 理由与
-     * {@link #searchByKeywordPattern} 里那条相同: 没有它, 同分的行(最典型的就是
-     * 所有"没票"的行, 它们的第二排序键是 NULL)在两次查询之间顺序不定, 而分页是
-     * 在这个序上切片的. id 就是 Bangumi 的 subject_id, 天然唯一, 不必再加 tiebreaker.
+     * <p>传 {@code Pageable.unpaged()} 就是"整张榜", {@code AnimeRankingIntegrationTest}
+     * 用的就是那种 —— 它要断言的是相对次序, 但需要看得见整张榜.
      */
-    @Query("""
-            SELECT a FROM Anime a
-             ORDER BY
-               CASE WHEN a.rating IS NULL OR a.rating <= 0
-                      OR a.ratingCount IS NULL OR a.ratingCount <= 0
-                    THEN 1 ELSE 0 END ASC,
-               CASE WHEN a.rating IS NULL OR a.rating <= 0
-                      OR a.ratingCount IS NULL OR a.ratingCount <= 0
-                    THEN 0
-                    ELSE ((a.ratingCount * 1.0 / (a.ratingCount + :priorVotes)) * a.rating
-                          + (:priorVotes * 1.0 / (a.ratingCount + :priorVotes)) * :priorScore)
-               END DESC,
-               a.id ASC
-            """)
-    List<Anime> findByWeightedScoreDesc(@Param("priorVotes") double priorVotes,
-                                        @Param("priorScore") double priorScore);
+    @Query(AnimeQueries.RANKED)
+    List<Anime> findRankedByWeightedScore(@Param("priorVotes") double priorVotes,
+                                          @Param("priorScore") double priorScore,
+                                          Pageable pageable);
+
+    /** 最近更新的前几部: 按播出日倒序, 缺日期的排最后(口径见 {@link AnimeQueries#ORDER_DATE_DESC_NULL_LAST}) */
+    @Query(AnimeQueries.LATEST)
+    List<Anime> findLatest(Pageable pageable);
+
+    /**
+     * 年份下拉框的取值: date 的前四位, 已去重.
+     *
+     * <p>改前这里是"把整张表按日期读回来, 再在 Java 里取 substring + distinct" ——
+     * 只为了得到三十来个字符串, 而读到的是几万个实体.
+     */
+    @Query(AnimeQueries.DISTINCT_YEAR_PREFIXES)
+    List<String> findDistinctYearPrefixes();
+
+    // ==================== 筛选: 不带标签 ====================
+    //
+    // 三个筛选条件都是可选的, 传 null 表示"不限". 年份要先经
+    // SearchPatterns.prefix 拼成已转义的 LIKE 模式串再传进来 —— 方法名带 Pattern
+    // 就是为了让这件事在调用处一眼可见, 免得有人把用户输入直接塞进来.
+
+    @Query(AnimeQueries.FILTERED_RANK)
+    List<Anime> findFilteredByRank(@Param("yearPattern") String yearPattern,
+                                   @Param("season") String season,
+                                   @Param("status") String status,
+                                   Pageable pageable);
+
+    @Query(AnimeQueries.FILTERED_DATE)
+    List<Anime> findFilteredByDate(@Param("yearPattern") String yearPattern,
+                                   @Param("season") String season,
+                                   @Param("status") String status,
+                                   Pageable pageable);
+
+    /** {@code sort=rating} —— 与排行榜同一个加权口径, 不是评分原值 */
+    @Query(AnimeQueries.FILTERED_RATING)
+    List<Anime> findFilteredByRating(@Param("yearPattern") String yearPattern,
+                                     @Param("season") String season,
+                                     @Param("status") String status,
+                                     @Param("priorVotes") double priorVotes,
+                                     @Param("priorScore") double priorScore,
+                                     Pageable pageable);
+
+    @Query(AnimeQueries.COUNT_FILTERED)
+    long countFiltered(@Param("yearPattern") String yearPattern,
+                       @Param("season") String season,
+                       @Param("status") String status);
+
+    // ==================== 筛选: 限定在若干标签下 ====================
+
+    @Query(AnimeQueries.TAGGED_RANK)
+    List<Anime> findFilteredByTagRank(@Param("yearPattern") String yearPattern,
+                                      @Param("season") String season,
+                                      @Param("status") String status,
+                                      @Param("tagIds") Collection<Long> tagIds,
+                                      Pageable pageable);
+
+    /**
+     * 播出日倒序的标签查询. <b>按标签浏览({@code /api/bangumi/by-tag})走的也是这一条</b>
+     * —— 三个筛选条件传 null 即可.
+     *
+     * <p>不给它单开一个"只差三个 null"的方法, 是因为那等于把
+     * {@link AnimeQueries#ORDER_DATE_DESC_NULL_LAST} 那套口径又摆到第二个物理位置上.
+     */
+    @Query(AnimeQueries.TAGGED_DATE)
+    List<Anime> findFilteredByTagDate(@Param("yearPattern") String yearPattern,
+                                      @Param("season") String season,
+                                      @Param("status") String status,
+                                      @Param("tagIds") Collection<Long> tagIds,
+                                      Pageable pageable);
+
+    @Query(AnimeQueries.TAGGED_RATING)
+    List<Anime> findFilteredByTagRating(@Param("yearPattern") String yearPattern,
+                                        @Param("season") String season,
+                                        @Param("status") String status,
+                                        @Param("tagIds") Collection<Long> tagIds,
+                                        @Param("priorVotes") double priorVotes,
+                                        @Param("priorScore") double priorScore,
+                                        Pageable pageable);
+
+    @Query(AnimeQueries.COUNT_TAGGED)
+    long countFilteredByTag(@Param("yearPattern") String yearPattern,
+                            @Param("season") String season,
+                            @Param("status") String status,
+                            @Param("tagIds") Collection<Long> tagIds);
+
+    // ==================== 关键词搜索 ====================
 
     /**
      * 按关键词找番剧: title / title_cn / aliases 三列任一命中, 大小写不敏感.
+     *
+     * <p><b>这一条没有分页, 是刻意的.</b> 搜索是<b>懒回源</b>的: 本地不足时按页去
+     * Bangumi 拉, 而"本地现在够不够第 N 页"要拿累计到的行数来判(见
+     * {@code AnimeService#searchAnime} 里那段注释). 把切片下推给 SQL 之后, 本地就
+     * 只剩"这一页", 那个判据无从算起. 所以搜索保持"整份取回、在内存里按累计前缀切片",
+     * 而它每一页最多回源 5 次、每次 20 条, 累计量有上界.
      *
      * <p>参数是**拼好的 LIKE 模式**(含首尾 %, 特殊字符已用 {@code !} 转义), 不是原始
      * 关键词 —— JPQL 里没有任何字符串函数能把 % 和 _ 转义掉, 只能在 Java 侧拼好再传进来

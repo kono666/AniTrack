@@ -15,6 +15,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,15 +47,20 @@ public class AnimeService {
     public static final int BY_TAG_LIMIT = 50;
 
     /**
-     * 播出日倒序, 缺日期的排最后.
+     * 播出日倒序, 缺日期的排最后 —— <b>只在一条回退路径上还在用</b>.
      *
-     * <p>抽成一处是因为它原本在两条路径上各写了一份(标签查询与筛选接口),
-     * 而注释里还专门写着"与另一处保持一致, 免得两处口径再次分叉" —— 保持一致的
-     * 正确做法是只有一份. 这个口径本身在批次 2.1 修过一次: 缺日期的行一度排在最前,
-     * 首页"最近更新"打开就是一屏没有日期的番. 当时那版写的是
-     * {@code nullsLast(...).compare(b, a)} —— 内外两次"反过来"叠在一起, 净效果
-     * 恰好与意图相反; 也刻意不写成 {@code nullsLast().reversed()}, 因为 reversed()
-     * 会把 null 的处理一起翻过去, 同一个坑再踩一遍.
+     * <p>它的 SQL 版是 {@code AnimeQueries.ORDER_DATE_DESC_NULL_LAST}, 排序/筛选/
+     * 分页/标签浏览四条读路径用的都是那一条. 这里保留 Java 版, 是因为
+     * {@code anime_tag} 为空(迁移未完成)时的回退分支必须按 {@code anime.tags}
+     * 那一列在内存里筛, 筛完就得在内存里排. 这是一处**已知的重复**: 两种写法必须
+     * 保持同一口径, 而它们分叉时不会报错, 只会让"缺日期的排在最后"在其中一条路上
+     * 悄悄失效. 记在这里, 别让它变成暗的重复.
+     *
+     * <p>口径本身在批次 2.1 修过一次: 缺日期的行一度排在最前, 首页"最近更新"
+     * 打开就是一屏没有日期的番. 当时那版写的是 {@code nullsLast(...).compare(b, a)}
+     * —— 内外两次"反过来"叠在一起, 净效果恰好与意图相反; 也刻意不写成
+     * {@code nullsLast().reversed()}, 因为 reversed() 会把 null 的处理一起翻过去,
+     * 同一个坑再踩一遍.
      */
     private static final Comparator<Anime> DATE_DESC_UNKNOWN_LAST = (a, b) -> {
         String da = a.getDate();
@@ -88,18 +95,37 @@ public class AnimeService {
         this.rankingProperties = rankingProperties;
     }
 
+    /** {@code sort=date} 的口径标记. 与 Agent 工具 {@code filter_anime} 对外给的枚举值是同一批字符串 */
+    private static final String SORT_DATE = "date";
+
+    /** {@code sort=rating} 的口径标记. 它指的是**加权评分**, 与排行榜同一个序, 不是评分原值 */
+    private static final String SORT_RATING = "rating";
+
     /**
-     * 排行榜的那一条查询: 全表按加权评分取回.
+     * SQL 层能接受的最大起点.
      *
-     * <p>抽成一个方法而不是在调用处各写一遍仓库方法, 是因为它有**三个**调用点 ——
-     * 浏览模式的默认序({@link #searchAnime} 无关键词分支)、{@link #getRanking} 的
-     * 首次查询、以及回源补齐之后的**重查**. 三处必须是同一个序: 只改前两处的话,
-     * 表现是"平时是对的, 一旦本地不够触发回源就变回按评分原值排"—— 最难发现的那种,
-     * 因为它在数据少的时候不出现.
+     * <p>切片下推之后, 起点最终交给 {@code Query.setFirstResult(int)} —— 是个 int.
+     * 而 {@code (page-1)*limit} 可以在 int 里溢出成负数(见 {@link #buildSearchResult}
+     * 里那段注释记着的老 bug). 溢出之后库收到的是"从负数开始取一页", 两个库的表现
+     * 既不统一, 也不报错. 所以在自己的 long 算式里先把它接住, 超了就返回空页.
      */
-    private List<Anime> rankedByWeightedScore() {
-        return animeRepository.findByWeightedScoreDesc(
-                rankingProperties.getPriorVotes(), rankingProperties.getPriorScore());
+    private static final long MAX_SQL_OFFSET = Integer.MAX_VALUE;
+
+    /**
+     * 排行榜那条查询的一页.
+     *
+     * <p>抽成一个方法而不是在调用处各写一遍仓库方法, 是因为它有**两个**调用点 ——
+     * {@link #getRanking} 的首次查询、以及回源补齐之后的**重查**. 两处必须是同一个序:
+     * 只改前一处的话, 表现是"平时是对的, 一旦本地不够触发回源就变回按评分原值排"
+     * —— 最难发现的那种, 因为它在数据少的时候不出现.
+     *
+     * <p>无关键词的浏览分支({@link #searchAnime})走的是**同一个序**, 但页码由调用方
+     * 给, 所以走 {@link #browsePage}(那边的起点要能越界, 这里只需要第一页).
+     */
+    private List<Anime> rankingPage(int limit) {
+        return animeRepository.findRankedByWeightedScore(
+                rankingProperties.getPriorVotes(), rankingProperties.getPriorScore(),
+                PageRequest.of(0, limit));
     }
 
     // ==================== 搜索 ====================
@@ -141,11 +167,10 @@ public class AnimeService {
         boolean hasKeyword = keyword != null && !keyword.trim().isEmpty();
 
         if (!hasKeyword) {
-            // 无关键词：返回全部本地数据（排行页用）。序与 /bangumi/ranking 一致 ——
+            // 无关键词 = 浏览模式(排行页就是这么打的). 序与 /bangumi/ranking 一致 ——
             // 两处都是"把最好的排前面", 用两个不同的序会让同一批数据在两个页面上
             // 排出两个榜首, 看起来就像其中一个坏了。
-            List<Anime> all = rankedByWeightedScore();
-            return buildSearchResult(all, page, limit);
+            return browsePage(page, limit);
         }
 
         String kw = keyword.trim();
@@ -194,6 +219,40 @@ public class AnimeService {
     // 以下全部从本地缓存读取，启动预加载器已拉取 Top 200 到本地
 
     /**
+     * 浏览模式的一页: 加权序, 排序与切片都在 SQL 里.
+     *
+     * <p>改动前这条分支是"把整张表读回来, 再在内存里 {@code subList} 切片" ——
+     * 与排行榜那条读的是同一份整表数据, 只是切片发生在 Java 侧. 回填到近三万条之后,
+     * 一个**不带关键词的公开 GET**(浏览页就是这么打的)就会把整张表经 JDBC 传回来、
+     * 实例化成三万个实体, 只为渲染其中 20 个.
+     *
+     * <p>切片下推之后, {@link #buildSearchResult} 那套"越界夹取"就无从谈起了 ——
+     * 它夹的是内存列表的下标, 而这里手上只有一页. 所以越界改由 offset 守卫承担:
+     * 起点超过 {@link #MAX_SQL_OFFSET}(或超过总行数)时库返回空页, 语义与改前一致
+     * (第 5 页在只有 40 行时就是空的), 只是不再需要先读回全部行才知道这件事.
+     *
+     * <p>{@code total} 报的是<b>全表行数</b>, 与改前一致: 改前那版走
+     * {@code buildSearchResult(all, page, limit)} 的三参重载, 上报值就是手上全部行数.
+     * 前端按 {@code ceil(total/limit)} 算翻页控件, 所以这个数必须还是全集大小.
+     */
+    private Map<String, Object> browsePage(int page, int limit) {
+        int safePage = Math.max(page, 1);
+        int safeLimit = Math.max(limit, 1);
+        int total = (int) Math.min(animeRepository.count(), Integer.MAX_VALUE);
+
+        long offset = (long) (safePage - 1) * safeLimit;
+        if (offset >= total || offset > MAX_SQL_OFFSET) {
+            // 越界与溢出合成一条出口: 两者的结果都是"这一页没有行", 而 total 照报.
+            return pageResult(Collections.emptyList(), total, safePage);
+        }
+        return pageResult(
+                animeRepository.findRankedByWeightedScore(
+                        rankingProperties.getPriorVotes(), rankingProperties.getPriorScore(),
+                        PageRequest.of(safePage - 1, safeLimit)),
+                total, safePage);
+    }
+
+    /**
      * 排行榜.
      *
      * <p>序是**加权评分**而不是评分原值 —— 否则"1 个人打 10 分"会稳稳压过
@@ -201,30 +260,48 @@ public class AnimeService {
      * {@link RankingProperties}.
      *
      * <p>下面那次回源补齐之后的**重查**必须走同一个序, 所以两处都调
-     * {@link #rankedByWeightedScore()} 而不是各写一遍仓库方法.
+     * {@link #rankingPage} 而不是各写一遍仓库方法.
+     *
+     * <p>回源判据从"手上这一批够不够 20 条"换成了 {@code count() < min(limit,20)}:
+     * 手上不再有"整张榜", 只有 limit 条封顶的一页, 页长与"库里有多少"不是一回事
+     * (改前 {@code local.size()} 恰好等于库存量, 是那次下推之前才成立的巧合).
      */
     @Cacheable(value = "ranking", key = "'rank_' + #limit")
     public List<Anime> getRanking(int limit) {
-        List<Anime> local = rankedByWeightedScore();
+        // PageRequest.of(0, 0) 会抛, 而 limit 由 Agent 工具与内部调用方给, 绕得过控制器的 @Min
+        if (limit <= 0) {
+            return Collections.emptyList();
+        }
+        List<Anime> local = rankingPage(limit);
         // 本地不够20条时从 API 补充热门排行
-        if (local.size() < Math.min(limit, 20)) {
+        if (animeRepository.count() < Math.min(limit, 20)) {
             try {
                 SearchResponse resp = bangumiApiClient.searchSubjects("", 1, Math.max(limit, 30));
                 if (resp != null && resp.getData() != null) {
                     cacheAll(resp.getData());
-                    local = rankedByWeightedScore();
-                    log.info("排行榜: API补充后共 {} 条", local.size());
+                    local = rankingPage(limit);
+                    log.info("排行榜: API补充后共 {} 条", animeRepository.count());
                 }
             } catch (Exception e) {
                 log.warn("排行榜API补充失败: {}", e.getMessage());
             }
         }
-        return local.size() > limit ? local.subList(0, limit) : local;
+        return local;
     }
 
+    /**
+     * 最近更新: 按播出日倒序取前 {@code limit} 条.
+     *
+     * <p>序与 {@code sort=date} 的筛选、按标签浏览共用同一套 SQL 口径
+     * (见 {@code AnimeQueries.ORDER_DATE_DESC_NULL_LAST}) —— 改动前这三处各自
+     * 写了一份排序, 靠注释互相提醒"要和另一处保持一致". 保持一致的正确做法是只有一份.
+     */
     @Cacheable(value = "latest", key = "#limit")
     public List<Anime> getLatest(int limit) {
-        List<Anime> local = animeRepository.findByOrderByDateDesc();
+        if (limit <= 0) {
+            return Collections.emptyList();
+        }
+        List<Anime> local = animeRepository.findLatest(PageRequest.of(0, limit));
         // 检查最新一条是否在3个月内, 超过则从API补充
         boolean needRefresh = local.isEmpty();
         if (!needRefresh && local.get(0).getDate() != null) {
@@ -234,7 +311,7 @@ public class AnimeService {
                     java.time.YearMonth topYm = java.time.YearMonth.parse(topDate.substring(0, 7));
                     needRefresh = topYm.isBefore(java.time.YearMonth.now().minusMonths(3));
                 }
-            } catch (Exception e) { needRefresh = local.size() < limit; }
+            } catch (Exception e) { needRefresh = animeRepository.count() < limit; }
         }
 
         if (needRefresh) {
@@ -247,13 +324,13 @@ public class AnimeService {
                     }
                     Thread.sleep(500);
                 }
-                local = animeRepository.findByOrderByDateDesc();
-                log.info("最新: API补充后共 {} 条", local.size());
+                local = animeRepository.findLatest(PageRequest.of(0, limit));
+                log.info("最新: API补充后共 {} 条", animeRepository.count());
             } catch (Exception e) {
                 log.warn("最新API补充失败: {}", e.getMessage());
             }
         }
-        return local.size() > limit ? local.subList(0, limit) : local;
+        return local;
     }
 
     /** 每日放送：缓存2小时 (番剧排期不会频繁变动) */
@@ -331,13 +408,21 @@ public class AnimeService {
 
     // ==================== 筛选 / 标签 ====================
 
+    /**
+     * 筛选页的下拉框取值: 年份列表 + 状态列表.
+     *
+     * <p>改动前这里为了让 date 去重, 把**整张表按日期排序读回来**, 再在 Java 里
+     * 取前四位、去重、倒序 —— 只为了得到三十来个字符串. 近三万行时这是一次
+     * 毫无必要的整表传输 + 实例化. 现在只回一列投影, 去重交给库.
+     *
+     * <p>倒序仍在 Java 侧: 三十来个值的排序开销可以忽略, 而在
+     * {@code SELECT DISTINCT} 下排序表达式必须出现在选择列表里, 那是个只为省这点
+     * 开销而引入的方言风险(见 {@code AnimeQueries.DISTINCT_YEAR_PREFIXES})。
+     */
     public Map<String, Object> getFilterMeta() {
         Map<String, Object> meta = new HashMap<>();
-        List<String> years = animeRepository.findByOrderByDateDesc().stream()
-                .map(Anime::getDate)
+        List<String> years = animeRepository.findDistinctYearPrefixes().stream()
                 .filter(Objects::nonNull)
-                .map(d -> d.length() >= 4 ? d.substring(0, 4) : d)
-                .distinct()
                 .sorted(Comparator.reverseOrder())
                 .collect(Collectors.toList());
         meta.put("years", years);
@@ -348,36 +433,28 @@ public class AnimeService {
         return meta;
     }
 
+    /**
+     * 筛选的**完整**结果(**不截断**), 给"拿到之后还要自己再走一遍"的调用方.
+     *
+     * <p>调用方是 Agent 工具 {@code filter_anime} 与测试. 它与改动前的区别是:
+     * 筛选条件与排序都已经下推到 SQL, 于是读进来的只剩**真正匹配**的行 ——
+     * 改前无参数时是整张表先进内存再在这里 filter. 但匹配数本身仍没有上界,
+     * 无参数调用还是会把整个匹配集合装进内存; 需要上界的调用方走
+     * {@link #getFilteredPage}.
+     *
+     * <p>它就是"不要分页、要全部"那一档, 不是另一套筛选实现: 两者的查询是同一条
+     * (见 {@link #fetchFiltered}), 差别只在传下去的 {@code Pageable} 是
+     * {@code unpaged()} 还是一页.
+     */
     public List<Anime> getFiltered(String year, String season, String status, String tag, String sort) {
-        // tag过滤走关联表
-        List<Anime> baseList;
-        if (tag != null && !tag.isEmpty()) {
-            Set<String> tagSet = new HashSet<>();
-            tagSet.add(tag);
-            // 同时尝试中→英翻译后的英文名
-            TagTranslationUtil.reverseTranslateAll(tag).forEach(tagSet::add);
-            baseList = getByTags(tagSet);
-        } else {
-            baseList = animeRepository.findByOrderByRankAsc();
+        List<Long> tagIds = tagIdsOf(tag);
+        // 给了标签名但库里一个都没有: 不筛标签会变成"整个库都算命中", 那是这个分支
+        // 能犯的最坏的一种错 —— 所以由空集合明确地表达"没有匹配".
+        if (tagIds != null && tagIds.isEmpty()) {
+            return Collections.emptyList();
         }
-
-        return baseList.stream()
-                .filter(a -> year == null || year.isEmpty()
-                        || (a.getDate() != null && a.getDate().startsWith(year)))
-                .filter(a -> season == null || season.isEmpty()
-                        || season.equals(a.getSeason()))
-                .filter(a -> status == null || status.isEmpty()
-                        || status.equals(a.getStatus()))
-                .sorted("date".equals(sort)
-                        // 日期倒序那份口径只此一处(见 DATE_DESC_UNKNOWN_LAST 的注释):
-                        // 它原本在本方法与 getByTags 里各写了一份, 而两份"保持一致"
-                        // 靠的是注释里的互相提醒.
-                        ? DATE_DESC_UNKNOWN_LAST
-                        // 名次升序, 没有名次的排最后 —— 与日期那边"缺值不排前"同一个口径:
-                        // 库里名次为 NULL 的占多数(未上榜), 当成 0 参与比较的话它们会
-                        // 集体排到榜首.
-                        : Comparator.comparingInt(a -> a.getRank() != null ? a.getRank() : 9999))
-                .collect(Collectors.toList());
+        return fetchFiltered(SearchPatterns.prefix(year), emptyToNull(season), emptyToNull(status),
+                tagIds, sort, Pageable.unpaged());
     }
 
     /**
@@ -388,17 +465,104 @@ public class AnimeService {
      * 数据再长下去, 一个请求就能让两边各自扛一份任意大的结果集, 与 1.3 里
      * 给 limit 封顶要挡的是同一件事.
      *
-     * <p>顺序是**先筛后排再切页**, 这也是这里不能再让控制器自己切的原因:
-     * 先切页会把"第几页"切到未筛选的集合上, 于是 total 变成页大小、后面的页
-     * 少几条. 交给 {@link #buildSearchResult} 一并处理, 顺便复用它已经修好的
-     * 越界夹取与 long 起点(见那里的注释).
+     * <p>顺序是**先筛后排再切页**, 而且这三步现在全在 SQL 里 —— 改动前它们虽然
+     * 也是这个顺序, 但发生在 Java 侧的一整个列表上. 顺序本身是这个接口的语义:
+     * 先切页会把"第几页"切到未筛选的集合上, 于是 total 变成页大小、后面的页少几条.
      *
-     * <p>传给 Agent 工具的仍是 {@link #getFiltered} 那份完整列表 —— 工具那边由
-     * {@code max-tool-result-chars} 截断, 不需要分页语义.
+     * <p>越界的页码: 起点超出总行数(或超出 SQL 能表达的 int 范围)时返回空页、
+     * {@code total} 照报真实值 —— 与改动前 {@link #buildSearchResult} 的越界夹取
+     * 是同一个对外行为, 只是改由 {@link #MAX_SQL_OFFSET} 守卫承担.
      */
     public Map<String, Object> getFilteredPage(String year, String season, String status,
                                                String tag, String sort, int page, int limit) {
-        return buildSearchResult(getFiltered(year, season, status, tag, sort), page, limit);
+        int safePage = Math.max(page, 1);
+        int safeLimit = Math.max(limit, 1);
+
+        String yearPattern = SearchPatterns.prefix(year);
+        String seasonKey = emptyToNull(season);
+        String statusKey = emptyToNull(status);
+        List<Long> tagIds = tagIdsOf(tag);
+        if (tagIds != null && tagIds.isEmpty()) {
+            return pageResult(Collections.emptyList(), 0, safePage);
+        }
+
+        // count 先算: 越界页也要报真实 total, 否则前端按 total 算出来的翻页控件会
+        // 凭空少掉几页(用户点不回去).
+        long matched = tagIds == null
+                ? animeRepository.countFiltered(yearPattern, seasonKey, statusKey)
+                : animeRepository.countFilteredByTag(yearPattern, seasonKey, statusKey, tagIds);
+        int total = (int) Math.min(matched, Integer.MAX_VALUE);
+
+        long offset = (long) (safePage - 1) * safeLimit;
+        if (offset >= total || offset > MAX_SQL_OFFSET) {
+            return pageResult(Collections.emptyList(), total, safePage);
+        }
+        return pageResult(
+                fetchFiltered(yearPattern, seasonKey, statusKey, tagIds, sort,
+                        PageRequest.of(safePage - 1, safeLimit)),
+                total, safePage);
+    }
+
+    /**
+     * 筛选的取页: 六个分支 = 有没有标签 × 三种排序.
+     *
+     * <p>写成六个一步到位的分支而不是"先拼 WHERE 再拼 ORDER BY"的字符串加工,
+     * 是因为语句必须是编译期常量才能进 {@code @Query} —— 而这条约束换来的是
+     * 语句里没有任何动态拼接的部分, 条件值全部是 JDBC 绑定参数.
+     *
+     * <p>{@code sort} 只认 {@link #SORT_DATE} 与 {@link #SORT_RATING}, 其余(含
+     * rank)一律走名次升序. <b>{@code rating} 曾经是个假选项</b>: 工具对外给的是
+     * {@code rating|date|rank}, 而这里以前只区分 {@code "date"} 与"其它", 传
+     * {@code rating} 会掉进 rank 分支 —— 模型要"评分最高的", 拿回按名次排的,
+     * 而且看不出错(两批都是"看起来排在前面"). 现在它是加权评分, 与排行榜同一个口径.
+     */
+    private List<Anime> fetchFiltered(String yearPattern, String season, String status,
+                                      List<Long> tagIds, String sort, Pageable pageable) {
+        double priorVotes = rankingProperties.getPriorVotes();
+        double priorScore = rankingProperties.getPriorScore();
+        if (tagIds == null) {
+            if (SORT_DATE.equals(sort)) {
+                return animeRepository.findFilteredByDate(yearPattern, season, status, pageable);
+            }
+            if (SORT_RATING.equals(sort)) {
+                return animeRepository.findFilteredByRating(
+                        yearPattern, season, status, priorVotes, priorScore, pageable);
+            }
+            return animeRepository.findFilteredByRank(yearPattern, season, status, pageable);
+        }
+        if (SORT_DATE.equals(sort)) {
+            return animeRepository.findFilteredByTagDate(yearPattern, season, status, tagIds, pageable);
+        }
+        if (SORT_RATING.equals(sort)) {
+            return animeRepository.findFilteredByTagRating(
+                    yearPattern, season, status, tagIds, priorVotes, priorScore, pageable);
+        }
+        return animeRepository.findFilteredByTagRank(yearPattern, season, status, tagIds, pageable);
+    }
+
+    /**
+     * 标签名 → tag id.
+     *
+     * <p>传进来的名字会先做中→英翻译再一起查({@link TagTranslationUtil#reverseTranslateAll}):
+     * 那几个名字本来就是同一个概念的几种写法("百合" / "Yuri"), 叫法是哪个都该命中.
+     *
+     * @return {@code null} 表示"没有标签这个条件"; **空集合**表示"给了标签名, 但库里
+     *         一个都没解析出来" —— 这两件事的后续处理正好相反(前者完全不筛标签,
+     *         后者必然空结果), 所以用 null 与空集合区分, 而不是都返回空集合.
+     */
+    private List<Long> tagIdsOf(String tag) {
+        if (tag == null || tag.isEmpty()) {
+            return null;
+        }
+        Set<String> names = new LinkedHashSet<>();
+        names.add(tag);
+        names.addAll(TagTranslationUtil.reverseTranslateAll(tag));
+        return tagRepository.findByNameIn(names).stream().map(Tag::getId).collect(Collectors.toList());
+    }
+
+    /** 空串与 null 在这里是同一件事("不限"), 与改动前那些 {@code isEmpty()} 判据一致 */
+    private static String emptyToNull(String value) {
+        return value == null || value.isEmpty() ? null : value;
     }
 
     @Cacheable(value = "tags", key = "'all'")
@@ -432,9 +596,12 @@ public class AnimeService {
                 .collect(Collectors.toList());
     }
 
-    /** 完整结果(**不截断**), 给拿到之后还要自己再筛的调用方用 —— 筛选接口就是. 实现见 {@link #collectByTags} */
+    /**
+     * 完整结果(**不截断**), 给拿到之后还要自己再筛的调用方用 ——
+     * 实际上现在只剩 {@link #getFiltered}(标签那一半)与测试.
+     */
     public List<Anime> getByTags(Set<String> tagNames) {
-        return sortByDateDesc(collectByTags(tagNames));
+        return fetchByTags(tagNames, Pageable.unpaged());
     }
 
     /**
@@ -447,31 +614,29 @@ public class AnimeService {
      * 就能让服务端和客户端各扛一份任意大的结果集, 与 1.3 给 limit 封顶挡的是同一件事.
      *
      * <p>截断发生在**排序之后**, 所以留下的是最近的 {@code limit} 部, 而不是
-     * "随便 limit 部". 代价也随之而来, 说清楚: 这一步省下的只是响应体和映射开销,
-     * 匹配到的番剧行仍然都要读出来才能排序 —— 真要连读的行数一起封顶, 得把
-     * ORDER BY 下推到 SQL, 而"按播出日倒序、缺日期的排最后"在 H2 与 PostgreSQL 上
-     * 的默认 NULL 位置并不一致(批次 2.1 修的就是这个分叉), 那就等于把同一套口径
-     * 在两个地方各写一遍. 这里选择只留一份排序.
+     * "随便 limit 部". 这一步曾经是"先把该标签下全部行读出来排好序再切" —— 排序口径
+     * 在 H2 与 PostgreSQL 上的 NULL 位置不一致(批次 2.1 修的就是这个分叉), 当时
+     * 为了只留一份排序而宁可多读. 现在那道口径有了 SQL 版本, 于是切片也一起下推:
+     * 读进来的就只剩这一页.
      *
      * <p>{@code limit <= 0} 当作"要 0 条"返回空列表, 不是"不封顶": 前者是调用方
      * 要的语义, 后者会让一个手滑传进来的 0 变成没有上限的查询.
      */
     public List<Anime> getByTags(Set<String> tagNames, int limit) {
         if (limit <= 0) return Collections.emptyList();
-        List<Anime> all = getByTags(tagNames);
-        return all.size() <= limit ? all : new ArrayList<>(all.subList(0, limit));
+        return fetchByTags(tagNames, PageRequest.of(0, limit));
     }
 
     /**
-     * 按标签名收集匹配的番剧, 已按播出日倒序 —— 不截断.
+     * 按标签名取番剧, 按播出日倒序, 由 {@code pageable} 决定取多少.
      *
      * <p>改前这里是两次**整表进内存**: {@code tagRepository.findAll()} 找标签名,
      * 再 {@code animeTagRepository.findAll()} 找关联, 然后在内存里 filter. 而现成的
      * {@link AnimeTagRepository#findAnimeIdsByTagId} 一直躺在那里没被用过; 旁边那句
      * "使用 anime_tag JOIN 查询, 走索引"的注释, 描述的正是这段代码从来没做过的事.
      *
-     * <p>现在两步都走索引: 标签名 → tag 行(uk_tag_name), tag.id → anime_id
-     * (idx_animetag_tag), 最后按 id 批量取番剧. 查询次数与**行数**无关,
+     * <p>现在两步都走索引: 标签名 → tag id(uk_tag_name), tag id → 番剧行
+     * ({@code EXISTS} 半连接, 走 idx_animetag_tag). 查询次数与**行数**无关,
      * 只与标签名个数有关 —— 而标签名个数由调用方给的那几个字符串决定(见
      * {@link TagTranslationUtil#reverseTranslateAll}: 一个中文名加它的英文写法,
      * 通常 1~3 个).
@@ -479,43 +644,42 @@ public class AnimeService {
      * <p>多个标签名之间是**并集**: 只要挂在其中任意一个标签下就算命中. 这不是
      * 随便定的 —— 传进来的那几个名字本来就是同一个概念的几种写法("百合" / "Yuri"),
      * 取交集的话它们几乎不可能同时挂在一部番上, 结果会永远是空.
+     * ({@code EXISTS} 恰好天然是并集语义, 而且同一部番只出一行, 不会因为同时挂在
+     * 两个名字下而在结果里出现两次 —— 改前那版要靠 {@code LinkedHashSet} 手动去重.)
      *
-     * <p>最后一步取番剧用 {@code findAllById}: 关联表里可能有指向已删除番剧的行
-     * (它不是外键约束的强关联), 取回来的行数因此可能少于 id 个数, 按 id 组装、
-     * 不做"取回来几条就报几条"的假设.
+     * <p>查询走的是筛选页"按标签 + 按播出日"那一条(三个筛选条件传 null): 不另写一个
+     * "只差三个 null"的方法, 否则"按播出日倒序、缺日期排最后"那套口径就有了第二个
+     * 物理位置.
+     *
+     * <p>{@code anime_tag} 为空时的回退分支仍然保留整表读 + 内存过滤 —— 它只在
+     * 迁移未完成时可达, 而那条路上排序用的是 Java 比较器
+     * ({@link #DATE_DESC_UNKNOWN_LAST}), 与上面这条 SQL 口径是同一件事的两种写法.
+     * 交叉引用记在这里, 免得它变成一处看不见的重复.
      */
-    private List<Anime> collectByTags(Set<String> tagNames) {
+    private List<Anime> fetchByTags(Set<String> tagNames, Pageable pageable) {
         if (tagNames.isEmpty()) return Collections.emptyList();
 
-        // 新表有数据 → 走索引
         if (animeTagRepository.existsByAnimeIdNotNull()) {
-            List<Tag> tags = tagRepository.findByNameIn(tagNames);
-            if (tags.isEmpty()) return Collections.emptyList();
-
-            // LinkedHashSet: 并集去重. 同一部番可能同时挂在中文名和英文名下
-            // (迁移与后续同步各写过一次), 不去重的话它会在结果里出现两次
-            Set<Integer> animeIds = new LinkedHashSet<>();
-            for (Tag tag : tags) {
-                animeIds.addAll(animeTagRepository.findAnimeIdsByTagId(tag.getId()));
-            }
-            if (animeIds.isEmpty()) return Collections.emptyList();
-
-            return new ArrayList<>(animeRepository.findAllById(animeIds));
+            List<Long> tagIds = tagRepository.findByNameIn(tagNames).stream()
+                    .map(Tag::getId).collect(Collectors.toList());
+            if (tagIds.isEmpty()) return Collections.emptyList();
+            return fetchFiltered(null, null, null, tagIds, SORT_DATE, pageable);
         }
 
         // 新表空(迁移未完成) → 回退旧方法. 这条路上仍然是整表读 + 内存过滤,
         // 但它是"关联表里一行都没有"时的兜底, 而且改前所有请求走的都是这一档.
-        return animeRepository.findAll().stream()
+        // 分页在这里只能在 Java 侧切: 关联信息还在 anime.tags 那一列里, SQL 没法筛.
+        List<Anime> matched = animeRepository.findAll().stream()
                 .filter(a -> a.getTags() != null
                         && Arrays.stream(a.getTags().split(","))
                                  .map(String::trim)
                                  .anyMatch(tagNames::contains))
+                .sorted(DATE_DESC_UNKNOWN_LAST)
                 .collect(Collectors.toList());
-    }
-
-    /** 排序用的一小步: 收集出来的结果统一按播出日倒序(口径见上面的常量) */
-    private static List<Anime> sortByDateDesc(Collection<Anime> animes) {
-        return animes.stream().sorted(DATE_DESC_UNKNOWN_LAST).collect(Collectors.toList());
+        if (pageable.isUnpaged() || matched.size() <= pageable.getPageSize()) {
+            return matched;
+        }
+        return new ArrayList<>(matched.subList(0, pageable.getPageSize()));
     }
 
     // ==================== 内部方法 ====================
@@ -725,9 +889,26 @@ public class AnimeService {
         return ep;
     }
 
-    /** 本地口径: 上报的总数就是手上这批行数(排行/标签浏览/筛选那几条路都走这个) */
-    private Map<String, Object> buildSearchResult(List<Anime> list, int page, int limit) {
-        return buildSearchResult(list, page, limit, list.size());
+    /**
+     * 组装 {@code {list, total, page}} —— 给**已经在 SQL 里切好页**的那几条读路径用.
+     *
+     * <p>与 {@link #buildSearchResult} 的区别就一件事: 它不切片. 那边手上的列表是
+     * 全部匹配行, 切片是它的一部分职责; 这边手上只有一页, 切片已经由库做完,
+     * 越界也已经在调用处拦掉(见 {@link #MAX_SQL_OFFSET}). 留着两个方法而不是让一个
+     * 方法"看情况切", 是为了让"这一页还需要切吗"这件事在调用处就看得见.
+     *
+     * @param total 上报的匹配总数, 来自与取页**同一份 WHERE** 的 count 查询 ——
+     *              这正是仓储那边不用 {@code Page<Anime>}(会有第二条自动拼出来的
+     *              count)而坚持让 service 配对调用的原因.
+     */
+    private static Map<String, Object> pageResult(List<Anime> list, int total, int page) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("list", list);
+        // 上报值不得小于手上真实有的行数: count 与取页是两次查询, 期间有写入的话
+        // 这一页可能比 count 报的还长. 报小的会让用户看不到自己已经看到的那些行.
+        data.put("total", Math.max(total, list.size()));
+        data.put("page", page);
+        return data;
     }
 
     /**

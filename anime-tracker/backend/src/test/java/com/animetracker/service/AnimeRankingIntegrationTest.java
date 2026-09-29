@@ -8,8 +8,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -26,9 +29,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 整个换掉 —— 测试会全绿, 而"排序到底对不对"一个字都没验到. 必须让 H2 真的把那条
  * 表达式执行一遍.
  *
- * <p>另一个极端是断言"整张榜恰好等于某某": 这个测试 JVM 里 {@code CachePreloader}
- * 会在后台真的调 api.bgm.tv 往同一张表插数据(理由同 {@code AnimeFilterIntegrationTest}),
- * 全局断言随时可能被它插进来的行打翻. 所以下面一律只看**自己建的那几行之间的相对次序**.
+ * <p>另一个极端是断言"整张榜恰好等于某某": 全局断言会被任何一个别的写入者打翻.
+ * 启动预加载器({@code CachePreloader})就是这样一个写入者 —— 它在后台线程里真的调
+ * api.bgm.tv 往同一张表插数据. 这里把它关掉(见下面的 properties), 但断言仍然只做
+ * **自己建的那几行之间的相对次序** —— 那条纪律与预加载器开不开无关, 而下面
+ * {@link #aPageIsThePrefixOfTheWholeRanking} 里那种"整张榜的前缀"断言正需要
+ * 一个没有别的写入者的库才能稳定.
  *
  * <p>这个测试**验不到**的东西, 一并写在这里免得有人以为它盖住了: 表达式在 PostgreSQL
  * 上的行为. 这条查询里整数除法、CASE、ORDER BY 里的算术表达式三样都有, 而 H2 与 PG
@@ -37,7 +43,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 表达式一旦在 PG 上炸, 那个断言会以"工具结果里没有番剧行"的样子红.
  */
 @SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:anitrack-ranking;DB_CLOSE_DELAY=-1;MODE=MySQL"
+        "spring.datasource.url=jdbc:h2:mem:anitrack-ranking;DB_CLOSE_DELAY=-1;MODE=MySQL",
+        // 关掉启动预加载: 它在后台线程里往同一张表插数据, 而 "整张榜的前缀" 这类
+        // 断言要求两次查询之间没有别的写入者(理由同 QueryCountIntegrationTest)
+        "anitrack.preload.enabled=false"
 })
 @ActiveProfiles("dev")
 class AnimeRankingIntegrationTest {
@@ -156,12 +165,56 @@ class AnimeRankingIntegrationTest {
                 .containsExactly(TIE_A, TIE_B);
     }
 
+    /**
+     * 分页下推之后, "取一页"必须正好是整张榜的前缀 —— 序没变, 也没多切一刀.
+     *
+     * <p>为什么这条值得单独写: 切片从 Java 搬到 SQL 时, 排序与分页成了**两个**东西
+     * (ORDER BY 与 LIMIT/OFFSET)在同一张表上的两次计算. 只要它们对"什么算相等"
+     * 的理解有一点出入(比如 ORDER BY 里有 NULL 而两个库排得不一样, 而 LIMIT
+     * 是按数据库的排法切的), 整张榜的前缀与第一页就会不是同一批行 —— 而两边各自
+     * 看都"排对了", 只有把两份结果摆在一起才看得出来.
+     *
+     * <p>断言的是**逐位相同**而不是"包含关系": 包含关系在漏行的情况下也成立.
+     */
+    @Test
+    @DisplayName("取一页 = 整张榜的前缀: 排序与切片的次序一致, 页里不重不漏")
+    void aPageIsThePrefixOfTheWholeRanking() {
+        save(TINY, 10.0, 1);
+        save(POPULAR, 9.0, 20000);
+        save(MID, 8.5, 5000);
+
+        List<Integer> whole = rankedAll().stream().map(Anime::getId).toList();
+        int pageSize = 4;
+        List<Integer> firstTwoPages = new ArrayList<>(rankedPage(0, pageSize).stream()
+                .map(Anime::getId).toList());
+        firstTwoPages.addAll(rankedPage(1, pageSize).stream().map(Anime::getId).toList());
+
+        assertThat(firstTwoPages).hasSizeGreaterThan(0);
+        assertThat(firstTwoPages)
+                .containsExactlyElementsOf(whole.subList(0, firstTwoPages.size()))
+                .doesNotHaveDuplicates();
+    }
+
     // ========== 帮手 ==========
 
-    /** 当前配置下的整张榜 */
+    /**
+     * 当前配置下的整张榜.
+     *
+     * <p>{@code unpaged()} 是刻意的: 这一组断言的是**相对次序**, 要被断言的几行
+     * 落在第几页是未知的(库里还有别的行), 切一页就可能把它们切出去. 分页那一半
+     * 由 {@link #aPageIsThePrefixOfTheWholeRanking} 单独守.
+     */
     private List<Anime> rankedAll() {
-        return animeRepository.findByWeightedScoreDesc(
-                rankingProperties.getPriorVotes(), rankingProperties.getPriorScore());
+        return animeRepository.findRankedByWeightedScore(
+                rankingProperties.getPriorVotes(), rankingProperties.getPriorScore(),
+                Pageable.unpaged());
+    }
+
+    /** 同上, 但只取前 {@code size} 条 —— 与 {@link #rankedAll()} 必须是同一个序的前缀 */
+    private List<Anime> rankedPage(int page, int size) {
+        return animeRepository.findRankedByWeightedScore(
+                rankingProperties.getPriorVotes(), rankingProperties.getPriorScore(),
+                PageRequest.of(page, size));
     }
 
     /**

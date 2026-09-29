@@ -118,9 +118,11 @@ public final class AnimeFields {
      * <p>关键是 {@code 0} 要转成 null: Bangumi 对"评分人数不够、还没进榜"的作品
      * 给的就是 0(实测一个 15 人评分的条目返回 {@code "rank":0}).
      * 直接把这个 0 存进去, 它会在 {@code ORDER BY sort_rank ASC} 里排到**第一位** ——
-     * 一个没人看过的番剧挂在排行榜榜首. 转成 null 之后, 排序那一侧本来就有的
-     * "null 垫底"逻辑(见 {@code AnimeService.getFiltered} 里的 9999 兜底)
-     * 才会把它放到正确的位置.
+     * 一个没人看过的番剧挂在排行榜榜首. 转成 null 之后, 排序那一侧的"没名次的排最后"
+     * 才会把它放到正确的位置 —— 那条口径现在是 SQL, 见
+     * {@code AnimeQueries.ORDER_RANK_ASC_NULL_LAST}(它把 {@code <= 0} 也一并当成
+     * "没有名次", 与这里同一个理由: <b>Bangumi 的 0 表示"没有这个值", 不是"值为零"</b>,
+     * 于是这一层对归一之前落库的历史行也仍然成立).
      */
     public static Integer rankOf(Integer rawRank) {
         return (rawRank == null || rawRank <= 0) ? null : rawRank;

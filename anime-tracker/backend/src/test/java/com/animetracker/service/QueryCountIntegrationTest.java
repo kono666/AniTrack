@@ -2,8 +2,10 @@ package com.animetracker.service;
 
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.User;
+import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.AnimeTagRepository;
 import com.animetracker.repository.UserRepository;
+import com.animetracker.util.SearchPatterns;
 import com.animetracker.util.TagTranslationUtil;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
@@ -16,6 +18,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cache.CacheManager;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -108,9 +112,14 @@ class QueryCountIntegrationTest {
     @Autowired
     private AnimeService animeService;
     @Autowired
+    private AnimeRepository animeRepository;
+    @Autowired
     private AnimeTagRepository animeTagRepository;
     @Autowired
     private UserRepository userRepository;
+    /** 排行榜那条路带 @Cacheable, 而"读了几行"的断言不能被上一次调用的缓存命中搅乱 */
+    @Autowired
+    private CacheManager cacheManager;
 
     private User user;
 
@@ -549,5 +558,271 @@ class QueryCountIntegrationTest {
                 .as("这条判定的答案在第一行就定了, 不该数完整张表")
                 .containsIgnoringCase("from anime_tag")
                 .containsIgnoringCase("fetch first");
+    }
+
+    /**
+     * 关联表里有指向已删除番剧的行时, 结果里不该多出东西.
+     *
+     * <p>{@code anime_tag} 与 {@code anime} 之间不是外键强约束, 这类悬挂行是会出现的
+     * (删除番剧时只删了主表). 改成 {@code EXISTS} 半连接之后这件事是白送的 ——
+     * 子查询要求 {@code anime} 里真有那一行才算命中, 而改前那个版本是"先取一批
+     * anime_id 再按 id 取番剧", 靠的是批量查的天然宽容. 断言留下, 是因为换写法时
+     * 这一点会被无声地换掉.
+     */
+    @Test
+    @DisplayName("悬挂的关联行(番剧已删)不会带出多余的行")
+    void danglingTagRowsDoNotProduceRows() {
+        long tagId = tagIdOf("qct-dangling");
+        seedTaggedAnime(SUBJECT_BASE, "还在", "2099-01-01", tagId);
+        jdbc.update("INSERT INTO anime_tag (anime_id, tag_id) VALUES (?, ?)",
+                SUBJECT_BASE + 999, tagId);
+
+        assertThat(animeService.getByTags(Set.of("qct-dangling")))
+                .extracting(Anime::getId).containsExactly(SUBJECT_BASE);
+    }
+
+    // ========== 排序 / 筛选 / 分页下推之后: 读进来几行 ==========
+    //
+    // 这一组是本批次的重点. 改动前六条读路径都是"整张 anime 表进内存再排/再筛/再切",
+    // 读入量随表长线性增长 —— 而返回值一个字节都不差, 所以断言返回值完全看不出它.
+    // 近三万条时, 每一次请求都要真的搬三万行过来, 这正是这一遍要修的东西.
+    //
+    // 断言写成"读入量 == 页大小"而不是"== 某个具体数字": 前者在库里 25 行和 200 行
+    // 时是同一个数, 后者只是恰好等于某个常量.
+
+    /** 一页取多少条. 比 @Min 大、比噪声行数小, 越界与"整表"都能区分开 */
+    private static final int PAGE = 10;
+
+    /** 灌 n 部有多人评分的番剧 —— 排行榜那条路要求 rating 与 rating_count 都有效 */
+    private void seedRatedAnime(int n) {
+        List<Object[]> args = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            args.add(new Object[]{SUBJECT_BASE + i, "评分番" + i, 9.0, 1000 + i});
+        }
+        jdbc.batchUpdate("INSERT INTO anime (id, title, rating, rating_count) VALUES (?, ?, ?, ?)", args);
+    }
+
+    /**
+     * 排行榜读进来的行数封在一页上, 与表里有多少行无关.
+     *
+     * <p>为什么行数取 25 与 200 而不是更小: {@code getRanking} 在库存不足
+     * {@code min(limit,20)} 条时会去回源补数据(真的打 api.bgm.tv). 25 是最小的
+     * 安全值, 而两档相差 8 倍已经足够说明"与表长无关".
+     */
+    @ParameterizedTest(name = "库里 {0} 部番剧")
+    @ValueSource(ints = {25, 200})
+    @DisplayName("排行榜: 读入的实体数封在 limit 上, 与库里有几行无关")
+    void rankingLoadsOnlyOnePage(int rows) {
+        seedRatedAnime(rows);
+        // 这一条走 @Cacheable, 两档用的是同一个 key —— 不清缓存的话第二次会直接命中
+        // 缓存, 读入行数变成 0 而断言红, 且红得毫无道理
+        cacheManager.getCache("ranking").clear();
+
+        Statistics stats = statsCleared();
+        List<Anime> top = animeService.getRanking(PAGE);
+
+        assertThat(top).hasSize(PAGE);
+        assertThat(stats.getEntityLoadCount())
+                .as("改动前这里等于 %d —— 整张榜都要读进来才排得出前 %d 名", rows, PAGE)
+                .isEqualTo(PAGE);
+    }
+
+    /** 灌 n 部属于同一个季度值的番剧. 季度是自造的, 于是"匹配到多少条"完全由本用例说了算 */
+    private void seedSeasonedAnime(int n, String season) {
+        List<Object[]> args = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            args.add(new Object[]{SUBJECT_BASE + i, "季度番" + i, season,
+                    String.format("2024-01-%02d", i % 28 + 1), i});
+        }
+        jdbc.batchUpdate("INSERT INTO anime (id, title, season, date, sort_rank) VALUES (?, ?, ?, ?, ?)", args);
+    }
+
+    /**
+     * 筛选读进来的行数封在一页上, 与匹配到多少条无关.
+     *
+     * <p>这条同时钉住 {@code :param IS NULL} 那套可选谓词真的能在 H2 上跑 ——
+     * 语句里三个条件各带一个 null 绑定参数, 而 {@code LIKE :yearPattern ESCAPE '!'}
+     * 那一条最容易被绑定类型搞坏(参数为 null 时库推不出类型). 这里 year 与 status
+     * 都传 null, 正好走到那条路.
+     */
+    @ParameterizedTest(name = "匹配 {0} 条")
+    @ValueSource(ints = {25, 200})
+    @DisplayName("筛选: 读入的实体数封在一页上, 与匹配到多少条无关")
+    void filterLoadsOnlyOnePage(int rows) {
+        String season = "9q63-01";
+        seedSeasonedAnime(rows, season);
+
+        Statistics stats = statsCleared();
+        Map<String, Object> result =
+                animeService.getFilteredPage(null, season, null, null, null, 1, PAGE);
+
+        @SuppressWarnings("unchecked")
+        List<Anime> page = (List<Anime>) result.get("list");
+        assertThat(page).hasSize(PAGE);
+        assertThat(result.get("total")).as("total 报的是匹配总数, 不是页大小").isEqualTo(rows);
+        assertThat(stats.getEntityLoadCount())
+                .as("改动前这里等于 %d —— 先整表进内存再 filter", rows)
+                .isEqualTo(PAGE);
+    }
+
+    /**
+     * 按标签浏览读进来的行数封在 {@code BY_TAG_LIMIT} 上.
+     *
+     * <p>留一行的余量给 tag 实体: 标签名要先解析成 id, 那一步会 load 一个 tag 行
+     * (改前也一样, 所以断言的数字与改前是同一个量级 —— 变的是番剧那一半).
+     */
+    @ParameterizedTest(name = "标签下 {0} 部")
+    @ValueSource(ints = {25, 200})
+    @DisplayName("按标签浏览: 读入的番剧数封在 50 上, 与标签下有多少部无关")
+    void tagBrowseLoadsOnlyOnePage(int rows) {
+        String name = "qct-page-" + rows;
+        long tagId = tagIdOf(name);
+        for (int i = 0; i < rows; i++) {
+            seedTaggedAnime(SUBJECT_BASE + i, "标签番" + i,
+                    String.format("%04d-01-01", 1900 + i), tagId);
+        }
+
+        Statistics stats = statsCleared();
+        List<Anime> page = animeService.getByTags(Set.of(name), AnimeService.BY_TAG_LIMIT);
+
+        int pageSize = Math.min(rows, AnimeService.BY_TAG_LIMIT);
+        assertThat(page).hasSize(pageSize);
+        assertThat(stats.getEntityLoadCount())
+                .as("读入 1 个 tag 实体(标签名 → id) + %d 部番剧; 改动前这里要加上 %d",
+                        pageSize, rows - pageSize)
+                .isEqualTo(pageSize + 1);
+    }
+
+    // ========== 生成的 SQL 长什么样 ==========
+    //
+    // 条数与行数都看不见"这条语句有没有把条件真的下推" —— 一条 WHERE 什么都没筛的
+    // SELECT 也是一条语句、读进来的行数也由别的东西决定. SQL 形状是唯一能抓住
+    // "常量拼错了、拼漏了"的地方: 那种错会让查询静默退化成另一条语义, 接口照常 200.
+
+    /** 行数限制在 H2 方言里是 fetch first; 断言前把空白折平, 免得被换行/多空格绊倒 */
+    private static String lastSqlNormalized() {
+        return SqlRecorder.last().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * 不带标签的筛选: 生成的 SQL 里**不该有** {@code anime_tag}.
+     *
+     * <p>为什么要断言"没有"这种东西: 把标签那个 {@code EXISTS} 子查询误拼进
+     * 不带标签的那三条语句里, 结果会变成"只返回有标签的番剧" —— 一个不报错、
+     * 只是少一大半数据的 bug.
+     */
+    @Test
+    @DisplayName("筛选(不带标签)的 SQL: 不碰 anime_tag, 排序是 CASE 分组, 且带行数限制")
+    void untaggedFilterSqlIsPushedDown() {
+        seedSeasonedAnime(3, "9q63-02");
+
+        animeRepository.findFilteredByDate(null, "9q63-02", null, PageRequest.of(0, 5));
+        String sql = lastSqlNormalized();
+
+        assertThat(sql).containsIgnoringCase("from anime")
+                .as("这条路上不该出现标签关联表").doesNotContainIgnoringCase("anime_tag");
+        assertThat(sql).as("缺日期的行要显式分组, 否则 NULL 排哪随库变")
+                .containsIgnoringCase("case when");
+        assertThat(sql).as("分页必须是库做的, 不是读回来再切")
+                .containsIgnoringCase("fetch first");
+    }
+
+    /**
+     * 按标签浏览: 用 {@code EXISTS} 半连接, 不是顶层 JOIN.
+     *
+     * <p>顶层 JOIN 会让同时挂在"百合"和"Yuri"两个名字下的同一部番出现两次,
+     * {@code total} 因此虚高, LIMIT/OFFSET 也会去数这些重复行 —— 翻页时相邻两页
+     * 重叠、末尾几行永远看不到.
+     */
+    @Test
+    @DisplayName("按标签浏览的 SQL: 是 EXISTS 半连接, 不是顶层 JOIN")
+    void tagBrowseSqlUsesExists() {
+        seedTaggedAnime(SUBJECT_BASE, "标签番", "2099-01-01", tagIdOf("qct-shape"));
+
+        animeService.getByTags(Set.of("qct-shape"));
+        String sql = lastSqlNormalized();
+
+        assertThat(sql).containsIgnoringCase("from anime_tag")
+                .as("EXISTS 子查询里出现关联表是对的; 不该出现的是顶层 join")
+                .doesNotContainIgnoringCase("join anime_tag");
+        assertThat(sql).containsIgnoringCase("exists");
+    }
+
+    /**
+     * 名次排序只在 {@code sort=rank} 那条路上, 且同样是 CASE 分组 ——
+     * 名次为 NULL 的行(库里占多数)必须排在有名次的之后, 而不是按库的默认 NULL 位置.
+     */
+    @Test
+    @DisplayName("sort=rank 的 SQL: 名次为 NULL 的行显式分组排最后")
+    void rankSortGroupsNullExplicitly() {
+        seedSeasonedAnime(3, "9q63-03");
+
+        animeRepository.findFilteredByRank(null, "9q63-03", null, PageRequest.of(0, 5));
+        String sql = lastSqlNormalized();
+
+        assertThat(sql).containsIgnoringCase("case when")
+                .containsIgnoringCase("sort_rank");
+    }
+
+    /**
+     * 年份筛选走的是<b>转义过的前缀 LIKE</b>, 不是通配符.
+     *
+     * <p>改动前是 {@code date.startsWith(year)} —— 字面前缀. 搬进 LIKE 之后
+     * {@code %} 与 {@code _} 会从字面量变成通配符, 于是 {@code year=20%} 从
+     * "没有这种年份"变成"匹配全部". 这条断言的是转义字符真的在语句里
+     * ({@code escape}), 而"转义有没有生效"由下面那条用例用数据验.
+     */
+    @Test
+    @DisplayName("年份筛选的 SQL: LIKE 带 ESCAPE, 不是裸 LIKE")
+    void yearFilterEscapesLikeWildcards() {
+        seedSeasonedAnime(3, "9q63-04");
+
+        animeRepository.findFilteredByDate(
+                SearchPatterns.prefix("20%"), null, null, PageRequest.of(0, 5));
+        String sql = lastSqlNormalized();
+
+        assertThat(sql).containsIgnoringCase("like").containsIgnoringCase("escape");
+    }
+
+    /**
+     * 年份里的 {@code %} 与 {@code _} 是字面量, 不是通配符.
+     *
+     * <p>这一条用**数据**验转义: 库里放一部 2024 年的番, 然后按年份 {@code "20%"}
+     * 去筛. 转义失效时 {@code 20%} 会变成"所有 20 开头的", 那部 2024 年的就会被
+     * 命中 —— 而用户说的是"年份就是 20% 这个字符串", 应该一条都不匹配.
+     */
+    @Test
+    @DisplayName("年份里的 % 是字面量: date=2024-… 不该被 year=20% 命中")
+    void percentInYearIsALiteralNotAWildcard() {
+        seedSeasonedAnime(3, "9q63-05");
+
+        Map<String, Object> matched = animeService.getFilteredPage(
+                "20%", "9q63-05", null, null, null, 1, 20);
+
+        assertThat(matched.get("total"))
+                .as("转义一旦失效, 这个数字会变成 3(全部命中)")
+                .isEqualTo(0);
+    }
+
+    /**
+     * 页码溢出不能退化成"从负数开始取一页".
+     *
+     * <p>{@code (page-1)*limit} 在 int 里会溢出成负数; 切片下推之后它交给
+     * {@code Query.setFirstResult(int)}, 于是负起点会被真的发给数据库 ——
+     * 两个库对它的反应既不统一也不报错. service 里那个 long 守卫就是为这一条.
+     */
+    @Test
+    @DisplayName("page=Integer.MAX_VALUE: 返回空页, 但 total 仍是真实的匹配数")
+    void hugePageNumberStillReportsTheRealTotal() {
+        String season = "9q63-06";
+        seedSeasonedAnime(3, season);
+
+        Map<String, Object> result = animeService.getFilteredPage(
+                null, season, null, null, null, Integer.MAX_VALUE, 20);
+
+        assertThat((List<?>) result.get("list")).isEmpty();
+        assertThat(result.get("total"))
+                .as("越界页也要报真实总数, 否则前端的翻页控件会凭空少几页")
+                .isEqualTo(3);
     }
 }

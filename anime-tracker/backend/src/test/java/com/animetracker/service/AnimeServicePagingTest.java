@@ -10,6 +10,7 @@ import com.animetracker.repository.TagRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Map;
@@ -18,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -32,6 +34,14 @@ import static org.mockito.Mockito.when;
  * <p>不写成 @SpringBootTest 是刻意的: 这里要验的是几行算术, 不该顺带启动
  * 整个应用、连数据库、跑一遍启动预加载器(它会联网). 用 mock 把仓库喂成固定
  * 的几行数据, 边界就变成确定的, 也不依赖任何外部服务.
+ *
+ * <p><b>切片下推到 SQL 之后这一组验的是什么.</b> 真正把行切出来的已经是数据库
+ * (见 {@code AnimeQueryShapesIntegrationTest} —— 那边打真库, 断言读进来的行数
+ * 与表行数无关). 这里验的是**service 交给数据库的那个窗口对不对**: 页码怎么
+ * 换算成 offset、越界时还发不发查询、有没有在 page=Integer.MAX_VALUE 上把 offset
+ * 算成负数. 所以 mock 必须自己把 {@code Pageable} 应用一遍
+ * (见 {@link #slice}) —— 否则它就只是个"原样返回我喂进去的东西"的桩,
+ * 上面的断言会全绿而什么也没验到.
  */
 class AnimeServicePagingTest {
 
@@ -52,11 +62,7 @@ class AnimeServicePagingTest {
                 mock(BangumiApiProperties.class),
                 new RankingProperties());
 
-        // 不带关键词那条分支只读这一个方法, 不会联网.
-        // 参数用 anyDouble(): 这里要验的是分页算术, 与加权参数取多少无关 ——
-        // 权重本身对不对由 AnimeRankingIntegrationTest 打真库验.
-        when(animeRepository.findByWeightedScoreDesc(anyDouble(), anyDouble()))
-                .thenReturn(fiveAnime());
+        stubBrowse(fiveAnime());
     }
 
     private static List<Anime> fiveAnime() {
@@ -66,6 +72,60 @@ class AnimeServicePagingTest {
                 Anime.builder().id(3).title("c").build(),
                 Anime.builder().id(4).title("d").build(),
                 Anime.builder().id(5).title("e").build());
+    }
+
+    /**
+     * 浏览分支: 不带关键词那条路只读这两个方法, 不会联网.
+     *
+     * <p>参数用 anyDouble(): 这里要验的是分页算术, 与加权参数取多少无关 ——
+     * 权重本身对不对由 {@code AnimeRankingIntegrationTest} 打真库验.
+     *
+     * <p>用 {@code doAnswer().when(...)} 而不是 {@code when(...).thenAnswer(...)}:
+     * setUp 里已经桩过一次, 而 {@code when(mock.foo(any()))} 这种写法会**先把
+     * mock.foo 真的调一遍** —— 于是上一个桩的 answer 会拿着匹配器给的占位参数
+     * (Pageable 是 null)跑起来, 直接在切片那一步 NPE. doAnswer 形式不触发已有桩.
+     */
+    private void stubBrowse(List<Anime> source) {
+        doAnswer(inv -> (long) source.size()).when(animeRepository).count();
+        doAnswer(inv -> slice(source, inv.getArgument(2)))
+                .when(animeRepository).findRankedByWeightedScore(anyDouble(), anyDouble(), any());
+    }
+
+    /** 筛选: 三个可选条件照 SQL 的意思判一遍, 再按 {@code Pageable} 切 */
+    private void stubFiltered(List<Anime> source) {
+        doAnswer(inv -> (long) matching(source,
+                inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)).size())
+                .when(animeRepository).countFiltered(any(), any(), any());
+        doAnswer(inv -> slice(matching(source,
+                inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)), inv.getArgument(3)))
+                .when(animeRepository).findFilteredByRank(any(), any(), any(), any());
+    }
+
+    /** 三个可选筛选谓词的 Java 版, 只为了让 mock 表现得像那条 SQL */
+    private static List<Anime> matching(List<Anime> source, String yearPattern,
+                                        String season, String status) {
+        String yearPrefix = yearPattern == null
+                ? null
+                : yearPattern.substring(0, yearPattern.length() - 1).replace("!", "");
+        return source.stream()
+                .filter(a -> yearPrefix == null
+                        || (a.getDate() != null && a.getDate().startsWith(yearPrefix)))
+                .filter(a -> season == null || season.equals(a.getSeason()))
+                .filter(a -> status == null || status.equals(a.getStatus()))
+                .toList();
+    }
+
+    /** {@code Pageable} 那一刀的 Java 版 —— 下推之后切片的活是数据库干的 */
+    private static List<Anime> slice(List<Anime> source, Pageable pageable) {
+        if (pageable.isUnpaged()) {
+            return source;
+        }
+        long from = pageable.getOffset();
+        if (from >= source.size()) {
+            return List.of();
+        }
+        long to = Math.min(from + pageable.getPageSize(), source.size());
+        return List.copyOf(source.subList((int) from, (int) to));
     }
 
     @SuppressWarnings("unchecked")
@@ -152,7 +212,7 @@ class AnimeServicePagingTest {
     @Test
     @DisplayName("一条数据都没有时, 任何分页参数都返回空列表")
     void emptySourceIsAlwaysEmpty() {
-        when(animeRepository.findByWeightedScoreDesc(anyDouble(), anyDouble())).thenReturn(List.of());
+        stubBrowse(List.of());
 
         assertThat(listOf(animeService.searchAnime("", 1, 20))).isEmpty();
         assertThat(listOf(animeService.searchAnime("", 0, 0))).isEmpty();
@@ -191,8 +251,8 @@ class AnimeServicePagingTest {
 
     // ========== 筛选接口的分页 ==========
     //
-    // 筛选走的是另一个仓储方法(按 rank 排), 而且在分页前还要过一遍筛选条件,
-    // 所以它不能只靠上面那组用例覆盖到.
+    // 筛选走的是另一组仓储方法(按 rank 排的取页 + 配套的计数), 而且筛选条件本身
+    // 也在 SQL 里, 所以它不能只靠上面那组用例覆盖到.
 
     /** 前三条 2026-01, 后两条 2026-04 */
     private static List<Anime> fiveAnimeWithSeasons() {
@@ -210,11 +270,15 @@ class AnimeServicePagingTest {
      * <p>先切页的话, 第 2 页会切在未筛选的 5 条上得到 [3,4,5], 再用条件筛只剩 [3],
      * total 也变成 1 —— 前端据此算出来的总页数是错的. 这条用例用一个"筛选后
      * 恰好跨页"的数据集把这个顺序钉死: 三条 2026-01 的番, 每页 2 条.
+     *
+     * <p>这个顺序在下推之后是由 SQL 的 WHERE/ORDER BY/LIMIT 三者自身的先后保证的,
+     * 所以这里能验的其实是"service 有没有把条件与窗口一起交下去": 条件漏传,
+     * 第二页就会拿到未筛选的第 3、4 条; total 走的是另一个方法, 漏传则报成 5.
      */
     @Test
     @DisplayName("筛选后分页: 第 2 页只拿到筛选结果里的第 3 条, total 是筛选后的 3 而不是 5")
     void filterPagingFiltersBeforeItSlices() {
-        when(animeRepository.findByOrderByRankAsc()).thenReturn(fiveAnimeWithSeasons());
+        stubFiltered(fiveAnimeWithSeasons());
 
         Map<String, Object> firstPage = animeService.getFilteredPage(null, "2026-01", null, null, null, 1, 2);
         assertThat(idsOf(listOf(firstPage))).containsExactly(1, 2);
@@ -231,7 +295,7 @@ class AnimeServicePagingTest {
     @Test
     @DisplayName("筛选接口同样夹越界值: page=0 退化成第 1 页, 超大页码给空页而不是抛异常")
     void filterPagingClampsOutOfRangeValues() {
-        when(animeRepository.findByOrderByRankAsc()).thenReturn(fiveAnimeWithSeasons());
+        stubFiltered(fiveAnimeWithSeasons());
 
         assertThatCode(() -> animeService.getFilteredPage(null, null, null, null, null, 0, 2))
                 .doesNotThrowAnyException();
@@ -246,7 +310,7 @@ class AnimeServicePagingTest {
     @Test
     @DisplayName("筛选一条都不匹配时返回空页, 但 total 仍是 0 而不是 null")
     void filterPagingOnEmptyResult() {
-        when(animeRepository.findByOrderByRankAsc()).thenReturn(fiveAnimeWithSeasons());
+        stubFiltered(fiveAnimeWithSeasons());
 
         Map<String, Object> result = animeService.getFilteredPage(null, "2049-07", null, null, null, 1, 20);
         assertThat(listOf(result)).isEmpty();

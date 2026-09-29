@@ -44,6 +44,36 @@ public final class SearchPatterns {
             return null;
         }
         StringBuilder sb = new StringBuilder(keyword.length() + 8).append('%');
+        appendEscaped(sb, keyword);
+        return sb.append('%').toString();
+    }
+
+    /**
+     * 关键词 → 前缀匹配的模式串.
+     *
+     * <p>例: {@code "2024" → "2024%"}; {@code "20%"} → {@code "20!%%"}.
+     *
+     * <p>存在的理由是年份筛选: 它原本写的是 {@code a.getDate().startsWith(year)},
+     * 是**字面前缀**的语义; 搬进 SQL 变成 LIKE 之后, {@code %} 与 {@code _} 会从
+     * 字面量变成通配符 —— 于是 {@code year=20%} 从"没有这种年份"变成"匹配全部".
+     * 转义口径与 {@link #contains} 完全一致(同一个 ESCAPE 字符、同一段逻辑),
+     * 两处只要有一处漂了, 表现都是同一类静默错.
+     *
+     * <p>入参为 null 或空串时返回 null, 语义是"不按年份筛" —— 调用方把 null 直接
+     * 交给 SQL 的 {@code :yearPattern IS NULL} 分支, 与改动前 {@code year.isEmpty()}
+     * 就跳过筛选是同一个行为.
+     */
+    public static String prefix(String keyword) {
+        if (keyword == null || keyword.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder(keyword.length() + 1);
+        appendEscaped(sb, keyword);
+        return sb.append('%').toString();
+    }
+
+    /** 把 keyword 逐字符追加进去, 该转义的加 {@link #ESCAPE} 前缀(首尾的 % 由调用方加) */
+    private static void appendEscaped(StringBuilder sb, String keyword) {
         for (int i = 0; i < keyword.length(); i++) {
             char c = keyword.charAt(i);
             // 转义字符自己也要转义: 否则 "a!b" 里的 "!b" 会被当成"转义后的 b", 于是
@@ -53,6 +83,5 @@ public final class SearchPatterns {
             }
             sb.append(c);
         }
-        return sb.append('%').toString();
     }
 }
