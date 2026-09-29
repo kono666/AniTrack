@@ -7,6 +7,7 @@ vi.mock('../../api', () => ({ login: vi.fn() }))
 
 import Login from '../Login.vue'
 import { login } from '../../api'
+import { rememberPath, resetRememberedPath } from '../../utils/loginRedirect'
 
 /**
  * 登录页的 ?redirect= 是一个**开放重定向**的入口.
@@ -25,6 +26,7 @@ function makeRouter() {
       { path: '/', component: { template: '<div>home</div>' } },
       { path: '/login', component: { template: '<div>login</div>' } },
       { path: '/profile', component: { template: '<div>profile</div>' } },
+      { path: '/anime/:id', component: { template: '<div>detail</div>' } },
     ],
   })
 }
@@ -48,6 +50,8 @@ describe('登录后的跳转目标', () => {
     localStorage.clear()
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    // 「刚才那一页」是模块级状态, 不清的话前一个用例记的路径会漏到下一个用例
+    resetRememberedPath()
     login.mockResolvedValue({ data: { code: 200, data: { id: 1, username: 'alice', token: 'jwt' } } })
   })
 
@@ -73,9 +77,24 @@ describe('登录后的跳转目标', () => {
     expect(router.currentRoute.value.href).not.toContain('evil.com')
   })
 
-  it('没有 redirect 参数时照旧回首页', async () => {
+  it('没有 redirect、也没记住刚才那一页时, 回首页', async () => {
     const { router } = await loginWith(undefined)
     expect(router.currentRoute.value.path).toBe('/')
+  })
+
+  it('没有 redirect 但记住了刚才那一页时, 回那一页', async () => {
+    // 这就是「+ 追番」按钮那条路: AnimeDetail 里是硬跳 /login 的, URL 上没有
+    // redirect, 只能靠路由记下的这一笔 —— 否则用户点「追番」登录完站在首页
+    rememberPath('/anime/12')
+    const { router } = await loginWith(undefined)
+    expect(router.currentRoute.value.fullPath).toBe('/anime/12')
+  })
+
+  it('redirect 不合规时回到记住的那一页, 而不是跳到站外', async () => {
+    rememberPath('/profile')
+    const { router } = await loginWith('//evil.com')
+    expect(router.currentRoute.value.path).toBe('/profile')
+    expect(router.currentRoute.value.href).not.toContain('evil.com')
   })
 
   it('redirect 传了多个值(query 数组)时不会崩, 也不会跟着走', async () => {

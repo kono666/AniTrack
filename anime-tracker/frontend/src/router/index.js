@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { loadStoredUser } from '../utils/userStorage'
+import { rememberPath } from '../utils/loginRedirect'
 
 const routes = [
   { path: '/', name: 'Home', component: () => import('../views/Home.vue') },
@@ -93,6 +94,20 @@ router.beforeEach((to, from, next) => {
   }
 
   next()
+})
+
+/**
+ * 记下「刚才那一页」, 给登录页兜底用.
+ *
+ * 守卫只覆盖了 requiresAuth 的路由; 而跳登录的入口有好几处是硬跳的 ——
+ * 导航栏的「登录」、AnimeDetail 的「+ 追番」与「登录后参与讨论」、Assistant、
+ * Profile, 它们都不带 redirect, URL 里没有任何线索, 只能靠这里记的一笔.
+ *
+ * 用 afterEach 而不是 beforeEach: 只记**真的进去了**的页面. beforeEach 会在
+ * 被重定向掉的跳转上也记一笔, 那记下的就是没去成的那一页.
+ */
+router.afterEach((to) => {
+  rememberPath(to.fullPath)
 })
 
 export default router

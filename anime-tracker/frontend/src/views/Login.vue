@@ -26,6 +26,7 @@ import { reactive, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { login } from '../api'
+import { resolvePostAuthPath } from '../utils/loginRedirect'
 
 const router = useRouter()
 const route = useRoute()
@@ -34,25 +35,6 @@ const form = reactive({ username: '', password: '' })
 const error = ref('')
 const loading = ref(false)
 
-/**
- * 把 ?redirect= 夹回站内路径.
- *
- * 为什么要夹: 这个参数是给「登录后回到刚才那一页」用的, 而它是 URL 里的东西,
- * 谁都能构造一条 /login?redirect=//evil.com 发出去. 这里**不能**只判断
- * "以 / 开头" —— 以 // 开头的是协议相对地址, 浏览器认它, history.pushState
- * 之后当前标签页就直接跳到 evil.com 了, 用户看到的是"点了登录, 结果到了一个
- * 陌生的网站", 而这一步发生在登录成功之后, 正是他最不会怀疑的时候.
- * 反斜杠那一版(/\evil.com)在部分浏览器里同样会被当成 // 处理, 一起挡掉.
- *
- * 不合规就回首页 —— 那本来就是登录后的默认落点, 比报错好.
- */
-function safeRedirect(raw) {
-  if (typeof raw !== 'string') return '/'
-  if (!raw.startsWith('/')) return '/'
-  if (raw.startsWith('//') || raw.startsWith('/\\')) return '/'
-  return raw
-}
-
 async function handleLogin() {
   error.value = ''
   loading.value = true
@@ -60,8 +42,9 @@ async function handleLogin() {
     const res = await login({ username: form.username, password: form.password })
     if (res.data.code === 200) {
       userStore.setUser(res.data.data)
-      // 跳转到登录前访问的页面, 或首页(白名单校验见 safeRedirect)
-      router.push(safeRedirect(route.query.redirect))
+      // 回到登录前那一页: URL 上的 redirect 优先, 没有就用路由记下的「刚才那一页」,
+      // 都没有才回首页. 站内白名单校验与安全说明见 utils/loginRedirect.js
+      router.push(resolvePostAuthPath(route.query.redirect))
     } else {
       error.value = res.data.message || '登录失败'
     }
