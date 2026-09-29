@@ -9,6 +9,16 @@
 #  为什么是 weekly 而不是 daily: 每天的 PR 会把 Issues 列表占满,
 #  于是真正要看的那条被淹掉 —— 而"淹掉"和"没人看"是同一个结果。
 #  每周一次, 配合下面的分组, 一次能看完。
+#
+#  为什么另外写了几条 ignore: 大版本升级不是"依赖更新", 是一次要规划的操作
+#  (理由和文件末尾 postgres 那条是同一个, 只是这里的是我们主动要按节奏做的:
+#   Spring Boot 4 / springdoc 3 要单独立项迁移, 构建用的 node / maven 镜像要跟
+#   CI 一起动). 不写规则的话, 这几个大版本会每周重开一次 PR —— 而"列表里永远
+#   躺着几条不打算合的东西"和"没人看"是同一个结果: 它们会把真正要看的那几条
+#   淹掉, 于是"看到就点合并"的习惯就是这么练成的.
+#
+#  ignore 只挡 major, 小版本(安全补丁)照常出 PR —— 这一点是刻意的:
+#  把整个依赖 ignore 掉, 就连补丁也一起挡在门外了。
 # ============================================================
 version: 2
 
@@ -52,6 +62,16 @@ updates:
       backend:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # Spring Boot 4 是一次大版本迁移(Spring Framework 7、配置属性、安全链都在动),
+      # 要单独排期 + 单独一轮回归, 不能靠合并一个自动 PR 完成。
+      # 3.5.x 的小版本(含安全补丁)照常出 PR。
+      - dependency-name: "org.springframework.boot:spring-boot-starter-parent"
+        update-types: ["version-update:semver-major"]
+      # springdoc 3 是跟着 Spring Boot 4 走的: 单独升到 3.x 会和现在的 Boot 3.5 对不上,
+      # 而这两个 PR 各自看起来都很正常。
+      - dependency-name: "org.springdoc:springdoc-openapi-starter-webmvc-ui"
+        update-types: ["version-update:semver-major"]
 
   # ----------------------------------------------------------
   #  容器基础镜像
@@ -66,6 +86,20 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "依赖："
+    ignore:
+      # 构建阶段用的 maven 镜像. 现在钉的是 3.9-eclipse-temurin-17 —— 项目是
+      # release 17, 把构建 JDK 一起换成 24 是另一件事(要单独验); 而 3.9 → 3
+      # 这种浮动 tag 还会让构建变得不可复现。
+      #
+      # 这条的把握说清楚: docker 的 tag 不都是规范 semver(3.9-eclipse-temurin-17),
+      # Dependabot 对它的 major/minor 判定没有保证 —— 如果规则没挡住, 那个 PR
+      # 下次扫描还会出现, 手动关掉即可。不要为了挡住它而 ignore 整个依赖:
+      # 那会把 3.9.x 上的安全补丁一起挡掉。
+      #
+      # 运行阶段的 eclipse-temurin 不在此列: 17-jre → 25-jre 是可以合的(产物是
+      # release 17, 在 25 上照跑), 但要它单独一个提交、以镜像冒烟为准。
+      - dependency-name: "maven"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /anime-tracker/frontend
@@ -74,6 +108,12 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "依赖："
+    ignore:
+      # 构建用的 node 镜像. 升它必须和 CI 里的 setup-node 一起动, 否则会出现
+      # "镜像构建用 26、CI 跑测试用 22" 这种两边不一致 —— 而它只在某个版本
+      # 特有的行为上才暴露, 平时全是绿的. 等我们主动升那一次一起改。
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /anime-tracker/scripts/backup
