@@ -39,7 +39,7 @@ RUN mvn -B -DskipTests=${SKIP_TESTS} package
 # ---------- 阶段 2: 运行 ----------
 # 选 alpine 基底有两个原因: 体积小; 自带 busybox 的 wget ——
 # 下面 HEALTHCHECK 要用它, 也就不用为了探活再装一个 curl (少一层、少一个要跟的包).
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 
 # 时区.
 # 容器默认走 UTC, 而这个项目的日志时间戳、AI 助手的「每日调用额度」重置
