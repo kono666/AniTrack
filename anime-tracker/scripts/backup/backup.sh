@@ -75,17 +75,45 @@ while true; do
         # 空库的 dump 与半截的 dump 是同一种东西: 看起来像备份. 上面那条
         # 取舍对它们一视同仁 —— 丢掉. 只是这一份的成因不是"传输出错", 而是
         # "来得太早", 所以值得再试一次, 而不是等一整天.
+        #
+        # 第二条**怎么写的**也栽过一次(CI #59), 记在这里免得改回去: 那句
+        # "有没有建表语句"必须由一个**读到流尾**的程序来回答.
+        # 写成 gzip -dc "$tmp" | grep -q '^CREATE TABLE' 会踩到一个不显眼的坑 ——
+        # grep -q 一命中就退出, 上游 gzip 接着往一个没有读者的管道里写, 被 SIGPIPE
+        # 打死(退出码 141); 而开头为着"截断的 dump 不能当好备份"打开的
+        # set -o pipefail, 会让这条管道整体算失败. 于是**一份完整的、有表的 dump
+        # 被判成"库里一张表都没有"丢掉**, 备份目录一直是空的, healthcheck 跟着
+        # 报 unhealthy —— 症状看起来像库的问题, 其实与库无关.
+        #
+        # 实测(构造 dump 反复跑这一句): 解压后 167KB 以上 20/20 误判, 95KB 以下
+        # 20/20 正确, 中间一档 19/20. 也就是说它只取决于 dump 有多大, 而与库里
+        # 有没有表无关, 重试也不会变好 —— CI #59 正是这样: 后端 05:05:18 打完
+        # 4 个迁移, 7 秒后备份说"一张表都没有", 60 秒后重试**一模一样**.
+        # (上面那条带 tail 的检查没这个毛病: tail 得读到流尾才吐得出最后 5 行,
+        #  没有"提前退出"这回事.)
+        #
+        # 所以计数用 awk: 它一定读到流尾, 且无匹配时也退 0 —— 不用再挂个 || true
+        # 去绕开 set -e, 那会把真正的失败一起吞掉.
         if ! gzip -dc "$tmp" | tail -n 5 | grep -q 'PostgreSQL database dump complete'; then
             rm -f "$tmp"
             log "失败: dump 没有收尾标记(不完整), 已丢弃"
-        elif ! gzip -dc "$tmp" | grep -q '^CREATE TABLE'; then
-            rm -f "$tmp"
-            delay="$RETRY_SECONDS"
-            log "跳过: 库里一张表都没有(应用还没跑完迁移, 或者备份跑在了迁移前面)."
-            log "      空 schema 的 dump 恢复不出任何东西, 已丢弃; ${RETRY_SECONDS}s 后重试"
         else
-            mv "$tmp" "$file"
-            log "完成 $(du -h "$file" | cut -f1)  $(basename "$file")"
+            # 计数放在收尾标记之后: 半截的 dump 已经被上一条拦下了, 而赋值语句在
+            # set -e 下会带着 gzip 的失败退出码把整个脚本一起带走 ——
+            # 备份循环不该因为一份坏文件而停摆.
+            table_count=$(gzip -dc "$tmp" | awk '/^CREATE TABLE/ {n++} END {print n+0}')
+            if [ "$table_count" -eq 0 ]; then
+                size=$(du -h "$tmp" 2>/dev/null | cut -f1)
+                rm -f "$tmp"
+                delay="$RETRY_SECONDS"
+                log "跳过: dump 里一条建表语句都没有(应用还没跑完迁移, 或者备份跑在了迁移前面)."
+                # 把体量一并打出来: 4.0K 是"真的空", 而这个数字有几十 K 时,
+                # 问题就在上面那条检查上, 不在库上 —— 下次能一眼看出来.
+                log "      ${size} 的 dump 恢复不出任何东西, 已丢弃; ${RETRY_SECONDS}s 后重试"
+            else
+                mv "$tmp" "$file"
+                log "完成 $(du -h "$file" | cut -f1)  $(basename "$file")"
+            fi
         fi
     else
         rm -f "$tmp"
