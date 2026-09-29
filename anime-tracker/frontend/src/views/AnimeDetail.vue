@@ -65,10 +65,11 @@
 
       <!-- Episode Grid -->
       <section class="d-section">
-        <div class="d-section-hd">
-          <h2>剧集列表</h2>
-          <span class="d-section-extra" v-if="userStore.loggedIn && watchedEpisodes.length > 0">已看 {{ watchedEpisodes.length }} / {{ episodes.length }}</span>
-        </div>
+        <SectionHeader title="剧集列表">
+          <template #extra>
+            <span v-if="userStore.loggedIn && watchedEpisodes.length > 0">已看 {{ watchedEpisodes.length }} / {{ episodes.length }}</span>
+          </template>
+        </SectionHeader>
         <div v-if="episodes.length > 0" class="ep-tile-grid">
           <button
             v-for="ep in episodes" :key="ep.id"
@@ -86,7 +87,7 @@
 
       <!-- Related -->
       <section v-if="relatedAnime.length > 0" class="d-section">
-        <div class="d-section-hd"><h2>相关推荐</h2></div>
+        <SectionHeader title="相关推荐" />
         <div class="related-scroll">
           <div
             v-for="item in relatedAnime"
@@ -110,10 +111,9 @@
 
       <!-- Reviews -->
       <section class="d-section">
-        <div class="d-section-hd">
-          <h2>评论 · {{ ratingStats.count }}</h2>
-          <span class="d-section-extra">均分 ⭐{{ ratingStats.average }}</span>
-        </div>
+        <SectionHeader :title="`评论 · ${ratingStats.count}`">
+          <template #extra>均分 ⭐{{ ratingStats.average }}</template>
+        </SectionHeader>
 
         <!-- My Review -->
         <div v-if="userStore.loggedIn" class="my-review">
@@ -185,6 +185,7 @@ import {
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
+import SectionHeader from '../components/SectionHeader.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -350,12 +351,10 @@ onMounted(load)
 .d-btn-ghost{ padding:8px 22px; border-radius:8px; border:1.5px solid var(--border); background:transparent; color:var(--text-secondary); font-size:13px; cursor:pointer; font-family:inherit; }
 
 /* ====== SECTIONS ====== */
+/* 标题栏(.d-section-hd / .d-section-extra)已经收进 SectionHeader 组件 ——
+   它那三个分区原本各写一遍同样的东西, 而 Home 那边还有两种别的写法。
+   "已看 3/12" 的弱化处理一并交给 .sec-extra。 */
 .d-section{ margin-bottom:32px; }
-.d-section-hd{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:16px; }
-.d-section-hd h2{ font-size:20px; font-weight:800; color:var(--text); }
-/* 原来是 --primary。墨色主题下它跟 --text 同色, 这个"已看 3/12"的附注会
-   跳成跟标题一样重 —— 它本来就该比标题弱一档 */
-.d-section-extra{ font-size:13px; color:var(--text-secondary); font-weight:600; }
 
 /* ====== EPISODE TILES ====== */
 .ep-tile-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); gap:10px; }

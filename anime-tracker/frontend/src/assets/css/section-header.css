@@ -1,0 +1,75 @@
+/* ============================================================
+   AniTrack — Section Header
+   ============================================================ */
+
+/* 这份样式放在 @layer components 里(见 style.css 的 @import), 而不是写成
+   SectionHeader.vue 的 scoped —— scoped 不在任何层里, 会无条件压过所有层内规则,
+   这正是 admin.css 踩过的那个坑。 */
+
+.sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  /* 细线是"编辑感"的一半: 分区靠一条横线切开, 而不是靠多留一点空白 */
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sec-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  /* 显示体只影响拉丁字形 —— 中文标题(今日放送/本季热门)没进 webfont, 会落到
+     系统 CJK 栈, 所以这里的"编辑感"主要来自字号、字重和左边那道竖条, 不是字体。
+     字号取 --fs-h2 而不是原来写死的 20px, 让那个 token 真的有人用。 */
+  font-family: var(--font-display);
+  font-size: var(--fs-h2);
+  font-weight: 700;
+  letter-spacing: .01em;
+  color: var(--text);
+}
+/* 竖条用 --primary(即墨色), 不额外挑一个彩色 —— 彩色留给金银铜榜位和状态语义 */
+.sec-title::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 3px;
+  height: 1.15em;
+  background: var(--primary);
+}
+
+.sec-side {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-shrink: 0;
+}
+.sec-extra {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* 「查看全部」刻意不用 --primary: 墨色主题下它跟 --text 几乎同色, 一个跟正文一样
+   重的链接会把标题的注意力拉走。它该比标题弱一档, 悬停时再亮起来。 */
+.sec-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color var(--transition);
+}
+.sec-more:hover { color: var(--text); }
+.sec-more-arrow { transition: transform var(--transition); }
+.sec-more:hover .sec-more-arrow { transform: translateX(3px); }
+
+@media (max-width: 768px) {
+  /* 窄屏下右侧那组往标题挤, 会先把标题压到换行。让标题可截断而不是被推走 */
+  .sec-title { min-width: 0; }
+  .sec-side { gap: 10px; }
+}

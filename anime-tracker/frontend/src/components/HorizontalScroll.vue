@@ -1,9 +1,9 @@
 <template>
+  <!-- 这个组件只负责"横向滚动"这一件事, 标题交给外面的 SectionHeader 组合。
+       改前它自带一套 .hs-header/.hs-title/.hs-more, 和 Home 的 .section-heading、
+       AnimeDetail 的 .d-section-hd 是三份长得不一样的同一种东西 —— 于是全站有
+       四种分区标题。现在标题只有一处实现, 谁要谁在上面搁一个。 -->
   <div class="hs-section">
-    <div class="hs-header" v-if="title">
-      <h2 class="hs-title">{{ title }}</h2>
-      <router-link v-if="link" :to="link" class="hs-more">查看全部 →</router-link>
-    </div>
     <div class="hs-wrap">
       <button
         v-if="showArrows"
@@ -32,8 +32,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
 defineProps({
-  title: { type: String, default: '' },
-  link: { type: String, default: '' },
   showArrows: { type: Boolean, default: true },
 })
 
@@ -80,14 +78,9 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.hs-section { margin-bottom: 36px; }
-.hs-header {
-  display: flex; align-items: baseline; justify-content: space-between;
-  margin-bottom: 16px;
-}
-.hs-title { font-size: 20px; font-weight: 800; color: var(--text); display: flex; align-items: center; gap: 8px; }
-.hs-more { font-size: 13px; color: var(--primary); font-weight: 600; transition: opacity var(--transition); }
-.hs-more:hover { opacity: .8; }
+/* 分区之间的间距现在由用到它的那一层(Home 的 .home-block)统一给,
+   这里不再自带 margin —— 否则标题和滚动区之间会多出一份谁也说不清的空白。 */
+.hs-section { margin-bottom: 0; }
 
 .hs-wrap { position: relative; }
 .hs-track {

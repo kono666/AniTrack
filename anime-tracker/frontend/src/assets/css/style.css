@@ -27,6 +27,7 @@
 @import './tag-filter.css' layer(components);
 @import './admin.css' layer(components);
 @import './assistant.css' layer(components);
+@import './section-header.css' layer(components);
 
 /* ── Utilities (highest layered priority) ── */
 @import './interactions.css' layer(utilities);

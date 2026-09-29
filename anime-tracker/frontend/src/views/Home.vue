@@ -5,18 +5,29 @@
 
     <div class="page-container">
       <!-- Today's Schedule -->
-      <div v-if="todayAnime.length > 0" class="today-section">
-        <h2 class="section-heading" v-reveal>
-          📅 今日放送
-          <span class="today-date">{{ todayLabel }}</span>
-        </h2>
+      <section v-if="todayAnime.length > 0" class="home-block">
+        <SectionHeader title="📅 今日放送" v-reveal>
+          <template #extra>
+            <span class="today-date">{{ todayLabel }}</span>
+            <!-- 改前这里写死 slice(0, 8): 当天排片第 9 部起直接丢掉, 而页面上
+                 没有任何地方提示"还有更多"。不是折叠, 是消失。
+                 修法上选了就地展开而不是「查看更多 →」: 站内没有一页能装下"今日放送",
+                 /search 的 view 只认 rank 和 date, 硬指过去只会把人送到一个不相干的
+                 列表。等真有那一页了再换成链接。 -->
+            <button
+              v-if="todayAnime.length > TODAY_LIMIT"
+              class="today-toggle"
+              @click="showAllToday = !showAllToday"
+            >{{ showAllToday ? '收起' : `全部 ${todayAnime.length} 部` }}</button>
+          </template>
+        </SectionHeader>
         <div class="today-grid">
           <!-- 首页这几类卡片都只有 @click, 键盘到不了、读屏也不说它们能按.
                补 role/tabindex + 回车/空格(role=button 的约定是两个都触发).
                见 interactions.css 里那份 focus-visible 名单 —— 它早就把这些类
                列进去了, 只是一直没有元素能被 focus. -->
           <div
-            v-for="item in todayAnime.slice(0, 8)"
+            v-for="item in visibleToday"
             :key="item.id"
             class="today-card"
             role="button"
@@ -35,7 +46,7 @@
             <div class="today-name">{{ item.nameCn || item.name }}</div>
           </div>
         </div>
-      </div>
+      </section>
 
       <LoadingSpinner v-if="loading" />
 
@@ -53,62 +64,68 @@
 
       <template v-else>
         <!-- Popular This Season -->
-        <HorizontalScroll title="🔥 本季热门" link="/search?view=rank">
-          <div
-            v-for="(item, idx) in popularList"
-            :key="item.id"
-            class="hs-card"
-            role="button"
-            tabindex="0"
-            @click="open(item.id)"
-            @keydown.enter.prevent="open(item.id)"
-            @keydown.space.prevent="open(item.id)"
-          >
-            <div class="hs-card-rank" :class="'rank-' + (idx + 1)">{{ idx + 1 }}</div>
-            <div class="hs-card-img-wrap">
-              <img
-                class="hs-card-img"
-                :src="item.images?.large || item.images?.common || fallbackImg"
-                :alt="item.nameCn"
-                loading="lazy"
-                @error="e => e.target.src = fallbackImg"
-              />
-              <div class="hs-card-score" v-if="item.rating?.score">⭐ {{ item.rating.score.toFixed(1) }}</div>
+        <section class="home-block">
+          <SectionHeader title="🔥 本季热门" more="/search?view=rank" v-reveal />
+          <HorizontalScroll>
+            <div
+              v-for="(item, idx) in popularList"
+              :key="item.id"
+              class="hs-card"
+              role="button"
+              tabindex="0"
+              @click="open(item.id)"
+              @keydown.enter.prevent="open(item.id)"
+              @keydown.space.prevent="open(item.id)"
+            >
+              <div class="hs-card-rank" :class="'rank-' + (idx + 1)">{{ idx + 1 }}</div>
+              <div class="hs-card-img-wrap">
+                <img
+                  class="hs-card-img"
+                  :src="item.images?.large || item.images?.common || fallbackImg"
+                  :alt="item.nameCn"
+                  loading="lazy"
+                  @error="e => e.target.src = fallbackImg"
+                />
+                <div class="hs-card-score" v-if="item.rating?.score">⭐ {{ item.rating.score.toFixed(1) }}</div>
+              </div>
+              <div class="hs-card-title">{{ item.nameCn || item.name }}</div>
             </div>
-            <div class="hs-card-title">{{ item.nameCn || item.name }}</div>
-          </div>
-        </HorizontalScroll>
+          </HorizontalScroll>
+        </section>
 
         <!-- Recently Updated -->
-        <HorizontalScroll title="🆕 最近更新" link="/search?view=date">
-          <div
-            v-for="item in recentList"
-            :key="'r-' + item.id"
-            class="hs-card"
-            role="button"
-            tabindex="0"
-            @click="open(item.id)"
-            @keydown.enter.prevent="open(item.id)"
-            @keydown.space.prevent="open(item.id)"
-          >
-            <div class="hs-card-img-wrap">
-              <img
-                class="hs-card-img"
-                :src="item.images?.large || item.images?.common || fallbackImg"
-                :alt="item.nameCn"
-                loading="lazy"
-                @error="e => e.target.src = fallbackImg"
-              />
-              <div class="hs-card-badge" v-if="item.totalEpisodes">{{ item.totalEpisodes }}集</div>
+        <section class="home-block">
+          <SectionHeader title="🆕 最近更新" more="/search?view=date" v-reveal />
+          <HorizontalScroll>
+            <div
+              v-for="item in recentList"
+              :key="'r-' + item.id"
+              class="hs-card"
+              role="button"
+              tabindex="0"
+              @click="open(item.id)"
+              @keydown.enter.prevent="open(item.id)"
+              @keydown.space.prevent="open(item.id)"
+            >
+              <div class="hs-card-img-wrap">
+                <img
+                  class="hs-card-img"
+                  :src="item.images?.large || item.images?.common || fallbackImg"
+                  :alt="item.nameCn"
+                  loading="lazy"
+                  @error="e => e.target.src = fallbackImg"
+                />
+                <div class="hs-card-badge" v-if="item.totalEpisodes">{{ item.totalEpisodes }}集</div>
+              </div>
+              <div class="hs-card-title">{{ item.nameCn || item.name }}</div>
+              <div class="hs-card-year" v-if="item.date">{{ item.date.substring(0, 4) }}</div>
             </div>
-            <div class="hs-card-title">{{ item.nameCn || item.name }}</div>
-            <div class="hs-card-year" v-if="item.date">{{ item.date.substring(0, 4) }}</div>
-          </div>
-        </HorizontalScroll>
+          </HorizontalScroll>
+        </section>
 
         <!-- Browse by Tag -->
-        <div class="browse-section">
-          <h2 class="section-heading" v-reveal>🏷️ 分类浏览</h2>
+        <section class="home-block">
+          <SectionHeader title="🏷️ 分类浏览" v-reveal />
           <!-- 分类是同一类问题的第三处: 一排 <span @click>, 键盘同样到不了.
                这几个没做成 <button>: interactions.css 与 tag-filter.css 里
                已有的 .tag-chip 样式(以及 :active 的按下反馈)是按 span 写的,
@@ -149,7 +166,7 @@
             />
           </div>
           <EmptyState v-else-if="selectedTag" icon="🏷️" message="该分类暂无数据" />
-        </div>
+        </section>
       </template>
     </div>
   </div>
@@ -166,6 +183,7 @@ import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
 import { useReveal } from '../composables/useReveal'
 import HeroBanner from '../components/HeroBanner.vue'
 import HorizontalScroll from '../components/HorizontalScroll.vue'
+import SectionHeader from '../components/SectionHeader.vue'
 import AnimeCard from '../components/AnimeCard.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -185,6 +203,13 @@ const error = ref('')
 const tagResults = ref([])
 const tagPage = ref(1)
 const pageSize = 24
+
+// 今日放送默认只铺前 8 部, 其余收在「全部 N 部」后面(改前是直接丢掉)
+const TODAY_LIMIT = 8
+const showAllToday = ref(false)
+const visibleToday = computed(() =>
+  showAllToday.value ? todayAnime.value : todayAnime.value.slice(0, TODAY_LIMIT)
+)
 
 /** 打开详情页. 卡片和分类标签都用它 —— 同一段跳转原先在模板里写了 4 遍,
  *  补键盘支持时要写 12 遍, 这正是该收成一个函数的时候 */
@@ -282,15 +307,24 @@ async function loadHome() {
 <style scoped>
 .home-page { padding-bottom: 40px; }
 
-/* ── Section Heading ── */
-.section-heading {
-  font-size: 20px; font-weight: 800; color: var(--text);
-  margin-bottom: 16px; display: flex; align-items: center; gap: 10px;
+/* ── 分区 ──
+   标题本身交给 SectionHeader(见 assets/css/section-header.css), 这里只管
+   分区之间的节奏。改前三块的间距各写各的(.today-section 36px 下边距、
+   .browse-section 8px 上边距、.hs-section 36px 下边距), 叠起来是 44 还是 36
+   取决于谁先出现 —— 现在只有一个数。 */
+.home-block { margin-bottom: 40px; }
+
+/* 那两个元素是插进 SectionHeader 的 extra 插槽里的, 按 Vue 的规则它们编译在
+   Home 的作用域下, 所以这份 scoped 样式照常命中, 不需要 :deep() */
+.today-date { font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+.today-toggle {
+  border: none; background: none; padding: 0; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--text-secondary); transition: color var(--transition);
 }
-.today-date { font-size: 13px; color: var(--primary); font-weight: 600; }
+.today-toggle:hover { color: var(--text); }
 
 /* ── Today's Schedule ── */
-.today-section { margin-bottom: 36px; }
 .today-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
@@ -360,9 +394,6 @@ async function loadHome() {
 .hs-card-year {
   font-size: 11px; color: var(--text-muted); margin-top: 2px;
 }
-
-/* ── Browse Section ── */
-.browse-section { margin-top: 8px; }
 
 /* ── Responsive ── */
 @media (max-width: 768px) {

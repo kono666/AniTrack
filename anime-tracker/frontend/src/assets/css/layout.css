@@ -5,18 +5,13 @@
 /* ── Page Layout ── */
 .page-container { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .page-header { margin-bottom: 28px; }
-.page-header h1 { font-size: 28px; }
-.section-title { font-size: 20px; font-weight: 700; margin-bottom: 18px; }
+.page-header h1 { font-size: var(--fs-h1); }
 
-/* ── Section Cards ── */
-.section-card {
-  background: var(--card);
-  border-radius: var(--radius);
-  padding: 24px;
-  margin-bottom: 20px;
-  border: 1px solid var(--card-border);
-}
-.section-card h3 { margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+/* 这里原本还有 .section-title 和 .section-card 两组规则。
+   两组都**从来没有被引用过** —— 模板里搜不到这两个类名, 它们是从某个更早的版本
+   留下来的: 当初大概真的打算用 .section-card 包住每个分区, 后来改成各页自己写了。
+   分区标题现在有了唯一的实现(components/SectionHeader.vue + section-header.css),
+   这两组死规则跟着一起删掉, 免得下次有人以为分区的样式在这里。 */
 
 /* ── Anime Grid ──
    原在 anime-card.css 里, 和 AnimeCard.vue 的 scoped 样式重复的规则一并删掉了.
