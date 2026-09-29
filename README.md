@@ -622,7 +622,7 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 
 **16. 前端依赖：那个没人 import 的 esbuild**
 
-`anime-tracker/frontend/package.json` 的 `devDependencies` 里写着 `"esbuild": "^0.28.2"`，而代码里没有任何地方 `import` 它（`vite.config.js` 和 `src/` 都没有）。它当初是为一个具体的 npm 行为加的——一个看起来多余的依赖，往往就是某个 bug 留下的化石。分两段记，因为它的前提后来消失了。
+`anime-tracker/frontend/package.json` 的 `devDependencies` 里**曾经**写着 `"esbuild": "^0.28.2"`（已删，见本节末尾），而代码里没有任何地方 `import` 它（`vite.config.js` 和 `src/` 都没有）。它当初是为一个具体的 npm 行为加的——一个看起来多余的依赖，往往就是某个 bug 留下的化石。分两段记，因为它的前提后来消失了。
 
 **当初为什么加：**
 
@@ -639,7 +639,12 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - vite 8 改用 rolldown 打包，esbuild 对它只是可选 peer。去掉这个直接依赖后重新解析，锁文件里**一个 esbuild 条目都没有**，`@esbuild/*` 那 26 个平台包全部消失。
 - 实测：把它从 `node_modules` 里挪走，`npm run build` 与 177 个用例**全过**，构建产物的 chunk 哈希与挪走前**一模一样**。
 
-所以它现在是一份多余的依赖。这次**没有直接删**——删它属于改动构建配置，和这一批的文档修正不是一回事——但结论记在这里：删是安全的，前提已经验证过。
+所以它是一份多余的依赖，**已经删掉了**。删的时候把上面这几条重验了一遍，而且验得更实：
+
+- 新锁文件是在**仓库外面**的干净目录里解析出来的（不是在项目里就地生成，理由见下一条）；
+- 差异**恰好只是 esbuild 那一棵子树**，不是「大致没变」：非 esbuild 的包集合 178 → 178、版本被顺带改动的包 **0 个**、`optional` 标记 27 → 27（当初丢的就是它，所以专门核了）、rolldown 平台包 17 → 17；
+- 用新锁文件真跑了一遍 `npm ci`（不是 `--package-lock-only`），装完 152 个包，`node_modules` 下 `esbuild` 与 `@esbuild` 都不存在；
+- 最后把改前的 `package.json` 与锁文件换回来、重新 `npm ci` + 构建一遍做对照：`dist/assets` 下 **19 个产物文件名逐行 diff 为空**——删掉它，产物没有任何变化。
 
 顺带记下一条操作性的坑：**锁文件不能在项目目录里重新生成**。`npm install --package-lock-only` 会参考已存在的 `node_modules`，而 `node_modules` 里只装了当前平台那一份二进制——生成出来的锁文件就只剩 Windows 的 rolldown 绑定（实测：15 个平台二进制只剩 1 个），推到 Linux 上照样失败。正确做法是在一个「只有 `package.json`、没有 `node_modules`」的干净目录里解析，再把锁文件拷回来。
 
