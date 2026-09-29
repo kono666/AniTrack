@@ -113,15 +113,12 @@ public class JwtUtil {
         return Long.valueOf(parseClaims(token).getSubject());
     }
 
-    /** 从 Token 提取用户名 */
-    public String getUsernameFromToken(String token) {
-        return parseClaims(token).get("username", String.class);
-    }
-
-    /** 从 Token 提取角色 */
-    public String getRoleFromToken(String token) {
-        return parseClaims(token).get("role", String.class);
-    }
+    // 这里原本还有 getUsernameFromToken / getRoleFromToken 两个方法, 已删.
+    // 它们只被 JwtUtilTest 调用, 生产代码一处都没有 —— 而"从 token 里读角色"
+    // 本身是个有风险的写法: token 里的 role 是签发那一刻的快照, 管理员被降级
+    // 之后那张 token 仍然写着 ADMIN. 现在只从 token 取 userId, 权限每次现查库
+    // (见 JwtAuthFilter: 拿 userId 查 user 再用库里的 role 建 Authority).
+    // 留着这两个方法, 等于留了一条"看起来很方便"的旁路.
 
     /** 验证 Token 是否有效 */
     public boolean validateToken(String token) {

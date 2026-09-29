@@ -11,8 +11,14 @@ import java.nio.charset.StandardCharsets;
 /**
  * LLM 专用的 HTTP 客户端.
  *
- * 不复用 WebConfig 里那个 restTemplate: 后者读超时 120s 是为慢速抓取 Bangumi 设的,
- * LLM 需要更短的超时, 以便上游无响应时快速失败并给用户友好提示, 而不是干等两分钟.
+ * 不复用 WebConfig 里那个 restTemplate. 两边要的是**相反**的超时口径:
+ * 抓 Bangumi 是「拿一份现成的 JSON 回来」, 慢就是不正常, 所以那边读超时只有 20s;
+ * 而这里等的是模型逐字生成, 90s 是正常长度 —— 用 20s 会把正常的回答掐断,
+ * 前端看到的是「流莫名其妙断了」. 超时值只是最表面的差别: 共用一个客户端意味着
+ * 以后任何一边调参都要先确认另一边不受影响, 两个 bean 各自持有自己的 factory 更省事.
+ *
+ * (这段注释原来写的是「后者读超时 120s」—— 那个数字在收窄 Bangumi 超时时已经不成立了.
+ *  注释里写死别人的配置值, 就是给自己埋一个会过期的事实; 所以这里只说口径, 不说数.)
  */
 @Configuration
 public class LlmConfig {

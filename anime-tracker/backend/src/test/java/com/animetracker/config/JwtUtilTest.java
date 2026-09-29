@@ -48,17 +48,9 @@ class JwtUtilTest {
         assertEquals(42L, jwtUtil.getUserIdFromToken(token));
     }
 
-    @Test
-    void shouldExtractUsernameFromToken() {
-        String token = jwtUtil.generateToken(1L, "bob", "USER");
-        assertEquals("bob", jwtUtil.getUsernameFromToken(token));
-    }
-
-    @Test
-    void shouldExtractRoleFromToken() {
-        String token = jwtUtil.generateToken(1L, "admin", "ADMIN");
-        assertEquals("ADMIN", jwtUtil.getRoleFromToken(token));
-    }
+    // 原先这里还有 shouldExtractUsernameFromToken / shouldExtractRoleFromToken,
+    // 随被删的两个方法一起去掉了 —— 它们钉的是"能读出 token 里的 username/role",
+    // 而这件事现在已经不做(只取 userId, 权限现查库, 见 JwtUtil 里的说明).
 
     @Test
     void shouldRejectInvalidToken() {

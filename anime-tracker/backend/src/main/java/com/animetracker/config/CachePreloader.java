@@ -4,6 +4,7 @@ import com.animetracker.dto.BangumiDTO.*;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.service.AnimeService;
 import com.animetracker.service.BangumiApiClient;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,7 +12,9 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import java.util.concurrent.CompletableFuture;
+import java.time.Year;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 启动后静默从 Bangumi 拉取动漫数据到本地缓存。
@@ -38,11 +41,41 @@ public class CachePreloader {
         "夏日", "在地下城", "某科学的", "为美好的世界"
     };
 
-    // 当季新番搜索词（定期更新）
-    private static final String[] SEASONAL_KEYWORDS = {
-        "2026", "2025", "2026年", "2025年",
-        "剧场版", "新番", "OVA", "动画电影"
-    };
+    /**
+     * 当季新番搜索词. 年份是**算出来的**, 不写死.
+     *
+     * <p>原先这里是 "2026" / "2025" / "2026年" / "2025年" 四个字面量, 注释还写着
+     * "定期更新" —— 而"定期更新"的意思是"到期了要有人记得改", 没人记得的时候它
+     * 不会报错, 只是悄悄开始搜去年的番. 现在取当前年份和上一年, 跨年那天自己就对了.
+     * (季度级的偏移在 DataRefreshService.buildSeasonalKeywords 里按月份算, 那是
+     * 定时任务该管的事; 这里是启动时的一次性补齐, 用年粒度就够.)
+     */
+    private static String[] seasonalKeywords() {
+        int year = Year.now().getValue();
+        return new String[] {
+            String.valueOf(year), String.valueOf(year - 1),
+            year + "年", (year - 1) + "年",
+            "剧场版", "新番", "OVA", "动画电影"
+        };
+    }
+
+    /**
+     * 预加载专用线程, 不复用 ForkJoinPool.commonPool.
+     *
+     * <p>原来写的是 {@code CompletableFuture.runAsync(...)}, 默认落在 commonPool 上 ——
+     * 那是**整个 JVM 共用**的池, 默认线程数是 CPU 核数 - 1, 并行流(parallelStream)
+     * 用的也是它. 而这里要连着跑几分钟, 中间大量 {@code Thread.sleep}(对 Bangumi 限速):
+     * sleep 中的任务照样占着一个 worker, 在 1-2 核的机器上等于把 commonPool 占满,
+     * 别处任何并行流都得排在后面 —— 症状是"启动后头几分钟首页偶尔卡", 而两件事
+     * 之间看不出联系. 给它自己的池, 池里只有它一个用户, 谁也抢不到谁.
+     *
+     * <p>线程设成 daemon: 预加载是"有更好、没有也能照常服务"的事, 不该拖住 JVM 退出.
+     */
+    private final ExecutorService preloadExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "cache-preloader");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final BangumiApiClient apiClient;
     private final AnimeRepository animeRepo;
@@ -66,20 +99,28 @@ public class CachePreloader {
         this.animeService = animeService;
     }
 
+    @PreDestroy
+    void shutdown() {
+        // 用 shutdownNow 而不是 shutdown: 这个任务大多数时间在 sleep, 优雅关闭
+        // 等于什么都不做. 中断掉它, sleep 会立刻抛出, 任务在几毫秒内结束.
+        preloadExecutor.shutdownNow();
+    }
+
     @EventListener(ApplicationReadyEvent.class)
     public void preload() {
         if (!enabled) {
             log.info("预加载已关闭(anitrack.preload.enabled=false), 跳过");
             return;
         }
-        CompletableFuture.runAsync(() -> {
+        String[] seasonal = seasonalKeywords();
+        preloadExecutor.execute(() -> {
             long startCount = animeRepo.count();
             log.info("当前缓存 {} 条，开始补充...", startCount);
 
             int added = 0;
 
             // 第一步：用当季关键词搜索新番
-            for (String kw : SEASONAL_KEYWORDS) {
+            for (String kw : seasonal) {
                 try {
                     SearchResponse resp = apiClient.searchSubjects(kw, 1, 20);
                     if (resp != null && resp.getData() != null) {

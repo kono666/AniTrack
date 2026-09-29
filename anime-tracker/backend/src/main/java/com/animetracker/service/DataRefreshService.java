@@ -71,7 +71,20 @@ public class DataRefreshService {
                     }
                 }
                 Thread.sleep(400);
-            } catch (Exception e) { /* skip */ }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("[定时刷新] 被中断, 这一轮提前结束(当季关键词)");
+                return;
+            } catch (Exception e) {
+                // 这里原本是个空 catch. 空 catch 的问题不是"丢了异常", 而是
+                // "刷新一直在失败"和"刷新一直很正常"在日志上长得一模一样 ——
+                // 而这两件事的处理方式完全相反.
+                // 用 e.toString() 而不是 e.getMessage(): 后者的值可以是 null,
+                // 那时这行日志就只剩"跳过: null", 等于白打. 也不打整份栈:
+                // 这段在循环里, 32 个关键词各一份栈会把它淹掉. 真要查栈,
+                // 异常类名+消息足够定位到是哪一类失败.
+                log.warn("当季关键词 '{}' 搜索失败, 跳过: {}", kw, e.toString());
+            }
         }
 
         // 2. 热门排行前3页
@@ -92,7 +105,15 @@ public class DataRefreshService {
                 }
                 Thread.sleep(600);
             }
-        } catch (Exception e) { /* skip */ }
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            log.warn("[定时刷新] 被中断, 这一轮提前结束(热门排行)");
+            return;
+        } catch (Exception e) {
+            // 排行榜这一段是 rank 这一列唯一的数据来源(见上面的注释), 它整段失败
+            // 意味着榜单名次这一轮没有更新. 以前这里也是空 catch.
+            log.warn("热门排行刷新失败, 跳过: {}", e.toString());
+        }
 
         // 3. 日历接口: 拉取全部在播番剧的完整详情
         try {
@@ -102,6 +123,11 @@ public class DataRefreshService {
                 for (var day : calDays) {
                     if (day.getItems() == null) continue;
                     for (var item : day.getItems()) {
+                        // 和上面那句 day.getItems() == null 一样是防外部数据:
+                        // 日历是第三方 JSON, 数组里出现 null 元素不该让整段刷新停摆.
+                        // (下面那个 catch 要打 item.getId(), 它自己先撞 null 的话
+                        //  就会把异常抛到外层, 反而变成"一个坏条目废掉整轮日历".)
+                        if (item == null) continue;
                         try {
                             if (animeRepo.existsById(item.getId())) {
                                 // 已有的行: 只用日历这一条记录刷新(air_date / rank /
@@ -122,12 +148,26 @@ public class DataRefreshService {
                                 }
                                 Thread.sleep(300); // 礼貌限速
                             }
-                        } catch (Exception ex) { /* skip single item */ }
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            log.warn("[定时刷新] 被中断, 这一轮提前结束(日历)");
+                            return;
+                        } catch (Exception ex) {
+                            // 单条日历条目失败不该拖垮整轮, 但也不能像以前那样一声不吭:
+                            // 这一条会连带丢掉它的简介/集数, 而失败的是"某几条"还是
+                            // "每一条", 只有日志能回答.
+                            log.warn("日历条目 id={} 刷新失败, 跳过: {}",
+                                    item.getId(), ex.toString());
+                        }
                     }
                 }
                 if (calAdded > 0) log.info("  日历补充: +{} 条当季新番", calAdded);
             }
-        } catch (Exception e) { log.debug("日历刷新跳过: {}", e.getMessage()); }
+        } catch (Exception e) {
+            // 整段日历拉不到: 这一轮的在播状态/air_date 都不会更新. 原来只按 debug 记录,
+            // 而生产日志级别是 info —— 也就是说这件事在线上是完全不可见的.
+            log.warn("日历刷新失败, 跳过: {}", e.toString());
+        }
 
         log.info("[定时刷新] 完成. 新增 {} 条, 更新 {} 条, 共 {} 条",
                 added, updated, animeRepo.count());
@@ -151,7 +191,17 @@ public class DataRefreshService {
                     if (!existed) added++;
                 }
                 Thread.sleep(600);
-            } catch (Exception e) { break; }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("[每日全量刷新] 被中断, 提前结束");
+                return;
+            } catch (Exception e) {
+                // 这里原来是 break: 一页失败就当"没有更多数据了"收工. 全量刷新
+                // 少刷一页是能被下一轮补上的, 所以继续 break 没错, 但得留下痕迹 ——
+                // 否则"只刷了 3 页就结束"和"确实只有 3 页"同样不可分辨.
+                log.warn("[每日全量刷新] 第 {} 页拉取失败, 停止本轮: {}", page, e.toString());
+                break;
+            }
         }
         log.info("[每日全量刷新] 完成, 新增 {} 条, 共 {} 条", added, animeRepo.count());
     }
