@@ -128,7 +128,7 @@ jobs:
       # 两阶段构建里最慢的是「下 Maven 依赖」那一层. 缓存交给 GitHub Actions 的
       # 缓存服务, 第二次之后的运行能省掉几分钟 —— 否则每次提交都要重下一遍依赖.
       - name: 构建后端镜像
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./anime-tracker/backend
           # 本机构建默认不跑测试 —— 上面 backend job 已经跑过一次了, 没必要再来一遍.
@@ -147,7 +147,7 @@ jobs:
       # 前端在 Linux 上构建得出来(本机是 Windows, 原生依赖的平台差异只有这里能发现),
       # 以及 Dockerfile 里的两阶段拷贝没写错路径.
       - name: 构建前端镜像
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./anime-tracker/frontend
           tags: anitrack-frontend:latest
