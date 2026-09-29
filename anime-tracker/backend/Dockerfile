@@ -15,7 +15,7 @@
 # ============================================================
 
 # ---------- 阶段 1: 编译 ----------
-FROM maven:3.9-eclipse-temurin-17 AS build
+FROM maven:3-eclipse-temurin-26 AS build
 
 WORKDIR /build
 
