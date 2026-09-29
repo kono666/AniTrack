@@ -21,7 +21,7 @@
          「没有找到相关番剧」—— 他会以为这个站里就是没有, 而不是自己网络断了 -->
     <EmptyState
       v-if="!loading && error"
-      icon="⚠️"
+      type="error"
       :message="error"
       action-label="重试"
       @action="retry"
@@ -35,7 +35,7 @@
       <div v-if="results.length > 0" class="anime-grid">
         <AnimeCard v-for="item in results" :key="item.id" :anime="item" />
       </div>
-      <EmptyState v-else icon="🔍" message="没有找到相关番剧" />
+      <EmptyState v-else type="search" message="没有找到相关番剧" />
 
       <!-- 翻页. 后端 /bangumi/search 本来就吃 page/limit 并回 total(批次 1.3 加的),
            缺的一直是前端: 改前只请求第 1 页, 而结果上方还写着「共找到 N 个结果」——
@@ -54,7 +54,7 @@
         <AnimeCard v-for="item in browseList" :key="item.id" :anime="item" />
       </div>
     </div>
-    <EmptyState v-else-if="!loading" icon="🎌" message="输入关键词搜索你喜欢的动漫" />
+    <EmptyState v-else-if="!loading" type="search" message="输入关键词搜索你喜欢的动漫" />
   </div>
 </template>
 
@@ -85,9 +85,9 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / SEARCH_PAG
 
 const viewMode = computed(() => route.query.view || 'rank')
 const pageTitle = computed(() => {
-  if (searched.value) return '🔍 搜索结果'
-  if (viewMode.value === 'date') return '🆕 最近更新'
-  return '🏆 热门排行'
+  if (searched.value) return '搜索结果'
+  if (viewMode.value === 'date') return '最近更新'
+  return '热门排行'
 })
 
 /** 从 URL 读页码: 只认正整数, 缺省/乱填/0/负数一律当第 1 页 */

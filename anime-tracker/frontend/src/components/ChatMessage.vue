@@ -1,8 +1,8 @@
 <template>
   <div class="chat-msg" :class="'chat-msg--' + message.role">
     <div class="chat-avatar">
-      <span v-if="message.role === 'user'">🧑</span>
-      <span v-else>🤖</span>
+      <PhUser v-if="message.role === 'user'" :size="18" weight="bold" aria-hidden="true" />
+      <PhRobot v-else :size="18" weight="bold" aria-hidden="true" />
     </div>
 
     <div class="chat-body">
@@ -23,7 +23,7 @@
               :class="{ 'tool-step--error': step.error, 'tool-step--running': step.running }"
             >
               <div class="tool-step-head">
-                <span class="tool-step-icon">{{ toolMeta(step.tool).icon }}</span>
+                <component :is="toolMeta(step.tool).Icon" class="tool-step-icon" :size="13" weight="bold" aria-hidden="true" />
                 <span class="tool-step-name">{{ toolMeta(step.tool).label }}</span>
                 <code class="tool-step-raw">{{ step.tool }}</code>
                 <span v-if="step.running" class="tool-step-state">执行中…</span>
@@ -63,7 +63,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { PhWrench, PhCaretDown } from '@phosphor-icons/vue'
+import { PhWrench, PhCaretDown, PhUser, PhRobot } from '@phosphor-icons/vue'
 import AnimeChip from './AnimeChip.vue'
 import { toolMeta } from '../utils/agentTools'
 

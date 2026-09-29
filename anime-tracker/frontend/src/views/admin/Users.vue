@@ -6,7 +6,7 @@
          管理端看到空表第一反应是数据没了, 而不是接口挂了 -->
     <EmptyState
       v-else-if="error"
-      icon="⚠️"
+      type="error"
       :message="error"
       action-label="重试"
       @action="loadUsers"
@@ -63,7 +63,7 @@
             </tr>
           </tbody>
         </table>
-        <EmptyState v-if="users.length === 0" icon="👥" message="暂无用户" />
+        <EmptyState v-if="users.length === 0" type="user" message="暂无用户" />
       </div>
     </div>
   </AdminLayout>

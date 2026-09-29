@@ -19,13 +19,13 @@
         </div>
         <div class="hero-content">
           <div class="hero-text">
-            <div class="hero-badge">🔥 热门推荐</div>
+            <div class="hero-badge">热门推荐</div>
             <h1 class="hero-title">{{ item.nameCn || item.name }}</h1>
             <p class="hero-subtitle" v-if="item.name && item.nameCn !== item.name">{{ item.name }}</p>
             <div class="hero-meta">
-              <span v-if="item.rating?.score" class="hero-score">⭐ {{ item.rating.score.toFixed(1) }}</span>
-              <span v-if="item.totalEpisodes" class="hero-eps">📺 {{ item.totalEpisodes }}集</span>
-              <span v-if="item.date" class="hero-year">📅 {{ item.date.substring(0, 4) }}</span>
+              <span v-if="item.rating?.score" class="hero-score"><PhStar :size="12" weight="fill" /> {{ item.rating.score.toFixed(1) }}</span>
+              <span v-if="item.totalEpisodes" class="hero-eps">{{ item.totalEpisodes }}集</span>
+              <span v-if="item.date" class="hero-year">{{ item.date.substring(0, 4) }}</span>
             </div>
             <div class="hero-tags" v-if="item.tags?.length">
               <span v-for="tag in item.tags.slice(0, 3)" :key="tag.name" class="hero-tag">{{ tag.name }}</span>
@@ -68,6 +68,7 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { PhStar } from '@phosphor-icons/vue'
 import { useRouter } from 'vue-router'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 

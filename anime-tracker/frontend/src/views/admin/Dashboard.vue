@@ -7,7 +7,7 @@
          「暂无数据」都没有, 用户只能猜是不是自己点错了 -->
     <EmptyState
       v-else-if="error"
-      icon="⚠️"
+      type="error"
       :message="error"
       action-label="重试"
       @action="load"
@@ -17,27 +17,27 @@
       <div class="stats-row">
         <div class="stat-card">
           <div class="stat-num">{{ dashboard.totalUsers }}</div>
-          <div class="stat-label">👥 总用户</div>
+          <div class="stat-label">总用户</div>
         </div>
         <div class="stat-card">
           <div class="stat-num">{{ dashboard.activeUsers }}</div>
-          <div class="stat-label">✅ 活跃用户</div>
+          <div class="stat-label">活跃用户</div>
         </div>
         <div class="stat-card">
           <div class="stat-num">{{ dashboard.disabledUsers }}</div>
-          <div class="stat-label">🚫 禁用用户</div>
+          <div class="stat-label">禁用用户</div>
         </div>
         <div class="stat-card">
           <div class="stat-num">{{ dashboard.adminUsers }}</div>
-          <div class="stat-label">🛡️ 管理员</div>
+          <div class="stat-label">管理员</div>
         </div>
         <div class="stat-card">
           <div class="stat-num">{{ dashboard.totalTrackings }}</div>
-          <div class="stat-label">📚 追番记录</div>
+          <div class="stat-label">追番记录</div>
         </div>
         <div class="stat-card">
           <div class="stat-num">{{ dashboard.totalReviews }}</div>
-          <div class="stat-label">💬 评论总数</div>
+          <div class="stat-label">评论总数</div>
         </div>
       </div>
     </div>

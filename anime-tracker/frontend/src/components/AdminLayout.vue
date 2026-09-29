@@ -20,12 +20,12 @@
 
 <script setup>
 defineProps({
-  title: { type: String, default: '⚙️ 管理后台' },
+  title: { type: String, default: '管理后台' },
 })
 
 const tabs = [
-  { path: '/admin', label: '📊 仪表盘' },
-  { path: '/admin/users', label: '👥 用户管理' },
-  { path: '/admin/reviews', label: '💬 评论管理' },
+  { path: '/admin', label: '仪表盘' },
+  { path: '/admin/users', label: '用户管理' },
+  { path: '/admin/reviews', label: '评论管理' },
 ]
 </script>

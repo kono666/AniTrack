@@ -1,5 +1,5 @@
 /* ============================================================
-   🎬 AniTrack — Tabs
+   �AniTrack — Tabs
    ============================================================ */
 
 .tabs { display:flex; gap:2px; margin-bottom:24px; background:var(--card); border-radius:var(--radius); padding:4px; border:1px solid var(--card-border); }

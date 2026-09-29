@@ -55,7 +55,7 @@
         <span v-if="episodeCount" class="meta-dot">·</span>
         <span v-if="episodeCount" class="meta-eps">{{ episodeCount }}集</span>
         <span v-if="hasScore" class="meta-dot">·</span>
-        <!-- 改前这里是文本拼接的 "⭐9.1" —— emoji 的字形跟着系统字体走, 同一个站
+        <!-- 改前这里是文本拼接的 "星号加 9.1" —— emoji 的字形跟着系统字体走, 同一个站
              在 Windows 和 macOS 上是两个星星, 大小和基线还对不齐。换成已经在用的
              PhStar, 和右上角评分角标里那颗是同一个图标。 -->
         <span v-if="hasScore" class="meta-score">

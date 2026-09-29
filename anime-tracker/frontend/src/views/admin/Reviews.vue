@@ -8,7 +8,7 @@
          「本来就没有评论」 -->
     <EmptyState
       v-else-if="error"
-      icon="⚠️"
+      type="error"
       :message="error"
       action-label="重试"
       @action="loadReviews"
@@ -20,7 +20,7 @@
           <div v-for="r in reviews" :key="r.id" class="review-row">
             <div style="flex:1;">
               <div class="review-head">
-                <span class="review-user">👤 {{ r.username }}</span>
+                <span class="review-user">{{ r.username }}</span>
                 <span class="review-stars">{{ '★'.repeat(r.rating) }}{{ '☆'.repeat(10 - r.rating) }}</span>
                 <span class="review-time">{{ formatTime(r.createdAt) }}</span>
               </div>
@@ -30,7 +30,7 @@
             <button class="delete-btn" @click="handleDelete(r)">删除</button>
           </div>
         </div>
-        <EmptyState v-else icon="💬" message="暂无评论" />
+        <EmptyState v-else type="comment" message="暂无评论" />
       </div>
     </div>
   </AdminLayout>

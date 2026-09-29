@@ -7,7 +7,7 @@
         class="toast-item"
         :class="'toast-' + item.type"
       >
-        <span class="toast-icon">{{ iconMap[item.type] }}</span>
+        <component :is="ICON_MAP[item.type] || ICON_MAP.info" class="toast-icon" :size="18" weight="fill" aria-hidden="true" />
         <span class="toast-msg">{{ item.message }}</span>
         <button
           v-if="item.action"
@@ -21,6 +21,7 @@
 </template>
 
 <script setup>
+import { PhCheckCircle, PhXCircle, PhInfo, PhWarning } from '@phosphor-icons/vue'
 import { useToast } from '../composables/useToast'
 
 /**
@@ -29,7 +30,16 @@ import { useToast } from '../composables/useToast'
  */
 const { items, show, remove } = useToast()
 
-const iconMap = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' }
+// 改前是四个 emoji. 这里比别处更值得换: toast 是唯一"必须一眼看出是哪种状态"的
+// 组件, 而 emoji 的对勾和叉是两个完全不同来源的字形(一个来自 Segoe UI Emoji,
+// 一个来自 Apple Color Emoji), 大小和视觉重量对不齐. 现在四个是同一套线性图标,
+// 颜色由左边的色条表达(见 .toast-* 那条 border-left).
+const ICON_MAP = {
+  success: PhCheckCircle,
+  error: PhXCircle,
+  info: PhInfo,
+  warning: PhWarning,
+}
 
 // 仍然暴露出去: 万一有地方通过 ref 拿到这个组件再调(比如测试里), 行为不变
 defineExpose({ show, remove })
@@ -63,7 +73,13 @@ defineExpose({ show, remove })
   border: 1px solid var(--card-border);
   backdrop-filter: blur(12px);
 }
-.toast-icon { font-size: 18px; flex-shrink: 0; }
+/* 图标是 SVG 了, 原来那条 font-size:18px 对它没有作用(尺寸由 :size 给).
+   颜色跟着类型走 —— 左边那道色条只在边缘, 图标是第二个能一眼看出状态的落点. */
+.toast-icon { flex-shrink: 0; display: block; }
+.toast-success .toast-icon { color: var(--success); }
+.toast-error .toast-icon { color: var(--danger); }
+.toast-info .toast-icon { color: var(--text-secondary); }
+.toast-warning .toast-icon { color: var(--warning); }
 .toast-msg { flex: 1; line-height: 1.4; }
 .toast-action {
   padding: 5px 12px; border-radius: 6px;

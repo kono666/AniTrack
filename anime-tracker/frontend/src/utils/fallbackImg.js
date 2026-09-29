@@ -30,11 +30,21 @@ export const COVER_FALLBACK = svg(
   '<text x="150" y="200" text-anchor="middle" fill="#423b3a" font-size="16">No Cover</text>'
 )
 
-/** 大封面占位: 深底 + 🎬 + 「暂无封面」. 用于详情页头图、番剧卡片. */
+/**
+ * 大封面占位: 深底 + 播放标记 + 「暂无封面」. 用于详情页头图、番剧卡片.
+ *
+ * 改前那个标记是个 48px 的场记板 emoji. 换成矢量画出来的圆+三角形, 两个理由:
+ *   1. 字符的形状取决于系统装了什么 emoji 字体 —— 同一个占位图在 Windows 和
+ *      macOS 上不是同一个东西, 而这是**图**, 本该到哪都一样;
+ *   2. 它的基线在 y=215、字号 48, 也就是实际占了大约 176–215 这一段, 而上面
+ *      「暂无封面」那行的基线在 y=195 —— 两者是叠着的. 现在标记挪到文字下面,
+ *      各自有各自的位置.
+ */
 export const COVER_FALLBACK_CARD = svg(
   '<rect width="300" height="400" rx="8"/>' +
-  '<text x="150" y="195" text-anchor="middle" fill="#423b3a" font-size="14">暂无封面</text>' +
-  '<text x="150" y="215" text-anchor="middle" fill="#332d2d" font-size="48">🎬</text>'
+  '<text x="150" y="170" text-anchor="middle" fill="#423b3a" font-size="14">暂无封面</text>' +
+  '<circle cx="150" cy="225" r="30" fill="none" stroke="#332d2d" stroke-width="2"/>' +
+  '<path d="M141 210 L163 225 L141 240 Z" fill="#332d2d"/>'
 )
 
 /**

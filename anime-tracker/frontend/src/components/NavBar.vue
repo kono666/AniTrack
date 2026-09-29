@@ -2,7 +2,7 @@
   <nav class="navbar" :class="{ 'nav-scrolled': scrolled }">
     <!-- Left: Brand -->
     <router-link to="/" class="navbar-brand" @click="closeMenu">
-      <span class="brand-icon">🎬</span>
+      <PhFilmSlate :size="22" weight="fill" class="brand-icon" aria-hidden="true" />
       <span class="brand-text">AniTrack</span>
     </router-link>
 
@@ -86,7 +86,7 @@ import { useUserStore } from '../stores/user'
 import {
   PhCompass, PhMagnifyingGlass, PhGear,
   PhUserCircle, PhSunHorizon, PhMoonStars, PhCaretDown,
-  PhUser, PhSignOut, PhSparkle
+  PhUser, PhSignOut, PhSparkle, PhFilmSlate
 } from '@phosphor-icons/vue'
 
 const router = useRouter()
@@ -190,7 +190,9 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 .nav-search-input::placeholder { color: var(--text-muted); }
 
 /* ── Brand ── */
-.brand-icon { font-size: 22px; }
+/* 图标从 emoji 换成 SVG 之后 font-size 不再起作用, 尺寸改由 CSS 给 —— 这样
+   下面那条"滚动时缩小"还能照常生效(它原本改的就是字号, 现在改成宽高). */
+.brand-icon { display: block; width: 22px; height: 22px; color: var(--primary); transition: width .25s, height .25s; }
 /* 改前是紫→粉的渐变描字。那是 AI 生成界面最常见的签名之一, 也是这个站
    "模板感"最直观的一处 —— 换成实心墨色。真正的品牌处理放到导航改版那一步。 */
 .brand-text { color: var(--text); }
@@ -337,7 +339,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   height: 48px !important;
   box-shadow: 0 1px 3px rgba(0,0,0,.08);
 }
-.nav-scrolled .brand-icon { font-size: 18px; transition: font-size .25s; }
+.nav-scrolled .brand-icon { width: 18px; height: 18px; }
 .nav-scrolled .brand-text { font-size: 16px; transition: font-size .25s; }
 .nav-scrolled .nav-search-input { padding: 6px 0; font-size: 13px; transition: all .25s; }
 

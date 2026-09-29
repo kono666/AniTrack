@@ -1,7 +1,7 @@
 <template>
   <div class="auth-page">
     <div class="auth-card">
-      <h2>🔑 登录 AniTrack</h2>
+      <h2>登录 AniTrack</h2>
       <form class="auth-form" @submit.prevent="handleLogin">
         <!-- autocomplete 是给密码管理器用的: 没有它, 浏览器只能靠猜,
              常常把注册页填过的密码当成登录密码自动填进来 -->

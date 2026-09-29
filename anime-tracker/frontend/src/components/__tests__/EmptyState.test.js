@@ -15,11 +15,22 @@ describe('EmptyState', () => {
     expect(wrapper.text()).toContain('没有找到结果')
   })
 
-  it('renders custom icon', () => {
-    const wrapper = mount(EmptyState, {
-      props: { icon: '🔍' }
-    })
-    expect(wrapper.text()).toContain('🔍')
+  // 改前断言的是 `text()` 里含那个 emoji 字符 —— 图标是文字, 断言只能盯着它.
+  // 现在图标由 `type` 决定, 断言盯着语义: 同一个 'search' 在两处(message 不同)
+  // 渲染同一个图标, 而 'error' 渲染另一个. 这比钉一个字形更接近这个 prop 的约定.
+  it('按 type 渲染对应的空态图标', () => {
+    const search = mount(EmptyState, { props: { type: 'search' } })
+    const error = mount(EmptyState, { props: { type: 'error' } })
+
+    expect(search.find('.icon').attributes('data-type')).toBe('search')
+    expect(search.find('svg').exists()).toBe(true)
+    expect(error.find('.icon').attributes('data-type')).toBe('error')
+    expect(error.find('svg').html()).not.toBe(search.find('svg').html())
+  })
+
+  it('没给 type 时退回默认空态', () => {
+    const wrapper = mount(EmptyState)
+    expect(wrapper.find('.icon').attributes('data-type')).toBe('empty')
   })
 
   it('renders action button when actionLabel provided', () => {

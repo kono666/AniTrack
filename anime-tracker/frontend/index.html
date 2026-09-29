@@ -19,7 +19,17 @@
        这里给的是深色值, 下面那段内联脚本会在首屏前按实际主题改掉它. -->
   <meta name="theme-color" content="#0d0c0b" />
 
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
+  <!-- 站点图标: 自绘 SVG, 用的是卡片那套图形语言(切角 + 播放三角). 改前是一个
+       90px 的场记板 emoji —— 那是拿 emoji 当 logo, 而它到底长什么样取决于
+       访问者系统里装的是哪套 emoji 字体.
+
+       两点必须注意:
+         · 里面的 # 要写成 %23 —— data URI 里 # 之后的内容会被当成 fragment 丢掉,
+           整张图会变成一片空白. 而且各浏览器宽容度不一样, 本地不一定看得出来
+           (fallbackImg.js 顶部记着同一个坑);
+         · 用双色(深底 + 墨色三角)而不是单色: 标签栏本身有亮有暗, 单色图标
+           总在其中一种下看不见. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M4 4h24v17l-7 7H4z' fill='%23171514'/><path d='M12 11l9 5.5-9 5.5z' fill='%23e0d0ce'/></svg>" />
 </head>
 <body>
   <!-- 主题必须在**首屏渲染之前**定下来, 否则会闪一下: NavBar 是挂载之后才把 light 类

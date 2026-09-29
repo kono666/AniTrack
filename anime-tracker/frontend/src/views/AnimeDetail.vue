@@ -10,7 +10,7 @@
         <div class="d-hero-left">
           <div class="d-cover-wrap">
             <img class="d-cover" :src="coverImg" :alt="subject.nameCn" @error="onCoverError" />
-            <div class="d-cover-score" v-if="subject.rating?.score">⭐ {{ subject.rating.score.toFixed(1) }}</div>
+            <div class="d-cover-score" v-if="subject.rating?.score"><PhStar :size="12" weight="fill" /> {{ subject.rating.score.toFixed(1) }}</div>
             <div class="d-cover-rank" v-if="subject.rating?.rank">#{{ subject.rating.rank }}</div>
           </div>
           <div class="d-hero-actions">
@@ -35,9 +35,9 @@
           </div>
           <p class="d-summary">{{ subject.summary || '暂无简介' }}</p>
           <div class="d-heat" v-if="heat">
-            <span>🙏 {{ heat.wantToWatch }}人想看</span>
-            <span>👀 {{ heat.watching }}人在看</span>
-            <span>✅ {{ heat.watched }}人看过</span>
+            <span>{{ heat.wantToWatch }}人想看</span>
+            <span>{{ heat.watching }}人在看</span>
+            <span>{{ heat.watched }}人看过</span>
           </div>
         </div>
       </div>
@@ -82,7 +82,7 @@
             <span v-if="watchedEpisodes.includes(ep.sort)" class="ep-check">✓</span>
           </button>
         </div>
-        <EmptyState v-else icon="📋" message="暂无剧集数据" />
+        <EmptyState v-else type="episode" message="暂无剧集数据" />
       </section>
 
       <!-- Related -->
@@ -101,7 +101,7 @@
           >
             <div class="rc-cover">
               <img :src="item.images?.common || item.images?.medium || fallbackImg" :alt="item.nameCn" @error="e=>e.target.src=fallbackImg" />
-              <div class="rc-score" v-if="item.rating?.score">⭐{{ item.rating.score.toFixed(1) }}</div>
+              <div class="rc-score" v-if="item.rating?.score"><PhStar :size="11" weight="fill" />{{ item.rating.score.toFixed(1) }}</div>
             </div>
             <div class="rc-title">{{ item.nameCn || item.name }}</div>
             <div class="rc-year" v-if="item.date">{{ item.date.substring(0,4) }}</div>
@@ -112,7 +112,7 @@
       <!-- Reviews -->
       <section class="d-section">
         <SectionHeader :title="`评论 · ${ratingStats.count}`">
-          <template #extra>均分 ⭐{{ ratingStats.average }}</template>
+          <template #extra>均分 <PhStar :size="11" weight="fill" />{{ ratingStats.average }}</template>
         </SectionHeader>
 
         <!-- My Review -->
@@ -163,7 +163,7 @@
          对用户来说差别很大: 前者会让他以为链接失效了, 后者他重试一下就好 -->
     <EmptyState
       v-else-if="error"
-      icon="⚠️"
+      type="error"
       :message="error"
       action-label="重试"
       @action="load"
@@ -174,6 +174,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
+import { PhStar } from '@phosphor-icons/vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import {
@@ -225,11 +226,11 @@ const coverImg = computed(() => coverFailed.value ? fallbackImg : (subject.value
 const heroBg = computed(() => coverFailed.value ? null : (subject.value?.images?.large || subject.value?.images?.common || null))
 
 const statusOptions = [
-  { label: '🙏 想看', value: 'want_to_watch' },
-  { label: '👀 在看', value: 'watching' },
-  { label: '✅ 看过', value: 'watched' },
-  { label: '⏸️ 搁置', value: 'on_hold' },
-  { label: '❌ 抛弃', value: 'dropped' },
+  { label: '想看', value: 'want_to_watch' },
+  { label: '在看', value: 'watching' },
+  { label: '看过', value: 'watched' },
+  { label: '搁置', value: 'on_hold' },
+  { label: '抛弃', value: 'dropped' },
 ]
 const trackForm = reactive({ id: null, status: 'want_to_watch', progress: 0, score: 0 })
 const myReview = reactive({ id: null, rating: 0, content: '' })

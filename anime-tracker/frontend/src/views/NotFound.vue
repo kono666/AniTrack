@@ -1,7 +1,7 @@
 <template>
   <div class="page-container not-found">
     <EmptyState
-      icon="🧭"
+      type="notfound"
       :message="message"
       action-label="回首页"
       @action="goHome"

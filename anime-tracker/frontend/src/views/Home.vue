@@ -6,7 +6,7 @@
     <div class="page-container">
       <!-- Today's Schedule -->
       <section v-if="todayAnime.length > 0" class="home-block">
-        <SectionHeader title="📅 今日放送" v-reveal>
+        <SectionHeader title="今日放送" v-reveal>
           <template #extra>
             <span class="today-date">{{ todayLabel }}</span>
             <!-- 改前这里写死 slice(0, 8): 当天排片第 9 部起直接丢掉, 而页面上
@@ -56,7 +56,7 @@
            是后端挂了还是站里确实没数据 -->
       <EmptyState
         v-else-if="error"
-        icon="⚠️"
+        type="error"
         :message="error"
         action-label="重试"
         @action="loadHome"
@@ -65,7 +65,7 @@
       <template v-else>
         <!-- Popular This Season -->
         <section class="home-block">
-          <SectionHeader title="🔥 本季热门" more="/search?view=rank" v-reveal />
+          <SectionHeader title="本季热门" more="/search?view=rank" v-reveal />
           <HorizontalScroll>
             <div
               v-for="(item, idx) in popularList"
@@ -86,7 +86,7 @@
                   loading="lazy"
                   @error="e => e.target.src = fallbackImg"
                 />
-                <div class="hs-card-score" v-if="item.rating?.score">⭐ {{ item.rating.score.toFixed(1) }}</div>
+                <div class="hs-card-score" v-if="item.rating?.score"><PhStar :size="10" weight="fill" /> {{ item.rating.score.toFixed(1) }}</div>
               </div>
               <div class="hs-card-title">{{ item.nameCn || item.name }}</div>
             </div>
@@ -95,7 +95,7 @@
 
         <!-- Recently Updated -->
         <section class="home-block">
-          <SectionHeader title="🆕 最近更新" more="/search?view=date" v-reveal />
+          <SectionHeader title="最近更新" more="/search?view=date" v-reveal />
           <HorizontalScroll>
             <div
               v-for="item in recentList"
@@ -125,7 +125,7 @@
 
         <!-- Browse by Tag -->
         <section class="home-block">
-          <SectionHeader title="🏷️ 分类浏览" v-reveal />
+          <SectionHeader title="分类浏览" v-reveal />
           <!-- 分类是同一类问题的第三处: 一排 <span @click>, 键盘同样到不了.
                这几个没做成 <button>: interactions.css 与 tag-filter.css 里
                已有的 .tag-chip 样式(以及 :active 的按下反馈)是按 span 写的,
@@ -165,7 +165,7 @@
               @change="tagPage = $event"
             />
           </div>
-          <EmptyState v-else-if="selectedTag" icon="🏷️" message="该分类暂无数据" />
+          <EmptyState v-else-if="selectedTag" type="tag" message="该分类暂无数据" />
         </section>
       </template>
     </div>
@@ -175,6 +175,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { PhStar } from '@phosphor-icons/vue'
 import { getRanking, getCalendar, getTags, getByTag } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'

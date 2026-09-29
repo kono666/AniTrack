@@ -1,8 +1,9 @@
 /* ============================================================
-   🎬 AniTrack — Empty State & Loading
+   �AniTrack — Empty State & Loading
    ============================================================ */
 
 .empty-state { text-align:center; padding:60px 20px; color:var(--text-muted); }
-.empty-state .icon { font-size:56px; margin-bottom:10px; }
+/* .empty-state .icon 原本是 `font-size:56px` —— 那是给 emoji 字符用的, 现在
+   图标是 SVG, 字号对它没有任何作用. 尺寸与间距改由组件自己给(EmptyState.vue). */
 .empty-state p { font-size:15px; }
 .loading { text-align:center; padding:40px; color:var(--text-secondary); font-size:14px; }

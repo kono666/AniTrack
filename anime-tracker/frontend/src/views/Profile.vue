@@ -55,7 +55,7 @@
       </button>
       <div class="p-tab-spacer"></div>
       <button class="p-tab p-tab-sort" @click="sortBy = sortBy === 'date' ? 'score' : 'date'">
-        {{ sortBy === 'date' ? '📅 按时间' : '⭐ 按评分' }}
+        {{ sortBy === 'date' ? '按时间' : '按评分' }}
       </button>
     </div>
 
@@ -64,7 +64,7 @@
          「还没有追番记录」—— 把「没拉到」说成了「你没有」, 用户会以为数据丢了 -->
     <EmptyState
       v-if="error"
-      icon="⚠️"
+      type="error"
       :message="error"
       action-label="重试"
       @action="loadProfile"
@@ -82,7 +82,7 @@
         <div class="pc-body">
           <div class="pc-top">
             <div class="pc-title">{{ item.animeTitle || '番剧 #' + item.subjectId }}</div>
-            <div class="pc-score" v-if="item.score">⭐ {{ item.score }}</div>
+            <div class="pc-score" v-if="item.score"><PhStar :size="11" weight="fill" /> {{ item.score }}</div>
           </div>
           <div class="pc-meta">
             <span class="pc-status-badge" :class="'st-' + item.status">{{ statusLabel[item.status] }}</span>
@@ -112,7 +112,7 @@
       </div>
     </div>
 
-    <EmptyState v-else icon="📭" message="还没有追番记录">
+    <EmptyState v-else type="tracking" message="还没有追番记录">
       <router-link to="/" style="color:var(--primary);">去发现动漫</router-link>
     </EmptyState>
   </div>
@@ -130,7 +130,7 @@ import { getTrackingList, getOverallStats, saveTracking } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
-import { PhUserCircle } from '@phosphor-icons/vue'
+import { PhUserCircle, PhStar } from '@phosphor-icons/vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -146,11 +146,11 @@ const sortBy = ref('date')
 
 const statusLabel = { want_to_watch: '想看', watching: '在看', watched: '看过', on_hold: '搁置', dropped: '抛弃' }
 const statusOptions = [
-  { value: 'watching', short: '👀 在看' },
-  { value: 'watched', short: '✅ 看过' },
-  { value: 'want_to_watch', short: '🙏 想看' },
-  { value: 'on_hold', short: '⏸️ 搁置' },
-  { value: 'dropped', short: '❌ 抛弃' },
+  { value: 'watching', short: '在看' },
+  { value: 'watched', short: '看过' },
+  { value: 'want_to_watch', short: '想看' },
+  { value: 'on_hold', short: '搁置' },
+  { value: 'dropped', short: '抛弃' },
 ]
 
 const filters = [

@@ -76,7 +76,7 @@
       <div ref="scrollEl" class="chat-scroll">
         <!-- 空白引导 -->
         <div v-if="!messages.length" class="chat-intro">
-          <div class="intro-icon">🤖</div>
+          <PhRobot :size="40" weight="light" class="intro-icon" aria-hidden="true" />
           <h2>{{ persona === 'admin-analyst' ? '问问平台的运营情况' : '想找什么番？' }}</h2>
           <p class="intro-desc">
             这个助手会真的去查数据库 —— 每轮调用了哪个工具、拿到什么结果, 都会摊开给你看。
@@ -137,7 +137,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
-  PhPlus, PhTrash, PhList, PhPaperPlaneTilt, PhStop,
+  PhPlus, PhTrash, PhList, PhPaperPlaneTilt, PhStop, PhRobot,
 } from '@phosphor-icons/vue'
 import ChatMessage from '../components/ChatMessage.vue'
 import { useUserStore } from '../stores/user'
