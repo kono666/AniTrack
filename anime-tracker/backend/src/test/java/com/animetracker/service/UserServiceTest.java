@@ -35,6 +35,8 @@ import static org.mockito.Mockito.when;
  *
  * 一是登录失败锁定. 它的失效方式特别隐蔽 —— 计数、锁定、清零三段里少写一段,
  * 代码照样跑, 只是防护没了; 或者反过来, 锁定期满后没清零, 用户会被永久挡在门外.
+ * 这里管的是控制流(什么时候锁、锁了之后还说不说话), 至于计数自增在并发下会不会
+ * 丢 —— 那是 mock 看不见的属性, 交给 {@code WriteConflictIntegrationTest} 用真库跑.
  *
  * 二是「不给攻击者额外信息」. 用户不存在和密码错误必须完全不可区分,
  * 被禁用的账号也不能在密码校验通过之前暴露. 这些是靠返回值和调用顺序保证的,
@@ -215,37 +217,75 @@ class UserServiceTest {
 
     // ========== 登录: 失败计数与锁定 ==========
 
+    /**
+     * 计数走的是数据库里那条自增, 不是「读出来 +1 再 save」.
+     *
+     * <p>这里只能验到「确实发了那条 UPDATE」——自增本身有没有原子性, mock 看不见,
+     * 那个属性由 SQL 保证, 在 {@code WriteConflictIntegrationTest} 里用真库并发跑.
+     * 但「有没有走那条路」值得钉住: 退回读-改-写之后, 这段测试**照样绿**
+     * (它只断言行为), 所以这里必须显式验调用.
+     */
     @Test
-    @DisplayName("密码错误时累加失败次数")
+    @DisplayName("密码错误时发一条自增 UPDATE, 且不去改写受管实体")
     void countsFailedAttempts() {
         User user = existingUser("alice", "a@x.com", DUMMY_HASH);
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+        when(userRepository.readFailedAttempts(1L)).thenReturn(1);   // 自增之后读回来的值
 
         assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
                 .isInstanceOf(BusinessException.class);
 
-        assertThat(savedUser().getFailedAttempts()).isEqualTo(1);
+        verify(userRepository).incrementFailedAttempts(1L);
+        // 关键: 不能顺手 save 这个实体. 一级缓存里那份带着**过期**的计数,
+        // 它的写回会把刚自增出来的值盖掉 —— 那正是要修掉的丢失更新.
+        verify(userRepository, never()).save(any());
     }
 
+    /** 差一次不锁: 阈值是 5, 第 4 次失败之后还能继续试 */
+    @Test
+    @DisplayName("失败次数在阈值以下时不锁定")
+    void doesNotLockBelowThreshold() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+        when(userRepository.readFailedAttempts(1L)).thenReturn(4);
+
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("用户名或密码错误");
+
+        verify(userRepository, never()).lockAndResetFailures(any(), any());
+    }
+
+    /**
+     * 判断读的必须是**自增之后**的值.
+     *
+     * 自增和判断是两条语句, 顺序写反(先读后自增)时, 第 5 次失败读到的是 4,
+     * 于是不锁, 一直要到第 6 次才锁 —— 阈值静默地从 5 变成 6. 这里把
+     * 「读回来的值达到阈值就锁」这件事钉死.
+     */
     @Test
     @DisplayName("连续失败达到阈值时锁定, 并把计数清零")
     void locksAfterReachingThreshold() {
         User user = existingUser("alice", "a@x.com", DUMMY_HASH);
-        user.setFailedAttempts(4);   // 已经错了 4 次, 这是第 5 次
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+        when(userRepository.readFailedAttempts(1L)).thenReturn(5);   // 已经错了 5 次
 
         assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(429))
                 .hasMessageContaining("已锁定");
 
-        User saved = savedUser();
-        assertThat(saved.getLockedUntil()).isAfter(LocalDateTime.now());
-        // 计数必须归零: 留在阈值上会让锁定期一满、再错一次就立刻又锁上,
-        // 限时锁定就退化成了永久锁定.
-        assertThat(saved.getFailedAttempts()).isZero();
+        ArgumentCaptor<LocalDateTime> until = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(userRepository).lockAndResetFailures(eq(1L), until.capture());
+        assertThat(until.getValue()).isAfter(LocalDateTime.now());
+        // 锁定时长来自配置(15 分钟), 不是写死的数字
+        assertThat(until.getValue()).isBefore(LocalDateTime.now().plusMinutes(16));
+        // 计数清零与锁定是同一条 UPDATE(留给真库那边验), 这里只钉「走到锁定分支后
+        // 不会再额外 save 一次实体」, 理由同 countsFailedAttempts
+        verify(userRepository, never()).save(any());
     }
 
     @Test

@@ -13,7 +13,12 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -201,5 +206,93 @@ class WriteConflictIntegrationTest {
         // 挪漏了的话这一步会直接报「没有事务」, 而不是安静地失败
         assertThat(statsService.toggleEpisode(user, 300, 1)).isFalse();
         assertThat(rows("episode_watched")).isZero();
+    }
+
+    // ========== 登录失败计数: 自增发生在数据库里 ==========
+
+    /**
+     * 并发自增不丢计数.
+     *
+     * <p>这条钉的是「+1 由数据库那条 UPDATE 完成」. 原来的写法是读出来 +1 再 save,
+     * 典型读-改-写: 所有线程读到同一个值, 各自写回同一个值, 计出来的数小于真实
+     * 失败次数. 而阈值判定读的正是这个数 —— 计数涨得比尝试次数慢, 爆破窗口就被
+     * 悄悄拉长, 日志上一切正常.
+     *
+     * <p>用闩锁把 8 个线程卡在同一起跑线上, 是为了把竞态窗口撞开. 说清楚这个用例
+     * 的能力边界: 老写法下它**不是每次都红**(竞态是概率的), 但一旦真丢一次就是
+     * 确定性失败; 新写法下它稳定通过. 这里的 8 次并发各自只是一条 autocommit 的
+     * UPDATE, 行锁持有时间是微秒级, 撞不到 H2 的锁超时, 所以它不会变成一条
+     * 时好时坏的用例.
+     */
+    @Test
+    @DisplayName("并发自增失败计数不会丢: 8 次并发自增之后正好是 8")
+    void concurrentFailureCountingLosesNothing() throws Exception {
+        Long uid = freshUser().getId();
+        int threads = 8;
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            for (int i = 0; i < threads; i++) {
+                pool.execute(() -> {
+                    try {
+                        start.await();
+                        userRepository.incrementFailedAttempts(uid);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertThat(done.await(30, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 表名带引号: 它是保留字, 迁移脚本建的是小写的 "user"(见 V1__init_schema.sql)
+        assertThat(jdbc.queryForObject(
+                "SELECT failed_attempts FROM \"user\" WHERE id = ?", Integer.class, uid))
+                .isEqualTo(threads);
+    }
+
+    /**
+     * 老账号的 failed_attempts 是 NULL —— 加这一列时没有 DEFAULT(见 User 实体上的说明).
+     * SQL 里 NULL + 1 仍然是 NULL, 少了 COALESCE, 这些账号的计数会永远停在空值上,
+     * 阈值等于不存在, 而每一种写法看起来都很正常.
+     */
+    @Test
+    @DisplayName("计数为 NULL 的老账号自增得到 1, 而不是继续为空")
+    void incrementTreatsNullAsZero() {
+        Long uid = freshUser().getId();
+        jdbc.update("UPDATE \"user\" SET failed_attempts = NULL WHERE id = ?", uid);
+
+        userRepository.incrementFailedAttempts(uid);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT failed_attempts FROM \"user\" WHERE id = ?", Integer.class, uid))
+                .isEqualTo(1);
+    }
+
+    /**
+     * 清零和锁定必须在同一条 UPDATE 里.
+     *
+     * 拆成两条的危险不是「少清一次」: 计数留在阈值上, 锁定期一满、用户再错一次就
+     * 立刻又被锁上 —— 限时锁定退化成永久锁定, 而且锁定接口看起来一切正常.
+     * 从 readFailedAttempts 之外的地方读回实体, 顺便验了时间戳真的落库成了未来时刻.
+     */
+    @Test
+    @DisplayName("锁定时清零: 锁定后计数为 0 且确实处于锁定期")
+    void lockAndResetClearsCounterInTheSameStatement() {
+        Long uid = freshUser().getId();
+        jdbc.update("UPDATE \"user\" SET failed_attempts = 5 WHERE id = ?", uid);
+        LocalDateTime until = LocalDateTime.now().plusMinutes(15);
+
+        userRepository.lockAndResetFailures(uid, until);
+
+        User reloaded = userRepository.findById(uid).orElseThrow();
+        assertThat(reloaded.failedAttemptsOrZero()).isZero();
+        assertThat(reloaded.isLocked()).isTrue();
     }
 }

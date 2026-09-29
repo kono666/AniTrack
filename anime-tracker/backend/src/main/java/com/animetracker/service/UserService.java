@@ -121,7 +121,7 @@ public class UserService {
         // 锁定检查放在密码校验之前: 锁定期内连「密码对不对」都不该被回答,
         // 否则锁定就只是限速, 不是锁定.
         if (user.isLocked()) {
-            throw BusinessException.tooManyRequests(lockMessage(user));
+            throw BusinessException.tooManyRequests(lockMessage(user.getLockedUntil()));
         }
 
         if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
@@ -159,27 +159,46 @@ public class UserService {
         passwordEncoder.matches(rawPassword, absentUserHash);
     }
 
-    /** 记一次失败; 达标则锁定并直接把「已锁定」抛出去 */
+    /**
+     * 记一次失败; 达标则锁定并直接把「已锁定」抛出去.
+     *
+     * <p><b>为什么不是「读出来 +1 再 save」</b>: 那是读-改-写, 并发下互相覆盖 ——
+     * 两个请求同时读到 3, 各自写回 4, 两次失败只记了一次. 后果不是「计数偏小」
+     * 这么轻: 阈值是 5, 攻击者只要并发提交, 计数就涨得比尝试次数慢, 爆破窗口被
+     * 拉长, 而日志上一切正常. 现在自增交给一条 UPDATE, 判断读的是**自增之后**的值.
+     *
+     * <p>刻意不去动 {@code user} 这个受管实体(不再 setFailedAttempts + save):
+     * 实体在一级缓存里, 我们对它做的修改会在事务提交/自动 flush 时被写回数据库,
+     * 那条写回带着**过期的**计数, 正好把刚刚自增出来的值盖掉. 走 repository 的
+     * 批量 UPDATE, 内存里那份就是只读的.
+     *
+     * <p>自增和「读回来判断」仍是两条语句, 中间可能插进别人的一次失败. 但方向是
+     * 安全的: 最多把计数算大一点、早锁一次; 而漏锁才是危险的那一侧.
+     */
     private void recordFailure(User user) {
-        int attempts = user.failedAttemptsOrZero() + 1;
+        userRepository.incrementFailedAttempts(user.getId());
 
+        int attempts = userRepository.readFailedAttempts(user.getId());
         if (attempts >= loginProps.getMaxFailures()) {
-            user.setLockedUntil(LocalDateTime.now().plusMinutes(loginProps.getLockMinutes()));
-            // 计数归零是必须的: 若把它留在阈值上, 锁定期一满、用户再错一次
-            // 就立刻又被锁上 —— 等于把限时锁定退化成永久锁定.
-            user.setFailedAttempts(0);
-            userRepository.save(user);
+            LocalDateTime until = LocalDateTime.now().plusMinutes(loginProps.getLockMinutes());
+            // 计数清零和锁定必须一起做, 理由见 UserRepository.lockAndResetFailures
+            userRepository.lockAndResetFailures(user.getId(), until);
 
             log.warn("账号 {} 连续登录失败 {} 次, 已锁定至 {}",
-                    user.getUsername(), attempts, user.getLockedUntil());
-            throw BusinessException.tooManyRequests(lockMessage(user));
+                    user.getUsername(), attempts, until);
+            throw BusinessException.tooManyRequests(lockMessage(until));
         }
-
-        user.setFailedAttempts(attempts);
-        userRepository.save(user);
     }
 
-    /** 登录成功时清空失败痕迹 */
+    /**
+     * 登录成功时清空失败痕迹.
+     *
+     * <p>这里仍然走「改实体 + save」, 与 recordFailure 刻意不同 —— 不是因为这条路更安全,
+     * 而是因为它**不需要**更安全: 它写的是 0, 而 0 正是「连续失败」这个语义在成功后应有的
+     * 值. 极端时序下(成功与一次并发失败撞上)最多抹掉那一次失败, 而按「连续」的定义, 中间
+     * 成功过一次本来就该重新计数. 失败路径不一样: 它写回的是**过期的旧计数**, 那是纯粹
+     * 的数据丢失, 所以那条必须交给数据库自增.
+     */
     private void clearFailures(User user) {
         boolean clean = user.failedAttemptsOrZero() == 0 && user.getLockedUntil() == null;
         if (clean) {
@@ -191,9 +210,15 @@ public class UserService {
         userRepository.save(user);
     }
 
-    /** 给用户看的锁定提示, 剩余时间向上取整到分钟 (剩 30 秒也说「1 分钟」) */
-    private String lockMessage(User user) {
-        long seconds = Math.max(0, Duration.between(LocalDateTime.now(), user.getLockedUntil()).toSeconds());
+    /**
+     * 给用户看的锁定提示, 剩余时间向上取整到分钟 (剩 30 秒也说「1 分钟」).
+     *
+     * <p>入参是**时刻**而不是 User: 锁定那一刻我们手里还没有一个带 lockedUntil 的
+     * 受管实体(见 recordFailure, 现在不去改实体), 而一个接受 LocalDateTime 的方法
+     * 两个调用点都能用.
+     */
+    private String lockMessage(LocalDateTime until) {
+        long seconds = Math.max(0, Duration.between(LocalDateTime.now(), until).toSeconds());
         long minutes = Math.max(1, (long) Math.ceil(seconds / 60.0));
         return "密码错误次数过多，账号已锁定，请 " + minutes + " 分钟后再试";
     }
