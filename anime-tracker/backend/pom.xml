@@ -33,10 +33,10 @@
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <!-- 2.9.1 的父 POM 就是 spring-boot 3.5.16, 与本项目用的 Boot 版本一一对应.
+            <!-- 3.1.1 的父 POM 就是 spring-boot 3.5.16, 与本项目用的 Boot 版本一一对应.
                  springdoc 与 Boot 是绑定的: 2.3.0 对应 Boot 3.2, 2.8.x 对应 3.4,
                  3.x 对应 Boot 4 —— 换 Boot 线时要连着换它. -->
-            <version>2.9.1</version>
+            <version>3.1.1</version>
         </dependency>
         <!-- H2: 开发/测试环境 -->
         <dependency>
