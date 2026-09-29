@@ -244,8 +244,10 @@ npm run dev
 
 ### 切换到 PostgreSQL
 
+只想借 compose 里那个数据库、后端还是跑在本机时：
+
 ```bash
-docker-compose up -d
+docker compose up -d postgres                # 只起数据库
 cd anime-tracker/backend
 mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 ```
@@ -254,21 +256,81 @@ mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 
 ## 部署（Docker）
 
-后端镜像与数据库都在仓库里定义好了，两条命令起来：
+前端（nginx）、后端、数据库三样都在仓库里定义好了，两条命令起来：
 
 ```bash
-cp .env.example .env                                  # 填 JWT_SECRET 与首次部署用的 ADMIN_PASSWORD
+cp .env.example .env          # 填 JWT_SECRET 与首次部署用的 ADMIN_PASSWORD
 docker compose up -d --build
-curl http://localhost:8080/actuator/health/liveness   # 回 {"status":"UP"} 就成了
+curl http://localhost/actuator/health   # 回 {"status":"UP"} 就成了（换成 .env 里的 HTTP_PORT）
 ```
 
-三件值得先说清楚的事：
+打开 `http://localhost` 就是站点。**整个栈只有一个对外端口**（nginx），下面三件值得先说清楚：
 
 - **没有 `JWT_SECRET` 会直接拒绝启动**，报错写在 compose 文件里（`${JWT_SECRET:?...}`）。这跟后端自身的 fail-fast 是同一个取舍：一个公开的默认密钥不会让任何功能报错，只会让任何人都能伪造管理员 token——所以宁可起不来。
 - **`ADMIN_PASSWORD` 只在第一次启动（库里还没有管理员）时用到**，配好并登录成功后就可以从 `.env` 里撤掉，改密码入口在用户设置页。
 - **数据库只绑在 `127.0.0.1`**（`127.0.0.1:5432:5432` 而不是 `5432:5432`）。本机开发时两种写法毫无区别，但照抄到云主机上，后者就是一个开在公网、密码还是默认值的数据库。
 
-镜像本身（`anime-tracker/backend/Dockerfile`）做的事：
+### 三个服务，以及为什么后端不开端口
+
+| 服务 | 作用 | 对外 |
+| --- | --- | --- |
+| `nginx` | 托管前端构建产物；把 `/api` 反代给后端 | **唯一入口**，`${HTTP_PORT:-80}` |
+| `backend` | Spring Boot，只听 compose 内网的 8080 | 不开宿主机端口 |
+| `postgres` | 数据库 | 只绑 `127.0.0.1:5432`（给本机 psql 调试） |
+
+以前后端是挂在 `8080:8080` 上的，等于站点有两个入口。问题不在于多一个端口，而在于绕过 nginx 之后，**所有只存在于 nginx 那一侧的约束就全部消失了**：按 IP 分桶的限流看到的对端地址、`X-Forwarded-For` 的可信与否、actuator 只放行一个端点的白名单——全都是 nginx 在管。关掉那个端口之后，「入口只有一个」就不再是靠自觉，而是网络上就是如此。
+
+需要在服务器上直接调后端接口时用 SSH 端口转发，别去开这个口子：
+
+```bash
+ssh -L 8080:localhost:8080 用户@服务器
+# 或者直接在容器里问一句：
+ssh 用户@服务器 'docker compose exec backend wget -qO- localhost:8080/actuator/health'
+```
+
+### 前端镜像里为什么要现构建
+
+前端镜像（`anime-tracker/frontend/Dockerfile`）是两阶段：`node:22-alpine` 里 `npm ci && npm run build`，产物拷进 `nginx:alpine`。**刻意不挂载宿主机的 `dist`**——挂载的写法有个很隐蔽的失效方式：忘了构建、或者 `dist` 被清过一半，容器照样起得来、探活照样 UP，只是打开页面白屏。让构建成为镜像的一部分之后，「起来了」就等于「dist 是刚构建出来的」。
+
+`.dockerignore` 里必须排除 `node_modules`，这也不只是省流量：构建顺序是 `npm ci`（装 Linux 版原生依赖）→ `COPY . .`，宿主机的 `node_modules` 一旦被拷进去就会**盖掉**刚装好的那份。
+
+### HTTPS
+
+仓库里的 nginx 只监听 80，**TLS 终结没有包含进来**，因为它需要一个真实域名和证书，而 CI 里没有域名——一份没法验证的证书配置，写进来只会是「看起来对」。上线时在前面套一层，两种常见做法：
+
+- **Caddy 反代**（最省事，自动申请与续期证书）。加一个服务，`Caddyfile` 两行：
+
+  ```
+  anitrack.example.com {
+      reverse_proxy nginx:80
+  }
+  ```
+
+- **nginx + certbot**：在 80 的 server 块上加 `listen 443 ssl` 与证书路径，80 那个只留 `return 301 https://$host$request_uri;`。
+
+两种做法下都有一处**必须跟着改**：本仓库的 nginx 把 `X-Forwarded-Proto` 写成 `$scheme`（它只看得见自己这一段，也就是 http），前面套了 TLS 之后要改成透传上游给的值，否则后端会以为请求是 http：
+
+```nginx
+proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;   # 仅当 TLS 在本机 nginx 之外终结
+```
+
+放行之后，`/actuator/health` 也就成了唯一一个能被公网匿名访问的端点（见下）。
+
+### 监控
+
+把一个外部 uptime 服务（UptimeRobot、BetterStack 之类，一分钟一次即可）指向：
+
+```
+https://你的域名/actuator/health
+```
+
+选它的三个理由：**免登录**（监控不会去登账号）；**状态是聚合出来的**——数据库断了它会变成 `DOWN`，所以一个 URL 同时覆盖了「进程还在吗」和「库还连得上吗」；**它是唯一一个被 nginx 白名单放行的 actuator 端点**，`/actuator/env`、`/actuator/beans` 从外面拿到的都是 404。
+
+两件别做的事：不要把探针指到 `/`（首页是个静态文件，后端整个挂了它照样 200，等于装了个永远不响的警报）；不要给它加缓存（一个被缓存住的 `UP` 会在服务真挂之后继续报 `UP`，而那正是监控最不该骗人的时候）。
+
+### 后端镜像本身做的事
+
+（`anime-tracker/backend/Dockerfile`）
 
 | 做法 | 为什么 |
 | --- | --- |
@@ -279,14 +341,6 @@ curl http://localhost:8080/actuator/health/liveness   # 回 {"status":"UP"} 就�
 | `-XX:MaxRAMPercentage=75` | 让 JVM 按容器给的内存上限算堆；不设的话它可能读到宿主机总内存，然后在容器里被 OOM 杀掉 |
 | 探针打 `/actuator/health/liveness` | 它只问「进程在不在」；带数据库的那份要等 Hikari 连接超时（实测 30 秒），会先撞上探针超时 |
 
-只要数据库时（本地借这个 PG 跑后端，记得带上 postgres profile——不带 profile 是起不来的）：
-
-```bash
-docker compose up -d postgres
-cd anime-tracker/backend
-mvn spring-boot:run -Dspring-boot.run.profiles=postgres
-```
-
 ---
 
 ## 持续集成（CI）
@@ -295,18 +349,25 @@ mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 
 | job | 跑什么 | 它能回答的问题 |
 | --- | --- | --- |
-| `backend` | JDK 17 + `mvn -B test`（183 个用例） | 代码逻辑还对吗？ |
-| `frontend` | `npm ci` + `npm test`（68 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
-| `image` | 构建后端镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
+| `backend` | JDK 17 + `mvn -B test`（423 个用例） | 代码逻辑还对吗？ |
+| `frontend` | `npm ci` + `npm test`（177 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
+| `image` | 构建后端与前端两个镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
 
-第三个 job 是有意加的。Dockerfile 和 `docker-compose.yml` 在写完的那一刻处于「看起来对」的状态——开发机上没有 Docker，谁也没法执行一次；而部署配置最大的特点就是「写错了不会报错，只会在别人机器上炸」。所以 CI 里用真实 PostgreSQL 把它整个跑起来，顺带把几件事端到端钉住：
+第三个 job 是有意加的。Dockerfile 和 `docker-compose.yml` 在写完的那一刻处于「看起来对」的状态——开发机上没有 Docker，谁也没法执行一次；而部署配置最大的特点就是「写错了不会报错，只会在别人机器上炸」。所以 CI 里用真实 PostgreSQL 把它整个跑起来。
 
-- 镜像能构建成功（第一次真的构建它）
+冒烟请求**全部打 nginx**，不直连后端——部署之后本来就只有一个入口，所以「经 nginx 能用」才是那个唯一值得断言的事。顺带钉住的：
+
+- 两个镜像都构建得出来（前端镜像同时也验证了「在 Linux 上构建得出来」，本机是 Windows，原生依赖的平台差异只有这里能发现）
 - 容器能连上数据库、Flyway 在空库上把迁移跑完、实体与 `validate` 对得上
-- `/actuator/health` 免登录可访问；`liveness` 与 `readiness` 都返回 200（后者含 db 组件，所以要真连得上库才可能通过）
-- 除 health 外的 actuator 端点匿名一律 401（`env` 会原样打印配置，不能给外人看）
+- `/` 返回应用外壳，且它引用的 `/assets/*.js` 拿得到（挡的是「容器起来了但 dist 是空的」——那种情况下探活一样 UP，只有打开页面才白屏）
+- 带哈希的资源有长缓存、`index.html` 不被缓存、三条安全响应头都在（这三条是 nginx `add_header` 不继承那个坑的哨兵）
+- 深层路由 `/profile` 刷新返回 200（SPA 回退；没有它的话手输地址就是 404，而首页永远正常，本地点一遍发现不了）
+- `/actuator/health` 免登录可访问且为 `UP`；其余 actuator 端点从外面拿到的都是 404（nginx 白名单），从容器内部直连后端则是 401——**两层都在挡**
 - 空库上由 `ADMIN_*` 环境变量建出管理员，并且能真的登录成功
 - 迁移建出来的表能读（不只是启动时校验过得去）
+- 迁移脚本在**已经迁移过**的库上重放安全（唯一索引数不变，没有重复添加），并且把其中一条约束拿掉后能重新补回来——这一支在全新的库上永远不会被执行到，而部署到真服务器时用的恰恰是它
+
+冒烟用的 `JWT_SECRET` 与管理员密码在每次运行时用 `openssl rand` 现生成，**仓库里不存任何看起来像密钥的值**——就算它只服务于一个跑完就 `down -v` 丢掉的容器，躺在仓库里的 `JWT_SECRET=...` 也一定会在某个时刻被人复制到别处。
 
 冒烟用的 `JWT_SECRET` 与管理员密码在每次运行时用 `openssl rand` 现生成，**仓库里不存任何看起来像密钥的值**——就算它只服务于一个跑完就 `down -v` 丢掉的容器，躺在仓库里的 `JWT_SECRET=...` 也一定会在某个时刻被人复制到别处。
 
@@ -336,11 +397,11 @@ mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 ## 测试
 
 ```bash
-# 后端：单元测试 + 集成测试（183 个）
+# 后端：单元测试 + 集成测试（423 个）
 cd anime-tracker/backend
 mvn test
 
-# 前端：组件与接口层测试（68 个）
+# 前端：组件与接口层测试（177 个）
 cd anime-tracker/frontend
 npm test
 

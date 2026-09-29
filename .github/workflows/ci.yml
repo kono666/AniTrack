@@ -2,14 +2,18 @@
 #  CI —— 每次推送到 main / 每个 PR 都跑一遍
 #
 #  三个 job 各自回答一个不同的问题:
-#    backend   —— 代码逻辑还对吗? (183 个后端用例)
+#    backend   —— 代码逻辑还对吗? (后端全部用例)
 #    frontend  —— 组件还对吗? 前端还构建得出来吗?
-#    image     —— 这东西真的能部署吗? (构建镜像 + 起真 compose 栈冒烟)
+#    image     —— 这东西真的能部署吗? (构建两个镜像 + 起真 compose 栈冒烟)
 #
 #  最后一个是有意加的. Dockerfile 和 docker-compose.yml 在写完之后是「看起来对」的状态:
 #  本机没有 Docker, 谁也没法执行一次. 部署配置最大的特点就是「写错了不会报错,
-#  只会在别人机器上炸」—— 所以这里用真实 PostgreSQL 把它跑起来, 顺便把
-#  /actuator/health 的三件事端到端钉住: 免登录、依赖坏了会说 DOWN、迁移能跑完.
+#  只会在别人机器上炸」—— 所以这里用真实 PostgreSQL 把它跑起来.
+#
+#  冒烟请求**全部打 nginx**, 不直连后端 —— 因为部署之后本来就只有一个入口
+#  (后端不对宿主机开端口), 所以「经 nginx 能用」才是那个唯一值得断言的东西.
+#  顺带钉住的: 静态资源真的被打进镜像了、深层路由刷新不 404、actuator 白名单
+#  只放行一个端点、迁移脚本在已经迁移过的库上重放安全且能补回被拿掉的约束.
 #
 #  刻意不做的事:
 #   - 不跑 scripts/verify-agent.py (它要真实 LLM 额度, 属于手工验证, 不该让每个 PR 都烧钱)
@@ -127,8 +131,23 @@ jobs:
           # load: 把镜像留在本机 docker 里, 下一步的 compose 才有得用
           # (不 load 的话构建完只存在于 buildx 的缓存里, docker compose 看不到)
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # scope 是给这个 job 里两个 buildx 构建分家用的: 它们共用同一个 gha 缓存
+          # 后端, 不带 scope 时两边的层会写到同一个 key 下互相顶掉 ——
+          # 症状不是报错, 只是"缓存好像没生效", 每次都要重下依赖.
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      # 前端镜像里是「nginx + 现构建出来的 dist」, 构建它同时验证了两件事:
+      # 前端在 Linux 上构建得出来(本机是 Windows, 原生依赖的平台差异只有这里能发现),
+      # 以及 Dockerfile 里的两阶段拷贝没写错路径.
+      - name: 构建前端镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: ./anime-tracker/frontend
+          tags: anitrack-frontend:latest
+          load: true
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
 
       # 这两个值在本次运行里现生成.
       # 不在仓库里写死任何看起来像密钥的东西 —— 就算它只是给一次性的冒烟容器用,
@@ -141,6 +160,11 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # compose 会自动读同目录下的 .env, 所以部署时那一套变量在这里原样走一遍
+      #
+      # HTTP_PORT 写 8080 而不是留空用默认的 80, 是刻意的:
+      # 这样"这个变量确实被 compose 读到了"本身也变成了被验证的一件事.
+      # 如果 compose 里那行 mapping 哪天被改回硬编码的 80, 下面的 curl 会连不上,
+      # 而不是"照样通过" —— 端口这类配置最怕的就是改了个不生效还没人知道.
       - name: 生成 CI 用的 .env
         env:
           # 非密钥, 只是本次冒烟的管理员用户名
@@ -154,7 +178,7 @@ jobs:
           ADMIN_USERNAME=${CI_ADMIN_USERNAME}
           ADMIN_PASSWORD=${CI_ADMIN_PASSWORD}
           ADMIN_EMAIL=ci@example.com
-          API_PORT=8080
+          HTTP_PORT=8080
           EOF
 
       - name: 起 compose 栈并等它健康
@@ -163,10 +187,14 @@ jobs:
         # 等不到会直接返回非零 —— 这一步本身就证明了 Dockerfile 里那条 HEALTHCHECK 是对的.
         run: docker compose up -d --wait --wait-timeout 240
 
-      - name: 冒烟
+      - name: 冒烟 (全部经 nginx)
         env:
           CI_ADMIN_USERNAME: ciadmin
+          # 入口是 nginx. 注意这里没有"另一个地址"可打 —— 后端已经不对宿主机开端口了,
+          # 所以这一整个步骤顺带就是"入口只有一个"的验证: 以前这里写的是直连后端的 8080.
           BASE: http://localhost:8080
+          DB_NAME: anitrack
+          DB_USER: anitrack
         run: |
           set -euo pipefail
 
@@ -183,19 +211,69 @@ jobs:
             echo "ok: $url -> $got"
           }
 
-          echo "--- 1. 整体探活 (免登录) ---"
+          # 响应头断言. 只看有没有这个头, 不看值 —— 要钉的是
+          # "这条配置还在生效", 而不是它的具体取值
+          assert_header() {
+            local url="$1" name="$2"
+            if ! curl -sI "$url" | grep -qi "^${name}:"; then
+              echo "FAIL: $url 的响应里没有 $name"
+              curl -sI "$url"
+              exit 1
+            fi
+            echo "ok: $url 带 $name"
+          }
+
+          echo "--- 1. 静态站真的被托管了 (首页 200, 且它引用的资源拿得到) ---"
+          #
+          # 这一条挡的是"容器起来了但 dist 是空的/是旧的": 那种情况下
+          # compose 一样健康、探活一样 UP, 只有打开页面才白屏.
+          assert_status 200 "$BASE/"
+          grep -q '<div id="app"' /tmp/body || { echo "FAIL: 首页不是应用外壳"; cat /tmp/body; exit 1; }
+          asset=$(grep -o '/assets/[A-Za-z0-9._-]*\.js' /tmp/body | head -1)
+          test -n "$asset" || { echo "FAIL: 首页里没有引用任何 /assets/*.js"; cat /tmp/body; exit 1; }
+          assert_status 200 "$BASE$asset"
+
+          echo "--- 2. 缓存与安全响应头 (这两条都是 add_header 那个坑的哨兵) ---"
+          #
+          # nginx 的 add_header 不继承: 任何 location 里写一条, server 层那几条就全没了.
+          # 所以这里既看"该长期缓存的带没带 max-age", 也看"三条安全头还在不在"——
+          # 只查其中一个的话, 另一边的静默失效不会有任何提示.
+          curl -sI "$BASE$asset" | grep -qi 'cache-control:.*max-age' \
+            || { echo "FAIL: 带哈希的资源没有长缓存"; curl -sI "$BASE$asset"; exit 1; }
+          echo "ok: $asset 带长缓存"
+          curl -sI "$BASE/" | grep -qi 'cache-control:.*no-cache' \
+            || { echo "FAIL: index.html 被缓存住了(会配出新旧资源)"; curl -sI "$BASE/"; exit 1; }
+          echo "ok: index.html 不缓存"
+          assert_header "$BASE/" X-Content-Type-Options
+          assert_header "$BASE/" X-Frame-Options
+          assert_header "$BASE/" Referrer-Policy
+
+          echo "--- 3. 深层路由刷新不 404 (SPA 回退) ---"
+          #
+          # /profile 在服务器上并没有这个文件. 没有 try_files 回退的话,
+          # 手输地址或刷新子页面就是 404 —— 而首页永远正常, 所以本地点一遍发现不了.
+          assert_status 200 "$BASE/profile"
+          grep -q '<div id="app"' /tmp/body || { echo "FAIL: /profile 没有回退到应用外壳"; cat /tmp/body; exit 1; }
+
+          echo "--- 4. 整体探活 (免登录; 库连不上时聚合状态会是 DOWN) ---"
           assert_status 200 "$BASE/actuator/health"
           grep -q '"status":"UP"' /tmp/body || { echo "FAIL: health 不是 UP"; cat /tmp/body; exit 1; }
 
-          echo "--- 2. 两组探针 (readiness 带 db 组件, 200 说明库连得上且迁移已完成) ---"
-          assert_status 200 "$BASE/actuator/health/liveness"
-          assert_status 200 "$BASE/actuator/health/readiness"
+          echo "--- 5. actuator 白名单只放行一个端点 ---"
+          assert_status 404 "$BASE/actuator/env"
+          assert_status 404 "$BASE/actuator/beans"
+          assert_status 404 "$BASE/actuator/health/liveness"
+          # 上面那三个 404 是 nginx 挡的, 所以还证明不了后端自己也在挡.
+          # 从容器内部直连后端问一次 —— 401 才说明是"两层都在挡".
+          # (后端不对宿主机开端口, 这是唯一够得着它的方式; 也顺便演示了
+          #  运维时要直连后端该怎么做, 见 docker-compose.yml 里那段注释.)
+          direct=$(docker compose exec -T backend wget -qO- http://localhost:8080/actuator/env 2>&1 || true)
+          case "$direct" in
+            *401*) echo "ok: 容器内直连后端 /actuator/env -> 401" ;;
+            *) echo "FAIL: 期望直连后端拿到 401, 实际: $direct"; exit 1 ;;
+          esac
 
-          echo "--- 3. 除 health 外的 actuator 端点不给匿名 (env 会原样打印配置) ---"
-          assert_status 401 "$BASE/actuator/env"
-          assert_status 401 "$BASE/actuator/beans"
-
-          echo "--- 4. 空库上由环境变量建出管理员, 且能登录 ---"
+          echo "--- 6. 空库上由环境变量建出管理员, 且能登录 ---"
           code=$(curl -s -o /tmp/login -w '%{http_code}' \
             -H 'Content-Type: application/json' \
             -d "{\"username\":\"${CI_ADMIN_USERNAME}\",\"password\":\"${CI_ADMIN_PASSWORD}\"}" \
@@ -204,8 +282,53 @@ jobs:
           grep -q '"code":200' /tmp/login || { echo "FAIL: 登录响应体不对"; cat /tmp/login; exit 1; }
           echo "ok: 管理员登录 200"
 
-          echo "--- 5. 迁移建出来的表能读 (证明结构不只是 validate 过得去) ---"
+          echo "--- 7. 迁移建出来的表能读 (证明结构不只是 validate 过得去) ---"
           assert_status 200 "$BASE/api/review/list?subjectId=1"
+
+          echo "--- 8. 迁移脚本在已迁移的库上重放安全, 且能补回被拿掉的约束 ---"
+          #
+          # 这一条测的是别处都测不到的一支: 全新的库上 V2/V3 只跑一次,
+          # 所以那两个「先判断再改」的匿名块里 "已经存在" 那一支从来没被执行过.
+          # 而部署到真服务器时用的**恰恰是**那一支 —— 线上库是老的,
+          # 约束可能早就被 Hibernate 用别的名字建出来了.
+          psql_() {
+            docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -tAq "$@"
+          }
+          replay() {  # 把仓库里那份迁移文件原样喂给 psql (不是另抄一份 SQL, 抄的那份会走偏)
+            docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -q -f - \
+              < "anime-tracker/backend/src/main/resources/db/migration/postgres/$1.sql"
+          }
+          # 唯一索引总数(不含主键). 不写死数字, 拿"重放前"当基准:
+          # 重放只允许让它保持不变. 变多 = 重复加了一条同列约束(白白多一个索引),
+          # 而这正是 V2 注释里说的那个坑.
+          unique_idx_count() {
+            psql_ -c "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid
+                      WHERE i.indisunique AND NOT i.indisprimary
+                        AND c.relname IN ('anime_tracking','review','episode_watched','user');"
+          }
+
+          before=$(unique_idx_count)
+          echo "重放前唯一索引数: $before"
+          # 注意 -v ON_ERROR_STOP=1 是必须的: 不加的话 psql 出错也返回 0,
+          # 于是"脚本炸了"和"脚本跑通了"在 CI 里长得一模一样
+          replay V2__align_legacy_schema
+          replay V3__add_unique_constraints
+          after=$(unique_idx_count)
+          test "$after" = "$before" \
+            || { echo "FAIL: 重放后唯一索引从 $before 变成 $after (重复添加了)"; exit 1; }
+          echo "ok: 重放两次没有多出索引"
+
+          # 把其中一条拿掉再放一次 —— 证明那几个匿名块不是"永远跳过".
+          # (这个库是本次运行新建的一次性库, 后面 down -v 会整个删掉)
+          psql_ -c "ALTER TABLE review DROP CONSTRAINT uk_review_user_subject;"
+          dropped=$(unique_idx_count)
+          test "$dropped" = "$((before - 1))" \
+            || { echo "FAIL: 拿掉一条后应为 $((before - 1)), 实际 $dropped"; exit 1; }
+          replay V3__add_unique_constraints
+          restored=$(unique_idx_count)
+          test "$restored" = "$before" \
+            || { echo "FAIL: 重放没能把约束补回来(期望 $before, 实际 $restored)"; exit 1; }
+          echo "ok: 被拿掉的唯一约束能重新补上"
 
           echo "全部冒烟通过"
 

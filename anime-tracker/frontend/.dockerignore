@@ -1,0 +1,32 @@
+# ============================================================
+#  构建前端镜像时不要发给 Docker 的东西
+#
+#  这个文件里最要紧的一行是 node_modules, 而且它不只是「省点上传时间」:
+#
+#  Dockerfile 的顺序是 npm ci(装 Linux 版的依赖) -> COPY . .(拷源码).
+#  如果宿主机的 node_modules 也被拷进去, 它会**盖掉**刚装好的那一份 ——
+#  于是镜像里跑的是 Windows 上装的 esbuild/rollup 原生二进制, 构建直接失败,
+#  报的错还是 "you installed esbuild for another platform" 这类看起来像
+#  装错了依赖的信息. 而这个坑只有在 Windows 上构建镜像时才会出现.
+#
+#  dist 同理: 它是构建的产物, 而镜像里要的是**现构建**的那一份.
+#  放进去只会让人分不清镜像里那个 dist 到底是谁构建的.
+# ============================================================
+
+node_modules
+dist
+dist-ssr
+.vite
+
+# 测试与编辑器产物
+coverage
+*.local
+.DS_Store
+Thumbs.db
+npm-debug.log*
+
+# 本地环境变量不进镜像 (镜像里的配置一律由运行时环境变量给,
+# 见 docker-compose.yml —— 打包进镜像的配置在改的时候必须重新构建,
+# 而且会把值留在镜像层里)
+.env
+.env.*

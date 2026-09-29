@@ -1,23 +1,45 @@
 # ============================================================
-#  一键起「后端 + 数据库」
+#  一键起「nginx + 后端 + 数据库」
 #
 #  用法:
 #    1. 复制 .env.example 为 .env, 填好 JWT_SECRET 与首次部署用的 ADMIN_PASSWORD
 #    2. docker compose up -d --build
-#    3. curl http://localhost:8080/actuator/health 看到 {"status":"UP"} 就成功了
+#    3. 打开 http://localhost (或 .env 里的 HTTP_PORT) 就是站点;
+#       curl http://localhost/actuator/health 看到 {"status":"UP"} 就成功了
 #
 #  只想要数据库 (本地跑 mvn, 借这个 PG 用):
 #    docker compose up -d postgres
 #
+#  三个服务的分工:
+#    nginx    —— 唯一对外的入口. 托管前端构建产物, 并把 /api 反代给后端
+#    backend  —— 只在 compose 内网里监听 8080, **不对宿主机开端口**
+#    postgres —— 同上, 只绑回环地址供本机 psql 调试
+#
 #  变量都从 .env 读 (compose 会自动读同目录下的 .env), 没有的用这里的默认值.
 #  没有写 version: —— Compose v2 已不再需要它, 留着只会多一条 obsolete 警告.
+#
+#  每个服务都配了日志轮转. 不配的后果不是"日志多", 而是**磁盘被写满**:
+#  docker 默认用 json-file 且**不限制大小**, 一个跑了三个月的容器可以把
+#  宿主机塞满, 然后数据库写不进去 —— 故障现场是"磁盘满", 而不是"日志多".
 # ============================================================
+
+# 日志轮转的公共配置 (YAML 锚点), 三个服务共用同一份.
+#
+# 为什么不各写各的: 抄三遍的话, 下次只想调一个数字就得记得改三处 ——
+# 而漏掉的那一处很可能正好是最容易把磁盘写满的 (nginx 的访问日志,
+# 每个请求一行, 公网上还夹着一堆扫描器的请求).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   postgres:
     image: postgres:16-alpine
     container_name: anitrack-db
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${DB_NAME:-anitrack}
       POSTGRES_USER: ${DB_USER:-anitrack}
@@ -79,10 +101,33 @@ services:
 
       # 跨域白名单: 同源部署 (nginx 反代 /api) 时留空即可, 后端连 CORS 过滤器都不注册
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-    ports:
-      # 前面有 nginx 反代时, 建议改成 "127.0.0.1:8080:8080" ——
-      # 只让本机的反向代理能访问, 公网只认那一个入口.
-      - "${API_PORT:-8080}:8080"
+
+      # 登录爆破防护与按 IP 限流.
+      #
+      # 这一组变量原先**没有**转发 —— 而 application.yml 里写的是
+      # ${LOGIN_MAX_FAILURES:5} 这种占位符, 意思是"从环境变量读, 没有就用默认值".
+      # 于是照 .env.example 的建议把 LOGIN_MAX_FAILURES 从 5 改成 3 之后: .env 里
+      # 有值、compose 不传、容器里没有 → 后端安安静静地用回默认的 5.
+      # 这类失效不会报错、没有任何日志, 唯一的迹象是"加固没生效", 而加固不生效
+      # 这件事只有在真的被爆破时才会被发现.
+      #
+      # 四个都给默认值转发: 不填时用后端的默认值, 填了就一定生效.
+      LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-5}
+      LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
+      LOGIN_RATE_LIMIT_PER_MINUTE: ${LOGIN_RATE_LIMIT_PER_MINUTE:-10}
+      REGISTER_RATE_LIMIT_PER_MINUTE: ${REGISTER_RATE_LIMIT_PER_MINUTE:-5}
+    logging: *default-logging
+    # 刻意**不**对宿主机开端口.
+    #
+    # 之前是 "${API_PORT:-8080}:8080", 也就是后端直接挂在外网端口上. 那样等于
+    # 站点的入口有两个: nginx 一个、8080 一个. 而后者绕过了 nginx 上的全部约束 ——
+    # 限流看到的对端地址、X-Forwarded-For 的可信与否、只放行一个 actuator 端点
+    # 的白名单, 全都只存在于 nginx 那一侧. 关掉这个端口, "入口只有一个" 这件事
+    # 才不是靠自觉, 而是网络上就是如此.
+    #
+    # 需要在服务器上直接调后端接口调试时, 用 SSH 端口转发, 不要开这个口子:
+    #     ssh -L 8080:localhost:8080 用户@服务器
+    #     ssh 用户@服务器 'docker compose exec backend wget -qO- localhost:8080/actuator/health'
     healthcheck:
       # 与 Dockerfile 里的 HEALTHCHECK 同一条命令 (分组后的 liveness: 只问进程在不在,
       # 不碰数据库 —— 原因见 Dockerfile 里的说明), 在这里再写一遍是为了让
@@ -91,6 +136,38 @@ services:
       interval: 30s
       timeout: 3s
       start_period: 60s
+      retries: 3
+
+  nginx:
+    # 上下文是前端目录: 镜像里要现构建 dist (见 frontend/Dockerfile).
+    # 这里**不挂载**宿主机的 dist —— 挂载的写法在"忘了构建"或"dist 被清过一半"时
+    # 照样能把容器起起来, 只是首页白屏. 让构建成为镜像的一部分,
+    # "起来了"就等于"dist 是刚构建出来的".
+    build:
+      context: ./anime-tracker/frontend
+    image: anitrack-frontend:latest
+    container_name: anitrack-nginx
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      backend:
+        # 等后端真的健康再起 nginx.
+        #
+        # 不只是"为了让首屏请求不撞上正在启动的后端", 更是因为 nginx 启动时
+        # 要解析 upstream 里的 backend 这个名字: 名字解析不到, nginx 会直接
+        # 拒绝启动 (host not found in upstream). 等后端健康, 这个名字必然已在
+        # compose 网络里 —— 顺带也就消灭了"nginx 起得比后端快就崩"这种偶发.
+        condition: service_healthy
+    ports:
+      # 这是整个栈**唯一**对外的端口. 后端与数据库都不开宿主机端口.
+      # 80 需要 root 才能绑, 容器内的 master 进程本来就是 root, 不用额外配置;
+      # 想换成 8080 之类的非特权端口, 改 .env 里的 HTTP_PORT 即可.
+      - "${HTTP_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
       retries: 3
 
 volumes:
