@@ -48,6 +48,32 @@ public class BangumiApiClient {
         }
     }
 
+    /**
+     * 浏览全部条目: {@code GET /v0/subjects?type=2}, 按 id 升序, 靠 offset 深翻页.
+     *
+     * <p>为什么不能拿 {@link #searchSubjects} 顶替: 那是 {@code POST /v0/search/subjects},
+     * 和这里的 {@code GET /v0/subjects} 是**两个不同的 offset 口径**. 全量回填要翻到第
+     * 29,378 条, 而交接文档里那句「API 只能拿到约 25,000/29,378, 缺尾部」正是拿搜索那一侧
+     * 的观感去推浏览这一侧 —— 实测浏览接口的规则是 **offset ≤ total**:
+     * {@code offset=29378}(正好等于 total) 返回 200 + 空页, {@code 29379} 才 400.
+     * 所以全量走这一个, 它一条都不少.
+     *
+     * <p>失败时返回 {@code null}, 而不是像 {@link #searchSubjects} 那样返回一个空的
+     * {@code SearchResponse}. 这个区分是这里唯一重要的东西: 回填循环把「空的 data」读作
+     * "翻到底了", 把「null」读作"这次请求没成". 两者混成一种的话, 一次网络抖动会让回填
+     * **安静地提前收工**, 而它的结果看起来和"跑完了"一模一样 —— 一个少了一半数据的库,
+     * 没有任何地方会报错. 搜索那边不需要这个区分, 因为它的调用方要的是"搜不到就显示没有".
+     */
+    public SearchResponse browseSubjects(int offset, int limit) {
+        try {
+            return get("/v0/subjects?type=2&limit=" + limit + "&offset=" + offset,
+                    new ParameterizedTypeReference<SearchResponse>() {});
+        } catch (Exception e) {
+            log.warn("Bangumi browse 失败 (offset={}): {}", offset, e.getMessage());
+            return null;
+        }
+    }
+
     /** 获取条目详情 */
     public SubjectDTO getSubjectDetail(Integer subjectId) {
         try {

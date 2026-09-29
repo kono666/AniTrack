@@ -374,6 +374,27 @@ bangumi:
     calendar-cache-hours: 1
 
 # ============================================================
+# 全量回填 (一次性把 Bangumi 的全部动画条目拉进本地库)
+#
+# 默认关闭. 它是一轮约 588 次请求、十分量级的长跑, 不该跟着每次启动自己跑起来 ——
+# 更需要它"不跑"的是 CI 和日常开发: 那两个环境每次启动都联网抓三万个条目是没有道理的.
+#
+# 要用的时候临时开一次:
+#
+#   BACKFILL_ENABLED=true java -jar ...
+#
+# 中途断了就把它关掉, 下次把 BACKFILL_START_OFFSET 设成日志里最后那条心跳的 offset
+# 接着跑(这一路是幂等的, 重跑不会产生重复行). 详见 AnimeBackfillService 的类注释.
+# ============================================================
+anitrack:
+  backfill:
+    enabled: ${BACKFILL_ENABLED:false}
+    start-offset: ${BACKFILL_START_OFFSET:0}
+    page-size: ${BACKFILL_PAGE_SIZE:50}
+    max-pages: ${BACKFILL_MAX_PAGES:700}
+    delay-ms: ${BACKFILL_DELAY_MS:1000}
+
+# ============================================================
 # 大模型接入 (AI 助手)
 # 密钥只从环境变量读取, 绝不写进代码库.
 #
