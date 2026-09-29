@@ -33,8 +33,8 @@ function resultPage(count, startId = 1) {
   }
 }
 
-async function mountSearch(query = '测试') {
-  await router.push({ path: '/search', query: { q: query } })
+async function mountSearch(query = '测试', extra = {}) {
+  await router.push({ path: '/search', query: { q: query, ...extra } })
   await router.isReady()
   const wrapper = mount(Search, { global: { plugins: [router] } })
   await flushPromises()
@@ -70,6 +70,34 @@ describe('搜索结果分页', () => {
     expect(wrapper.text()).not.toContain('番剧1')   // 第 1 页的内容已经换掉了
     // 页码高亮跟着走
     expect(wrapper.find('.pg-btn.active').text()).toBe('2')
+  })
+
+  it('翻页会把页码写进 URL —— 后退能回到这一页全靠它', async () => {
+    const wrapper = await mountSearch()
+    searchAnime.mockResolvedValue(resultPage(20, 21))
+    await wrapper.findAll('.pg-btn').find(b => b.text() === '2').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.page).toBe('2')
+    // 关键词不能被页码挤掉
+    expect(router.currentRoute.value.query.q).toBe('测试')
+  })
+
+  it('第 1 页不往 URL 上写 page(第 1 页就是"没有这个参数")', async () => {
+    await mountSearch()
+    expect(router.currentRoute.value.query.page).toBeUndefined()
+  })
+
+  it('URL 上带着 page 时按它恢复现场(从详情页后退回来就是这条路)', async () => {
+    // App.vue 里 router-view 的 key 是 route.path, 从结果页进详情再后退, Search
+    // 是重新挂载的 —— 页码只在组件里的话, 那时它已经是一个全新的第 1 页了
+    await mountSearch('测试', { page: '2' })
+    expect(searchAnime).toHaveBeenCalledWith('测试', 2)
+  })
+
+  it('URL 上的 page 是垃圾值时退回第 1 页, 不会崩也不会请求 NaN', async () => {
+    await mountSearch('测试', { page: 'abc' })
+    expect(searchAnime).toHaveBeenCalledWith('测试', 1)
   })
 
   it('结果不到一页时不显示分页', async () => {

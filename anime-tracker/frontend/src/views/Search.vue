@@ -90,15 +90,38 @@ const pageTitle = computed(() => {
   return '🏆 热门排行'
 })
 
+/** 从 URL 读页码: 只认正整数, 缺省/乱填/0/负数一律当第 1 页 */
+function pageFromQuery(raw) {
+  const n = Number.parseInt(raw, 10)
+  return Number.isInteger(n) && n > 0 ? n : 1
+}
+
+/**
+ * 把 q 和 page 同步进 URL.
+ *
+ * 为什么页码必须进 URL: App.vue 里 router-view 的 key 是 route.path, 路径一变组件
+ * 就重建 —— 从结果页点进详情再按后退, Search 是**重新挂载**的. 页码只存在组件里的
+ * 话, 那时它已经是一个全新的第 1 页了, 于是「翻到第 3 页 → 进详情 → 后退」会掉回
+ * 第一页. 页码写进 URL 是后退能回到原来那一页的唯一依靠.
+ *
+ * 第 1 页不写(?page=1 是噪音, 与"没有这个参数"等价); 其余 query 原样带着走 ——
+ * 改前这行写的是 { query: { q } }, 会把 ?view= 一起抹掉.
+ * 用 replace 不用 push: 翻页不该在历史里堆层, 否则从第 5 页退回第 1 页要按四次后退.
+ */
+function syncQuery() {
+  const next = { ...route.query, q: keyword.value.trim() }
+  if (page.value > 1) next.page = String(page.value)
+  else delete next.page
+  if (route.query.q === next.q && route.query.page === next.page) return
+  router.replace({ query: next })
+}
+
 /** 搜索第 p 页. 新关键词从第 1 页开始, 翻页时把页码传进来(默认参数就是 1) */
 async function doSearch(p = 1) {
   const q = keyword.value.trim()
   if (!q) return
-  // Sync to URL
-  if (route.query.q !== q) {
-    router.replace({ query: { q } })
-  }
   page.value = p
+  syncQuery()
   loading.value = true
   searched.value = true
   error.value = ''
@@ -150,7 +173,9 @@ onMounted(() => {
   const q = route.query.q
   if (q) {
     keyword.value = q
-    doSearch()
+    // 带上 URL 里的页码: 从详情页后退回来时组件是重新挂载的, 这是唯一记得住
+    // 「刚才在第几页」的地方(缺省就是第 1 页)
+    doSearch(pageFromQuery(route.query.page))
   } else {
     loadBrowse()
   }
