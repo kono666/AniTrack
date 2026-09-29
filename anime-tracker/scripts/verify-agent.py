@@ -1,9 +1,43 @@
-"""Agent 层端到端验证 (ASCII-only: 避免 Windows 编码问题)"""
+"""Agent 层端到端验证
+
+跑法: 先起后端, 再 `python verify-agent.py`.
+
+默认打 http://localhost:8080, 用 admin/admin123 和 test/test123 两个账号 ——
+那是 dev profile 的默认管理员与演示账号. 这两样在别的地方都不成立
+(README 里写明演示账号只在本地存在; CI 里的管理员密码是当场随机生成的),
+所以下面全部可以用环境变量覆盖:
+
+    AGENT_BASE        默认 http://localhost:8080
+    AGENT_ADMIN_USER  默认 admin        AGENT_ADMIN_PASS  默认 admin123
+    AGENT_USER_USER   默认 test         AGENT_USER_PASS   默认 test123
+"""
 import json
+import os
+import sys
 import urllib.request
 import urllib.error
 
-BASE = "http://localhost:8080"
+# 输出的编码.
+#
+# 这里原本写的是 "ASCII-only: 避免 Windows 编码问题" —— 而那句话本身就不成立:
+# 文件里有中文(就是这个 docstring 和一条注释). 更要紧的是脚本会把**服务端返回的
+# 响应体**打进日志, 而 ApiResponse 的 message 是中文("注册成功"这一类),
+# 于是在 GBK 控制台上 print 那一行会抛 UnicodeEncodeError —— 报错信息
+# 与被测的东西毫无关系, 看起来像接口坏了.
+#
+# 显式把 stdout 换成 UTF-8: 这里要的是"打出来别崩", 不是"一个字节都不许丢",
+# 所以允许 replace —— 一个验证脚本崩在打印上, 比它打出一个问号糟糕得多.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+BASE = os.environ.get("AGENT_BASE", "http://localhost:8080")
+
+# 三个角色各自的账号. 环境变量可以覆盖, 理由见文件头.
+ADMIN_USER = os.environ.get("AGENT_ADMIN_USER", "admin")
+ADMIN_PASS = os.environ.get("AGENT_ADMIN_PASS", "admin123")
+USER_USER = os.environ.get("AGENT_USER_USER", "test")
+USER_PASS = os.environ.get("AGENT_USER_PASS", "test123")
+
 results = []
 
 
@@ -31,6 +65,35 @@ def check(label, condition, detail=""):
     print(("PASS  " if condition else "FAIL  ") + label + (("  | " + str(detail)) if detail else ""))
 
 
+def summarize_and_exit():
+    """打汇总并按结果决定退出码.
+
+    抽成函数是为了让中途放弃的路径(见管理员登录那一段)也能给出同一份汇总 ——
+    一条 traceback 和一份 FAIL 清单, 对看日志的人来说差别很大: 前者只说
+    "这脚本崩了", 后者说"这 12 条不成立".
+    """
+    print()
+    print("=" * 70)
+    total = len(results)
+    passed = sum(1 for _, ok, _ in results if ok)
+    print("RESULT: PASS=%d FAIL=%d TOTAL=%d" % (passed, total - passed, total))
+    if passed != total:
+        print()
+        print("FAILURES:")
+        for label, ok, detail in results:
+            if not ok:
+                print("  - %s | %s" % (label, detail))
+    print("=" * 70)
+
+    # 退出码 —— 这一条是「能不能进 CI」的前提.
+    #
+    # 原先无论挂多少条都返回 0. 手工跑的时候没事: 人会自己去看 RESULT 那一行.
+    # 但只要它被 `&&` 或者 CI 接住, "退出码 0" 就成了唯一的结论 ——
+    # 「80 条里挂了 12 条」会被记成一次通过的验证, 而且日志里那 12 行 FAIL
+    # 不会有任何人看到. 一个永远返回成功的检查比没有检查更糟.
+    sys.exit(0 if passed == total else 1)
+
+
 PUBLIC_ONLY = {
     "search_anime", "get_anime_detail", "get_episodes", "get_ranking", "get_latest",
     "get_calendar", "get_by_tag", "filter_anime", "list_tags",
@@ -48,7 +111,7 @@ ADMIN_EXTRA = {
 print("=" * 70)
 print("0. CLEANUP - wipe conversations left over from previous runs")
 print("=" * 70)
-for who in [("admin", "admin123"), ("test", "test123")]:
+for who in [(ADMIN_USER, ADMIN_PASS), (USER_USER, USER_PASS)]:
     st, lg = call("POST", "/api/user/login", {"username": who[0], "password": who[1]})
     tok = (lg.get("data") or {}).get("token") if st == 200 else None
     if not tok:
@@ -95,8 +158,8 @@ print()
 print("=" * 70)
 print("3. NORMAL USER login -> tool visibility")
 print("=" * 70)
-status, login = call("POST", "/api/user/login", {"username": "test", "password": "test123"})
-check("test user login 200", status == 200, status)
+status, login = call("POST", "/api/user/login", {"username": USER_USER, "password": USER_PASS})
+check("normal user (%s) login 200" % USER_USER, status == 200, status)
 user_token = (login.get("data") or {}).get("token") if status == 200 else None
 check("login returned a token", bool(user_token))
 
@@ -129,9 +192,26 @@ print()
 print("=" * 70)
 print("5. ADMIN persona")
 print("=" * 70)
-status, admin_login = call("POST", "/api/user/login", {"username": "admin", "password": "admin123"})
+status, admin_login = call("POST", "/api/user/login", {"username": ADMIN_USER, "password": ADMIN_PASS})
 check("admin login 200", status == 200, status)
 admin_token = (admin_login.get("data") or {}).get("token") if status == 200 else None
+
+# 管理员这条线是后面几节的骨架: 会话列表、读自己的会话、以及"普通用户读不到
+# 管理员的会话"这类越权用例, 都拿 admin_conv_id 当基准. 登录不成就没有 token,
+# 再往下走会在几十行之后以一个 NameError 收场 —— 而那句报错把
+# 「管理员密码不对」说成了一处代码 bug, 正好指错方向. 所以停在这里.
+if admin_token is None:
+    print()
+    print("!! 管理员(%s)登录失败(HTTP %s), 第 5 节之后全部依赖管理员身份, 无法继续." % (ADMIN_USER, status))
+    if status == 429:
+        # 这一条单列出来, 因为它是"连着跑第二遍"最可能撞上的东西,
+        # 而不是账号或密码有问题. 不写清楚的话, 看到的人会先去查密码.
+        print("!! 429 = 触发了登录限流(LOGIN_RATE_LIMIT_PER_MINUTE, 默认 10/分钟/IP).")
+        print("!! 本脚本一次跑 4 次登录, 一分钟内连跑两遍就会撞上. 等一分钟再跑.")
+    else:
+        print("!! 在 CI 里这通常意味着 CI_ADMIN_PASSWORD / ADMIN_PASSWORD 没对上;")
+        print("!! 本地则是 dev profile 的 admin/admin123, 或用 AGENT_ADMIN_PASS 覆盖.")
+    summarize_and_exit()
 
 status, info = call("GET", "/api/agent/info", token=admin_token)
 admin_tools = set(info["data"]["tools"]) if status == 200 else set()
@@ -356,15 +436,4 @@ if tagged:
 else:
     print("   SKIP  no tagged anime rows in this run - nothing to render")
 
-print()
-print("=" * 70)
-total = len(results)
-passed = sum(1 for _, ok, _ in results if ok)
-print("RESULT: PASS=%d FAIL=%d TOTAL=%d" % (passed, total - passed, total))
-if passed != total:
-    print()
-    print("FAILURES:")
-    for label, ok, detail in results:
-        if not ok:
-            print("  - %s | %s" % (label, detail))
-print("=" * 70)
+summarize_and_exit()

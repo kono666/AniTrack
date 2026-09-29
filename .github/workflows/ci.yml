@@ -14,10 +14,15 @@
 #  (后端不对宿主机开端口), 所以「经 nginx 能用」才是那个唯一值得断言的东西.
 #  顺带钉住的: 静态资源真的被打进镜像了、深层路由刷新不 404、actuator 白名单
 #  只放行一个端点、迁移脚本在已经迁移过的库上重放安全且能补回被拿掉的约束、
-#  每天那份备份真的产出了而且真的恢复得回来.
+#  每天那份备份真的产出了而且真的恢复得回来、以及 Agent 全链路
+#  (工具调用 -> 番剧卡片 -> SSE 分帧 -> 额度扣减) 在 mock 模型下真的跑得通.
+#
+#  曾经写着「不跑 scripts/verify-agent.py」, 理由是「它要真实 LLM 额度」.
+#  那句理由是错的: 脚本对应的 README 那一段自己就写着 LLM_PROVIDER=mock
+#  「不产生任何费用」—— 同一件事在两处说法相反, 而且恰好是让 CI 少跑一段的那个说法
+#  被写进了 CI. 现在按能免费跑的那一种落地: 下面 .env 里给了 mock.
 #
 #  刻意不做的事:
-#   - 不跑 scripts/verify-agent.py (它要真实 LLM 额度, 属于手工验证, 不该让每个 PR 都烧钱)
 #   - 不做镜像推送 (没有镜像仓库; 这一版的目标只是「构建得出来 + 跑得起来」)
 # ============================================================
 
@@ -166,6 +171,15 @@ jobs:
       # 这样"这个变量确实被 compose 读到了"本身也变成了被验证的一件事.
       # 如果 compose 里那行 mapping 哪天被改回硬编码的 80, 下面的 curl 会连不上,
       # 而不是"照样通过" —— 端口这类配置最怕的就是改了个不生效还没人知道.
+      # LLM_PROVIDER=mock 是给下面那段 Agent 端到端用的.
+      #
+      # 不写的话它会落到 compose 里的默认值 openai-compat, 而 CI 没有 API Key ——
+      # 后端照样起得来、上面那 9 节冒烟照样全过, 只有端到端会以「助手未配置」收场.
+      # mock 是仓库自己支持的取值 (MockLlmClient), 输出带【Mock 模式】前缀,
+      # 不会伪装成真回复, 也不产生任何费用.
+      #
+      # .env 里只写 KEY=value, 解释留在这一层: 那个文件是给 compose 吃的,
+      # 而本机没有 Docker, 往里塞任何非赋值内容都没法在本地验一遍.
       - name: 生成 CI 用的 .env
         env:
           # 非密钥, 只是本次冒烟的管理员用户名
@@ -180,6 +194,7 @@ jobs:
           ADMIN_PASSWORD=${CI_ADMIN_PASSWORD}
           ADMIN_EMAIL=ci@example.com
           HTTP_PORT=8080
+          LLM_PROVIDER=mock
           EOF
 
       - name: 起 compose 栈并等它健康
@@ -366,6 +381,66 @@ jobs:
           echo "ok: 恢复演练通过 (user 表 $dst 行, 与源库一致)"
 
           echo "全部冒烟通过"
+
+      # Agent 全链路的端到端验证, 用 mock 模型, 不产生任何费用.
+      #
+      # 这一段的断言只有真跑起来才看得见: 普通用户拿不到管理员的工具、
+      # 越权访问回 403、SSE 真的按事件名分帧推、工具结果里的番剧行真的带了
+      # 可直接渲染的卡片、额度按实际轮数扣. 这些逻辑写错了不会在单元测试里露头 ——
+      # 它们坏掉的样子是「演示当天前端一片空白」.
+      #
+      # 打的是 nginx 的 8080, 和真人用同一个入口. SSE 能过 nginx 是因为
+      # nginx.conf 的 location /api/ 里关了 proxy_buffering —— 不关的话
+      # 流式响应会被攒到最后一次性吐出来, 这一段会挂在一个和代码无关的地方.
+      - name: 端到端 (Agent 全链路, mock 模型)
+        env:
+          CI_ADMIN_USERNAME: ciadmin
+          AGENT_BASE: http://localhost:8080
+          AGENT_ADMIN_USER: ciadmin
+          # postgres profile 下 BootstrapProperties.demoUserEnabled=false,
+          # 所以 test/test123 那个 demo 用户**不存在** —— 下面现场注册一个.
+          AGENT_USER_USER: citest
+          # 不能沿用 test123: PasswordPolicy 要求至少 8 位且同时含字母和数字,
+          # "test123" 只有 7 位, 连注册都过不去 (dev 里那个 demo 用户是引导代码
+          # 直接建的, 没走参数校验, 所以它能存在 —— 这个差别正好在这里露出来).
+          AGENT_USER_PASS: citest12345
+        run: |
+          set -euo pipefail
+
+          # 管理员密码本次运行现生成, 从环境里取, 不落进仓库
+          export AGENT_ADMIN_PASS="$CI_ADMIN_PASSWORD"
+
+          echo "--- 先注册一个普通用户 (CI 里没有 demo 用户) ---"
+          code=$(curl -s -o /tmp/reg -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$AGENT_USER_USER\",\"email\":\"citest@example.com\",\"password\":\"$AGENT_USER_PASS\"}" \
+            "$AGENT_BASE/api/user/register")
+          test "$code" = "200" || { echo "FAIL: 注册普通用户 -> $code"; cat /tmp/reg; exit 1; }
+          echo "ok: 普通用户 $AGENT_USER_USER 注册成功"
+
+          echo "--- 跑 scripts/verify-agent.py ---"
+          # pipefail 上面已开, 所以脚本的非零退出码能穿过 tee 传出来
+          python3 anime-tracker/scripts/verify-agent.py 2>&1 | tee /tmp/agent.log
+
+          # 额外钉一条脚本自己钉不了的.
+          #
+          # 脚本要能在任意 provider 下跑, 所以「mock 到底调没调到工具」不能写死在它里面;
+          # 但 CI 知道自己给的是 mock, 可以在这里查.
+          #
+          # 为什么非查不可: 脚本里那几十条卡片断言都是
+          # 「**如果**有带 type=anime 标记的行, 就必须带卡片」的形式. 于是当
+          # api.bgm.tv 不通、工具返回空的时候, 那些断言会**全部空转通过** ——
+          # RESULT 照样 FAIL=0, 退出码照样 0, 而卡片那条链路压根没被检查过.
+          # 一个绿色的、但什么都没验的 CI, 比一个红色的更糟.
+          tagged=$(grep -o 'carrying tagged anime rows=[0-9]*' /tmp/agent.log \
+                   | grep -o '[0-9]*$' | tail -1 || true)
+          test -n "$tagged" \
+            || { echo "FAIL: 日志里找不到 'carrying tagged anime rows' 这一行"; exit 1; }
+          test "$tagged" -ge 1 \
+            || { echo "FAIL: 工具结果里没有带 type=anime 的行 (=$tagged), 卡片断言全部空转了."
+                 echo "      多半是 api.bgm.tv 不通或被限流 —— 不是代码的问题, 但也不能算通过."
+                 exit 1; }
+          echo "ok: mock 真的调到了工具, 结果带 $tagged 组番剧行 (卡片断言不是空转)"
 
       # 失败了才有必要看日志 —— 平时打出来只会把有效信息淹掉.
       #
