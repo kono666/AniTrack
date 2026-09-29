@@ -9,4 +9,4 @@
   background:var(--card); color:var(--text-secondary); border:1px solid var(--border);
 }
 .tag-chip:hover { border-color:var(--primary); color:var(--primary); }
-.tag-chip.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+.tag-chip.active { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }

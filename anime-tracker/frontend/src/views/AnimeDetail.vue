@@ -303,24 +303,37 @@ onMounted(load)
 .d-hero { position:relative; min-height:440px; display:flex; align-items:center; overflow:hidden; }
 .d-hero-bg{ position:absolute; inset:0; }
 .d-hero-bg-img{ width:100%; height:100%; object-fit:cover; filter:blur(24px) brightness(.22); transform:scale(1.2); }
-.d-hero-mesh{ position:absolute; inset:0; background: linear-gradient(160deg, rgba(12,4,24,.94) 0%, rgba(26,16,64,.8) 40%, rgba(20,8,36,.9) 70%, rgba(12,4,24,.95) 100%); }
+/* 头图上是深色孤岛(见 tokens.css), 所以这层纱**不跟主题变**。
+   这两组 rgba 就是 --hero-bg(#120f0f) 和 --hero-bg-2(#221c1c) 加上透明度 ——
+   CSS 没法给 var() 里的十六进制再叠一个 alpha(除非用 color-mix, 那要看构建
+   目标的浏览器支持), 所以只能在这儿写死。改 tokens 里那两个值时记得同步这里。
+   改前是紫→靛→紫(#0c0418/#1a1040/#140824), 上一版配色的残留。 */
+.d-hero-mesh{ position:absolute; inset:0; background: linear-gradient(160deg, rgba(18,15,15,.94) 0%, rgba(34,28,28,.8) 40%, rgba(18,15,15,.9) 70%, rgba(18,15,15,.95) 100%); }
 .d-hero-content{ position:relative; z-index:2; display:flex; gap:40px; align-items:flex-start; padding-top:40px; padding-bottom:40px; }
 .d-hero-left{ flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:16px; }
 .d-cover-wrap{ position:relative; }
 .d-cover{ width:220px; border-radius:12px; aspect-ratio:3/4; object-fit:cover; box-shadow:0 16px 64px rgba(0,0,0,.5); border:2px solid rgba(255,255,255,.06); }
-.d-cover-score{ position:absolute; bottom:-8px; right:-8px; padding:4px 12px; border-radius:12px; background:rgba(0,0,0,.85); color:var(--star); font-size:14px; font-weight:800; border:1.5px solid rgba(255,255,255,.1); backdrop-filter:blur(8px); }
-.d-cover-rank{ position:absolute; top:-8px; left:-8px; padding:4px 10px; border-radius:8px; background:linear-gradient(135deg,var(--primary),var(--accent)); color:#fff; font-size:12px; font-weight:800; }
+/* 这两个角标压在封面上 → 用 --cover-* 那组, 不跟主题变.
+   一深一浅是有意的: 评分是"读一个数", 排名是"贴一个标", 权重不同。 */
+.d-cover-score{ position:absolute; bottom:-8px; right:-8px; padding:4px 12px; border-radius:12px; background:var(--cover-scrim); color:var(--cover-star); font-size:14px; font-weight:800; border:1.5px solid rgba(255,255,255,.1); backdrop-filter:blur(8px); }
+.d-cover-rank{ position:absolute; top:-8px; left:-8px; padding:4px 10px; border-radius:8px; background:var(--cover-fg); color:var(--cover-ink); font-size:12px; font-weight:800; }
 .d-hero-actions{ width:100%; }
-.d-btn-track{ width:100%; padding:12px; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer; border:none; color:#fff; background:var(--primary); transition:all var(--transition); font-family:inherit; }
-.d-btn-track:hover{ background:var(--primary-hover); transform:translateY(-1px); }
-.d-btn-track.tracking{ background:rgba(168,85,247,.25); border:1.5px solid rgba(168,85,247,.4); color:var(--primary); }
+/* 这个按钮在**头图上**(深色孤岛里), 不是在普通卡片上 —— 所以它不能用
+   --primary: 浅色主题下 --primary 是近黑, 近黑的按钮压在近黑的头图上会糊成一片。
+   头图上的主按钮一律"浅底 + 深字"。注意它跟下面 .d-btn-save 是两回事:
+   那个在 .d-track-bar 里(background:var(--card)), 是正常页面上的按钮。 */
+.d-btn-track{ width:100%; padding:12px; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer; border:none; color:var(--cover-ink); background:var(--cover-fg); transition:all var(--transition); font-family:inherit; }
+.d-btn-track:hover{ background:#fff; transform:translateY(-1px); }
+/* 已追番: 由"实心"改成"描边"。--primary 是墨色, 用它当文字色跟 --text 没有
+   区别, 选中态会消失 —— 所以状态改由填充方式表达, 不靠色相。 */
+.d-btn-track.tracking{ background:rgba(255,255,255,.14); border:1.5px solid rgba(255,255,255,.4); color:var(--cover-fg); }
 
 .d-hero-right{ flex:1; min-width:0; padding-top:8px; }
-.d-title{ font-size:34px; font-weight:900; color:#fff; line-height:1.2; margin-bottom:4px; text-shadow:0 2px 16px rgba(0,0,0,.5); }
+.d-title{ font-size:34px; font-weight:900; color:var(--cover-fg); line-height:1.2; margin-bottom:4px; text-shadow:0 2px 16px rgba(0,0,0,.5); }
 .d-subtitle{ font-size:14px; color:rgba(255,255,255,.35); margin-bottom:20px; }
 .d-stats{ display:flex; gap:28px; margin-bottom:18px; }
 .d-stat{ display:flex; flex-direction:column; align-items:center; }
-.ds-val{ font-size:20px; font-weight:800; color:#fff; }
+.ds-val{ font-size:20px; font-weight:800; color:var(--cover-fg); }
 .ds-lbl{ font-size:11px; color:rgba(255,255,255,.35); margin-top:2px; }
 .d-tags{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
 .d-tag{ padding:5px 14px; border-radius:16px; background:rgba(255,255,255,.08); color:rgba(255,255,255,.7); font-size:12px; font-weight:500; border:1px solid rgba(255,255,255,.06); backdrop-filter:blur(4px); }
@@ -332,7 +345,7 @@ onMounted(load)
 .track-input-row{ display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary); }
 .track-input-row input{ width:56px; padding:5px 6px; border:1.5px solid var(--input-border); border-radius:6px; text-align:center; background:var(--input-bg); color:var(--text); font-size:13px; font-family:inherit; }
 .track-input-row input:focus{ border-color:var(--primary); outline:none; }
-.d-btn-save{ padding:8px 22px; border-radius:8px; border:none; background:var(--primary); color:#fff; font-size:13px; font-weight:600; cursor:pointer; transition:all var(--transition); font-family:inherit; }
+.d-btn-save{ padding:8px 22px; border-radius:8px; border:none; background:var(--primary); color:var(--primary-foreground); font-size:13px; font-weight:600; cursor:pointer; transition:all var(--transition); font-family:inherit; }
 .d-btn-save:hover{ background:var(--primary-hover); }
 .d-btn-ghost{ padding:8px 22px; border-radius:8px; border:1.5px solid var(--border); background:transparent; color:var(--text-secondary); font-size:13px; cursor:pointer; font-family:inherit; }
 
@@ -340,7 +353,9 @@ onMounted(load)
 .d-section{ margin-bottom:32px; }
 .d-section-hd{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:16px; }
 .d-section-hd h2{ font-size:20px; font-weight:800; color:var(--text); }
-.d-section-extra{ font-size:13px; color:var(--primary); font-weight:600; }
+/* 原来是 --primary。墨色主题下它跟 --text 同色, 这个"已看 3/12"的附注会
+   跳成跟标题一样重 —— 它本来就该比标题弱一档 */
+.d-section-extra{ font-size:13px; color:var(--text-secondary); font-weight:600; }
 
 /* ====== EPISODE TILES ====== */
 .ep-tile-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); gap:10px; }
@@ -351,9 +366,11 @@ onMounted(load)
   cursor:pointer; transition:all var(--transition); font-family:inherit;
 }
 .ep-tile:hover{ border-color:var(--primary); background:var(--card-hover); transform:translateY(-2px); }
-.ep-tile.watched{ background:rgba(168,85,247,.08); border-color:rgba(168,85,247,.25); }
+.ep-tile.watched{ background:var(--primary-soft); border-color:var(--primary-line); }
 .ep-tile-num{ font-size:20px; font-weight:900; color:var(--text-secondary); font-variant-numeric:tabular-nums; }
-.ep-tile.watched .ep-tile-num{ color:var(--primary); }
+/* 看过 = 满墨。--primary 是墨色, 拿它当"强调文字"跟 --text 没差别,
+   而这个状态需要跟未看的 --text-secondary 拉开距离 */
+.ep-tile.watched .ep-tile-num{ color:var(--text); }
 .ep-tile-name{ font-size:11px; color:var(--text-muted); text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
 .ep-check{ position:absolute; top:4px; right:6px; font-size:11px; color:var(--success); }
 
@@ -364,7 +381,7 @@ onMounted(load)
 .related-card:hover{ transform:translateY(-4px); }
 .rc-cover{ aspect-ratio:3/4; border-radius:var(--radius-sm); overflow:hidden; background:var(--bg-secondary); position:relative; margin-bottom:6px; }
 .rc-cover img{ width:100%; height:100%; object-fit:cover; }
-.rc-score{ position:absolute; bottom:4px; right:4px; padding:2px 6px; border-radius:4px; background:rgba(0,0,0,.8); color:var(--star); font-size:10px; font-weight:700; }
+.rc-score{ position:absolute; bottom:4px; right:4px; padding:2px 6px; border-radius:4px; background:var(--cover-scrim); color:var(--cover-star); font-size:10px; font-weight:700; }
 .rc-title{ font-size:13px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .rc-year{ font-size:11px; color:var(--text-muted); }
 
@@ -381,12 +398,12 @@ onMounted(load)
 .rate-bar-row{ display:flex; align-items:center; gap:8px; font-size:12px; }
 .rbr-label{ width:16px; text-align:center; color:var(--text-muted); font-weight:700; }
 .rbr-track{ flex:1; height:5px; background:var(--bg-secondary); border-radius:3px; overflow:hidden; }
-.rbr-fill{ height:100%; border-radius:3px; background:linear-gradient(90deg,var(--primary),var(--accent)); transition:width .6s cubic-bezier(.4,0,.2,1); }
+.rbr-fill{ height:100%; border-radius:3px; background:var(--primary); transition:width .6s var(--ease); }
 .rbr-cnt{ width:22px; text-align:right; color:var(--text-muted); font-size:11px; }
 
 .review-list{ display:flex; flex-direction:column; }
 .rv-item{ display:flex; gap:12px; padding:16px 0; border-bottom:1px solid var(--border); }
-.rv-avatar{ width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,var(--primary),var(--accent)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; flex-shrink:0; }
+.rv-avatar{ width:36px; height:36px; border-radius:50%; background:var(--primary); color:var(--primary-foreground); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; flex-shrink:0; }
 .rv-body{ flex:1; min-width:0; }
 .rv-top{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
 .rv-username{ font-weight:700; font-size:13px; color:var(--text); }

@@ -1,17 +1,21 @@
 /* ============================================================
-   🎬 AniTrack — Base Reset & Typography
+   AniTrack — Base Reset & Typography
    ============================================================ */
 
 /* ── Reset ── */
 *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
 
 body {
-  font-family: 'Geist Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-body);
   color: var(--text);
   background: var(--bg);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 全站等宽数字。这个站满屏都是评分/集数/年份/日期, 而默认的比例数字
+     每个字形宽度不同 —— 列表里数字列会左右跳动, 逐行读的时候很明显。
+     tabular-nums 零成本, 且不影响拉丁字母的排版。 */
+  font-variant-numeric: tabular-nums;
   transition: background var(--transition-slow), color var(--transition-slow);
 }
 
@@ -24,13 +28,20 @@ img { max-width:100%; display:block; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* ── Typography ── */
-h1 { font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
-h2 { font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
-h3 { font-size: 16px; font-weight: 600; }
+/* ── Typography ──
+   标题走显示体(窄体), 正文走正文体 —— 这是"编辑感"最省力的落点:
+   同一句话用窄体大字号排出来, 版面立刻有主次, 不需要加任何装饰。 */
+h1 { font-family: var(--font-display); font-size: var(--fs-h1); font-weight: 800; letter-spacing: -.02em; }
+h2 { font-family: var(--font-display); font-size: var(--fs-h2); font-weight: 700; letter-spacing: -.01em; }
+h3 { font-family: var(--font-display); font-size: var(--fs-h3); font-weight: 600; }
 
 /* ── Selection ── */
-::selection { background: rgba(168,85,247,.3); color: var(--text); }
+::selection { background: var(--selection-bg); color: var(--text); }
 
-/* ── Smooth scroll ── */
+/* ── Smooth scroll ──
+   原来是无条件开的。系统里开了「减少动效」的人, 这一条会让他每次跳转都看一段
+   平滑滚动 —— 而那正是他要求关掉的东西。 */
 html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}

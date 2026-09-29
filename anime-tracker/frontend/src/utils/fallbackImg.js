@@ -15,17 +15,26 @@
  * 界线收敛成两个.
  */
 
+/* 下面这几个色值是全项目**唯一没法 token 化**的地方: 它们在一个 SVG data URI
+   里, CSS 变量进不去. 所以 --bg-secondary / --border / --input-border 改值时
+   必须手动同步这里 —— 按新旧中性阶的**同一档位**对应:
+     #18181b(zinc-900) → #171514  = --bg-secondary
+     #27272a(zinc-800) → #332d2d  = --border
+     #3f3f46(zinc-700) → #423b3a  = --input-border
+   一一对应而不是重新挑色, 是为了保持这块占位图原本的明暗关系不变:
+   换配色不该顺手把占位图也换个样子. */
+
 /** 通用占位: 深灰底 + 一行 "No Cover". 用于列表、轮播、缩略图. */
 export const COVER_FALLBACK = svg(
   '<rect width="300" height="400" rx="8"/>' +
-  '<text x="150" y="200" text-anchor="middle" fill="#3f3f46" font-size="16">No Cover</text>'
+  '<text x="150" y="200" text-anchor="middle" fill="#423b3a" font-size="16">No Cover</text>'
 )
 
-/** 大封面占位: 深蓝底 + 🎬 + 「暂无封面」. 用于详情页头图、番剧卡片. */
+/** 大封面占位: 深底 + 🎬 + 「暂无封面」. 用于详情页头图、番剧卡片. */
 export const COVER_FALLBACK_CARD = svg(
   '<rect width="300" height="400" rx="8"/>' +
-  '<text x="150" y="195" text-anchor="middle" fill="#3f3f46" font-size="14">暂无封面</text>' +
-  '<text x="150" y="215" text-anchor="middle" fill="#27272a" font-size="48">🎬</text>'
+  '<text x="150" y="195" text-anchor="middle" fill="#423b3a" font-size="14">暂无封面</text>' +
+  '<text x="150" y="215" text-anchor="middle" fill="#332d2d" font-size="48">🎬</text>'
 )
 
 /**
@@ -38,6 +47,6 @@ export const COVER_FALLBACK_CARD = svg(
  */
 function svg(body) {
   return 'data:image/svg+xml,' + encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#18181b">${body}</svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" fill="#171514">${body}</svg>`
   )
 }

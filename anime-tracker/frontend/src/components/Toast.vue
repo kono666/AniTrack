@@ -68,7 +68,7 @@ defineExpose({ show, remove })
 .toast-action {
   padding: 5px 12px; border-radius: 6px;
   font-size: 12px; font-weight: 700; cursor: pointer;
-  border: none; color: #fff; background: var(--primary);
+  border: none; color: var(--primary-foreground); background: var(--primary);
   white-space: nowrap; font-family: inherit;
   transition: background var(--transition);
 }

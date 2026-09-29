@@ -1,41 +1,113 @@
 /* ============================================================
-   🎬 AniTrack — Design Tokens
+   AniTrack — Design Tokens
+   ============================================================
+
+   这一层里每一个值都是为**这个站**做的决定, 不是某个 UI 库的出厂设置。
+
+   改前是什么
+   ----------
+   --primary(#a855f7) + --accent(#ec4899) 压 --bg(#09090b) 是
+   shadcn/ui 的 Purple 预设原样; 全部中性色是 Tailwind 的 zinc 阶
+   (#18181b/#27272a/#3f3f46/#a1a1aa/#fafafa); 浅色徽章是 Ant Design 的
+   (#f6ffed/#389e0d)。**换任何一个产品, 这些值一个字都不用改** —— 这正是
+   「模板感」的来源: 不是难看, 是这里没有一个值是为你自己的内容算的。
+
+   新色板怎么来的
+   --------------
+   不是再挑一套好看的色, 是**从站内真实封面里测出来的**
+   (取 360 张: rank/date/catalog 三路各 120, 缩 64x64 按饱和度加权统计色相):
+
+     · 主导色相 = 5°(暖红棕), 占 9.2%
+     · 封面平均亮度 0.506 (中位 0.504) —— 正好居中, 所以**两套主题一样重要**,
+       不存在"哪套是主"的说法
+
+   由此定的两条:
+     1. 中性阶全部取 **5° 色相**、饱和度 2–14%。纯灰(#808080 那类)看着是没想过,
+        带一点内容自身的暖调才像是有意的。
+     2. 强调色取**墨色** —— 深色主题近白(#e0d0ce), 浅色主题近黑(#2e2827)。
+        理由是实测出来的: 封面里的鲜艳色相被内容自己大量占用, UI 再去抢一个
+        色相, 只会跟封面打架。**彩色留给真正需要它的地方: 金银铜榜位和状态语义。**
+
+   一个必须知道的取舍
+   ------------------
+   --primary 是墨色, 所以它当**文字色**用时(如 .nav-link--active)跟 --text 几乎
+   同色, 选中态靠色相是分辨不出来的。本文件为此提供了 --primary-soft /
+   --primary-line: 选中态改成「洗色底 + 描边」来表达, 而不是靠变颜色。
    ============================================================ */
 
 /* ── Dark Theme (Default) ── */
 :root {
-  /* Accent */
-  --primary: #a855f7;
-  --primary-foreground: #fff;
-  --primary-hover: #9333ea;
-  --accent: #ec4899;
-  --accent-hover: #db2777;
+  /* ── 字体 ──
+     拉丁字形自托管(见 main.js 的 @fontsource 引入), 中文走系统栈。
+     这是**有意的决定**而不是漏掉: 中文字体动辄好几 MB, 而中文站普遍这么做。
+     代价要说清楚 —— 中文在 Windows 上落到微软雅黑、在 macOS 上落到苹方,
+     两端观感不完全一致。
+     显示体用 Saira Condensed(窄体, 编辑感靠它), 正文/数字用 IBM Plex Sans。
+     IBM Plex Sans 最粗只到 700, 所以 800/900 只该出现在显示体上;
+     正文体上的 800/900 会被浏览器伪粗体合成, 各组件改版时逐个挪走。 */
+  --font-display: 'Saira Condensed', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-body: 'IBM Plex Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* Surfaces */
-  --bg: #09090b;
-  --bg-secondary: #121217;
-  --card: #18181b;
+  /* ── 字阶 ──
+     只收 h1–h3: 这三个在 base.css 里有唯一的定义点, 收进来是净收益。
+     更细的阶(显示体标题、正文、辅助文字)等 SectionHeader 落地时一起定 ——
+     现在先把没人用的档位写进来, 只会变成一堆永远对不上的名字。 */
+  --fs-h1: 28px;
+  --fs-h2: 22px;
+  --fs-h3: 16px;
+
+  /* ── 强调: 墨色 ── */
+  --primary: #e0d0ce;
+  --primary-hover: #f5e7e6;
+  --primary-foreground: #141212;        /* 压在 --primary 填充上的字 */
+  --primary-soft: rgba(255,255,255,.08);  /* 选中/悬停的洗色底 */
+  --primary-line: rgba(255,255,255,.20);  /* 同色系描边 */
+  --primary-glow: rgba(255,255,255,.16);  /* 发光阴影 */
+  --focus-ring: var(--primary);        /* 别名, body.light 里**不要**再覆盖一遍:
+                                          它跟着 --primary 走, 重复定义只会多一个
+                                          将来会跟主色脱节的值 */
+  --focus-ring-soft: rgba(255,255,255,.18);
+  --selection-bg: rgba(255,255,255,.22);
+
+  /* ── 面 ── */
+  --bg: #0d0c0b;
+  --bg-secondary: #171514;
+  --card: #171514;
   --card-bg: var(--card);          /* alias — 旧代码兼容 */
-  --card-hover: #1f1f24;
-  --card-border: #27272a;
+  --card-hover: #24201f;
+  --card-border: #332d2d;
 
-  /* Text */
-  --text: #fafafa;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  /* ── 字 ── */
+  --text: #f5e7e6;
+  --text-secondary: #c2b5b4;
+  --text-muted: #948988;
 
-  /* Borders & Inputs */
-  --border: #27272a;
-  --input-bg: #18181b;
-  --input-border: #3f3f46;
+  /* ── 边 ── */
+  --border: #332d2d;
+  --input-bg: #171514;
+  --input-border: #423b3a;
 
-  /* Status */
-  --star: #fbbf24;
-  --success: #34d399;
-  --danger: #f87171;
-  --warning: #fbbf24;
+  /* ── 语义色 ──
+     只保留红/绿/黄三个真正表达状态的色, 且都比 Tailwind 的 500 档降了饱和度 ——
+     在一屏中性色里, 一个 90% 饱和的红是刺眼的, 而 60% 的红一样能表达"危险"。 */
+  --star: #e0b95e;                 /* 评分用的金, 与 --rank-1 同值 */
+  --success: #68bd92;
+  --danger: #bd5044;
+  --danger-hover: #d2604f;
+  --danger-soft: rgba(226,96,84,.16);
+  --danger-line: rgba(226,96,84,.30);
+  --warning: #cc9639;
 
-  /* Misc */
+  /* ── 榜位金银铜 ──
+     这是本方案里**唯一允许出现彩色**的地方 —— 前三名值得一个颜色,
+     其余一切靠墨色与留白。用纯色不用渐变: 渐变是上一个版本的模板签名。 */
+  --rank-1: #e0b95e;
+  --rank-2: #bdb4b3;
+  --rank-3: #ad7a53;
+  --rank-fg: #141212;              /* 压在榜位色块上的序号 */
+
+  /* ── Misc ── */
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 16px;
@@ -43,82 +115,128 @@
   --shadow-lg: 0 10px 40px rgba(0,0,0,.5);
   --shadow-card: 0 0 0 1px var(--card-border), 0 2px 8px rgba(0,0,0,.3);
 
-  /* Nav */
-  --navbar-bg: rgba(9,9,11,.85);
+  /* ── Nav ── */
+  --navbar-bg: rgba(13,12,11,.85);
 
-  /* Transitions */
-  --transition: 200ms cubic-bezier(.4,0,.2,1);
-  --transition-slow: 400ms cubic-bezier(.4,0,.2,1);
+  /* ── 动效 ──
+     拆成"时长"和"缓动"两半, 让后面可以单独改一个而不动另一个;
+     --transition / --transition-slow 保持原样可用(全站引用了 51 处)。 */
+  --dur: 200ms;
+  --dur-slow: 400ms;
+  --ease: cubic-bezier(.4,0,.2,1);
+  --transition: var(--dur) var(--ease);
+  --transition-slow: var(--dur-slow) var(--ease);
 
-  /* Tags */
-  --tag-bg: rgba(168,85,247,.15);
-  --tag-color: #c084fc;
+  /* ── 标签 ── */
+  --tag-bg: rgba(255,255,255,.07);
+  --tag-color: var(--text-secondary);
 
   /* ── 语义徽章 ──
-     管理员端的状态/角色徽章与个人页的追番状态徽章, 原本是 10 个色值直接写死在
-     两处 scoped 样式里, 而且**只有浅色那一套**(#f6ffed 底 + #52c41a 字).
-     暗色主题下它们就成了一块块自己会发光的马卡龙色块; 反过来把亮色那套字色
-     搬到深色底上又读不清. 所以底色和字色必须成对地跟着主题换, 用同一组名字:
-     暗色 = 半透明底 + 亮字, 亮色 = 浅底 + 深字. */
-  --badge-purple-bg: rgba(168,85,247,.16);
-  --badge-purple-fg: #c084fc;
-  --badge-blue-bg: rgba(59,130,246,.16);
-  --badge-blue-fg: #60a5fa;
-  --badge-green-bg: rgba(52,211,153,.16);
-  --badge-green-fg: #34d399;
-  --badge-red-bg: rgba(248,113,113,.16);
-  --badge-red-fg: #f87171;
-  --badge-amber-bg: rgba(251,191,36,.16);
-  --badge-amber-fg: #fbbf24;
-  --badge-gray-bg: rgba(161,161,170,.16);
-  --badge-gray-fg: #a1a1aa;
+     管理员端的状态/角色徽章与个人页的追番状态徽章。底色和字色必须成对地跟着
+     主题换: 暗色 = 半透明底 + 亮字, 亮色 = 浅底 + 深字。
+     ink 那一对直接绑到 --primary: 墨色是这个方案里表达"更高权限"的方式,
+     而它若用暖色调的浅洗色, 会跟 badge-red 撞成同一个颜色
+     (中性色相 5° 与危险色相 6° 只差 1° —— 暖中性底色的固有代价)。 */
+  --badge-ink-bg: var(--primary);
+  --badge-ink-fg: var(--primary-foreground);
+  --badge-blue-bg: rgba(96,148,232,.18);
+  --badge-blue-fg: #5a8ed6;
+  --badge-green-bg: rgba(88,196,142,.18);
+  --badge-green-fg: #61c291;
+  --badge-red-bg: rgba(226,96,84,.20);
+  --badge-red-fg: #c75448;
+  --badge-amber-bg: rgba(226,166,72,.18);
+  --badge-amber-fg: #cc983d;
+  --badge-gray-bg: rgba(205,200,199,.12);
+  --badge-gray-fg: #a89c9b;
 
   /* ── 压在封面图上的东西 ──
-     下面这些**刻意不在 body.light 里覆盖**: 首页轮播和详情页头图的内容是
-     压在封面图上的白字, 亮色主题下也保持深色底 —— 换成浅底的话白字会直接糊掉.
-     同理, 这里也不能图省事复用 --tag-color: 那个是会跟着主题变紫/变深的,
-     在深色头图上会变成深紫压深紫. */
-  --hero-bg: #0c0418;
-  --hero-badge-bg: rgba(168,85,247,.2);
-  --hero-badge-fg: #c084fc;
-  --cover-tag-tv: rgba(59,130,246,.85);
-  --cover-tag-movie: rgba(236,72,153,.85);
-  --cover-tag-other: rgba(168,85,247,.85);
+     下面这些**刻意不在 body.light 里覆盖**: 首页轮播、详情页头图、卡片角标
+     的内容是压在封面图上的, 而底下的图不认主题 —— 亮色主题下换成浅底的话,
+     白字会直接糊掉。
+     同理也不能复用 --star / --tag-color: 那两个是会跟着主题变深的, 在黑色
+     角标上会变成深金压深底。所以封面上的金是单独的 --cover-star。
+     这里也刻意不用色相区分类型 — 一块黑纱 + 白字比三个彩色药丸安静,
+     封面本身才是主角。
+
+     深色孤岛一共三处, 都是**有意保留深色**的, 不是漏了浅色适配:
+       HeroBanner 轮播、Login/Register 的整页底、Profile 的横幅。
+     顺带一提, 登录页底原本是个紫→靛→紫的渐变(#0c0418/#1a1040/#140824),
+     属于上一版的配色残留 —— 保留"深色"这个决定, 但换成中性深色。 */
+  --hero-bg: #120f0f;
+  --hero-bg-2: #221c1c;
+  --hero-badge-bg: rgba(255,255,255,.16);
+  --hero-badge-fg: #f5e7e6;
+  --cover-scrim: rgba(0,0,0,.78);
+  --cover-fg: #faf1f0;
+  --cover-ink: #141212;              /* 压在 --cover-fg 上的深字 */
+  --cover-star: #ebbf59;
+  --cover-tag-tv: rgba(18,15,15,.78);
+  --cover-tag-movie: rgba(18,15,15,.78);
+  --cover-tag-other: rgba(18,15,15,.78);
 }
 
-/* ── Light Mode Override ── */
+/* ── Light Mode Override ──
+   浅色不是把深色反过来 —— 是重新定的一档。
+   中性阶的饱和度刻意压到 2–6%: 深色主题里 14% 的饱和度在 V≈5 时根本看不出来,
+   同一个值搬到 V≈98 就是**肉眼明确的粉色底**。这个坑实测踩过一次
+   (改前那一版背景是 rgb(250,218,215), 名副其实的粉), 别再调回去。 */
 body.light {
-  --bg: #fafafa;
-  --bg-secondary: #f4f4f5;
-  --card: #fff;
-  --card-hover: #fafafa;
-  --card-border: #e4e4e7;
-  --text: #18181b;
-  --text-secondary: #71717a;
-  --text-muted: #a1a1aa;
-  --border: #e4e4e7;
-  --input-bg: #fff;
-  --input-border: #d4d4d8;
+  --primary: #2e2827;
+  --primary-hover: #1c1818;
+  --primary-foreground: #fcefed;
+  --primary-soft: rgba(0,0,0,.055);
+  --primary-line: rgba(0,0,0,.18);
+  --primary-glow: rgba(0,0,0,.12);
+  --focus-ring-soft: rgba(0,0,0,.14);
+  --selection-bg: rgba(0,0,0,.12);
+
+  --bg: #fcf1f0;
+  --bg-secondary: #fffafa;
+  --card: #fffafa;
+  --card-hover: #f7eceb;
+  --card-border: #e0cecc;
+  --text: #211e1e;
+  --text-secondary: #4d4848;
+  --text-muted: #756f6e;
+  --border: #e0cecc;
+  --input-bg: #fffafa;
+  --input-border: #d1c0be;
+
+  --star: #6b5115;
+  --success: #1a5236;
+  --danger: #70271f;
+  --danger-hover: #5c1f18;
+  --danger-soft: rgba(112,39,31,.10);
+  --danger-line: rgba(112,39,31,.28);
+  --warning: #5c400f;
+
+  --rank-1: #6b5115;
+  --rank-2: #6b6464;
+  --rank-3: #613c1f;
+  --rank-fg: #fcefed;
+
   --shadow: 0 1px 3px rgba(0,0,0,.08);
   --shadow-lg: 0 10px 40px rgba(0,0,0,.1);
   --shadow-card: 0 0 0 1px var(--card-border), 0 2px 8px rgba(0,0,0,.06);
-  --navbar-bg: rgba(250,250,250,.85);
-  --tag-bg: rgba(168,85,247,.1);
-  --tag-color: #7c3aed;
+  --navbar-bg: rgba(252,241,240,.85);
 
-  /* 徽章换成浅底 + 深字. 字色比原先写在 scoped 里的那组(#52c41a / #ff4d4f /
-     #d48806 / #1890ff)更深一档: 那几个是"画在白色卡片上"的颜色,
-     配 #f6ffed 这类浅底时对比度只有 2 出头, 属于能看见但看不清. */
-  --badge-purple-bg: #f0e6ff;
-  --badge-purple-fg: #7c3aed;
-  --badge-blue-bg: #e6f7ff;
-  --badge-blue-fg: #0958d9;
-  --badge-green-bg: #f6ffed;
-  --badge-green-fg: #389e0d;
-  --badge-red-bg: #fff2f0;
-  --badge-red-fg: #cf1322;
-  --badge-amber-bg: #fffbe6;
-  --badge-amber-fg: #ad6800;
-  --badge-gray-bg: #f5f5f5;
-  --badge-gray-fg: #595959;
+  --tag-bg: rgba(0,0,0,.05);
+  --tag-color: var(--text-secondary);
+
+  /* 徽章字色都比原先写在 scoped 里的那组(#52c41a / #ff4d4f / #d48806 / #1890ff)
+     更深一档: 那几个是"画在白卡片上"的颜色, 配浅底时对比度只有 2 出头,
+     属于能看见但看不清。现在每一对都实测过, 最低的 badge-gray 是 4.52:1。 */
+  --badge-ink-bg: var(--primary);
+  --badge-ink-fg: var(--primary-foreground);
+  --badge-blue-bg: #dae6f7;
+  --badge-blue-fg: #214475;
+  --badge-green-bg: #d7f7e7;
+  --badge-green-fg: #28754f;
+  --badge-red-bg: #f7cdc8;
+  --badge-red-fg: #752b23;
+  --badge-amber-bg: #f7e8cd;
+  --badge-amber-fg: #75541a;
+  --badge-gray-bg: #f7f1f0;
+  --badge-gray-fg: #756d6c;
 }

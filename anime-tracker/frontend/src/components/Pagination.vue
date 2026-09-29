@@ -79,6 +79,6 @@ const pageRange = computed(() => {
 }
 .pg-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); background: var(--card-hover); }
 .pg-btn:disabled { opacity:.25; cursor:default; }
-.pg-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 700; box-shadow: 0 2px 8px rgba(168,85,247,.3); }
+.pg-btn.active { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); font-weight: 700; box-shadow: 0 2px 8px var(--primary-glow); }
 .pg-ellipsis { width: 36px; text-align: center; color: var(--text-muted); font-size: 14px; user-select: none; }
 </style>

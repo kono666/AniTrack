@@ -244,8 +244,13 @@ async function loadProfile() {
 .profile-page { padding-bottom: 60px; }
 
 /* ── Banner ── */
-.p-banner { height: 160px; position: relative; overflow: hidden; background: linear-gradient(135deg, #1a1040 0%, #2d1b69 40%, #1e1245 70%, #0c0418 100%); }
-.p-banner-inner { position: absolute; inset: 0; background: radial-gradient(circle at 30% 50%, rgba(168,85,247,.15) 0%, transparent 60%), radial-gradient(circle at 70% 30%, rgba(236,72,153,.1) 0%, transparent 50%); }
+/* 这张横幅是**有意保留深色**的三处孤岛之一(见 tokens.css): 它上面压着头像和
+   用户名, 换成浅底的话白字会糊掉, 而且整个个人页会失去重心。
+   但"深色"不等于"紫色" —— 改前是紫→靛的四段渐变加紫/粉两团光晕
+   (#1a1040/#2d1b69 + rgba(168,85,247)/rgba(236,72,153)), 那是上一版的配色。
+   现在换成中性深色 + 一层很淡的白色光晕, 深色的分量留着, 颜色还回去。 */
+.p-banner { height: 160px; position: relative; overflow: hidden; background: linear-gradient(135deg, var(--hero-bg) 0%, var(--hero-bg-2) 45%, var(--hero-bg) 100%); }
+.p-banner-inner { position: absolute; inset: 0; background: radial-gradient(circle at 30% 50%, rgba(255,255,255,.07) 0%, transparent 60%), radial-gradient(circle at 70% 30%, rgba(255,255,255,.05) 0%, transparent 50%); }
 
 /* ── Header ── */
 .p-header { display: flex; gap: 28px; max-width: 1000px; margin: -44px auto 0; padding: 0 32px; position: relative; z-index: 2; }
@@ -272,7 +277,7 @@ async function loadProfile() {
 /* ── List ── */
 .p-list { max-width: 1000px; margin: 20px auto 0; padding: 0 32px; display: flex; flex-direction: column; gap: 8px; }
 .p-card { display: flex; gap: 16px; padding: 16px; background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); cursor: pointer; transition: all var(--transition); align-items: center; }
-.p-card:hover { border-color: rgba(168,85,247,.25); background: var(--card-hover); }
+.p-card:hover { border-color: var(--primary-line); background: var(--card-hover); }
 .pc-cover { width: 64px; aspect-ratio: 3/4; border-radius: 6px; overflow: hidden; background: var(--bg-secondary); flex-shrink: 0; }
 .pc-cover img { width: 100%; height: 100%; object-fit: cover; }
 .pc-body { flex: 1; min-width: 0; }

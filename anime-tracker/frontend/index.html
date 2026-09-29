@@ -13,9 +13,11 @@
   <meta property="og:title" content="AniTrack - 动漫追番" />
   <meta property="og:description" content="动漫追番与评测平台：搜索番剧、记录追番进度、写评测，并带一个能查库的 AI 助手。" />
 
-  <!-- 移动端浏览器会把地址栏也染成这个颜色. 默认取深色的 --bg (#09090b, tokens.css:15);
-       浅色主题下由下面那段内联脚本换成 #fafafa (tokens.css:91). -->
-  <meta name="theme-color" content="#09090b" />
+  <!-- 移动端浏览器会把地址栏也染成这个颜色. 值必须跟 tokens.css 的 --bg 一致
+       (深色 #0d0c0b / 浅色 #fcf1f0) —— meta 拿不到 CSS 变量, 这两处只能写两遍,
+       改 --bg 时记得回来同步 (NavBar.vue 的 THEME_COLORS 是第三处).
+       这里给的是深色值, 下面那段内联脚本会在首屏前按实际主题改掉它. -->
+  <meta name="theme-color" content="#0d0c0b" />
 
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
 </head>
@@ -25,17 +27,30 @@
        一帧深色、再跳成浅色.
        为什么放在 <body> 的第一个子元素而不是 <head>: 这一段需要 document.body 已经存在
        才能往上加类, 而解析到 <head> 时 body 还没被创建出来.
-       读取包在 try 里: 隐私模式或禁用存储时 localStorage 会直接抛异常,
-       不能让它阻断首屏 —— 那种情况下按默认的深色走. -->
+
+       判定来源改过一次, 而且是这次唯一实质的变化:
+         改前: localStorage 里是 'light' 就是浅色, 否则一律深色 —— "没存过" 被当成
+               "选了深色";
+         现在: "没存过" 和 "存了 dark" 是两件事. 没存过就跟系统走
+               (prefers-color-scheme), 存过才用存的.
+       这让下面这段和 NavBar.vue 的 initialLight() 是同一套判定, 两处必须一起改.
+       刻意**不监听** matchMedia 的 change: 那样系统主题一变就要同时重算一遍 nav 上的
+       切换图标, 而首屏脚本管不到挂载后的组件. 跟随系统只在加载时生效, 之后由用户手动
+       切换接管 —— 刷新页面就会重新跟一次.
+
+       读取包在 try 里: 隐私模式或禁用存储时 localStorage 会直接抛异常. 注意这里
+       **不能**在 catch 里退回深色 —— 那等于重演上面那个「替用户做选择」的毛病;
+       存储不可用时的正确答案是跟系统走, 所以退路写在 try 外面. -->
   <script>
     (function () {
-      try {
-        if (localStorage.getItem('theme') === 'light') {
-          document.body.classList.add('light')
-          var meta = document.querySelector('meta[name="theme-color"]')
-          if (meta) meta.setAttribute('content', '#fafafa')
-        }
-      } catch (e) { /* 存储不可用: 保持默认深色 */ }
+      var stored = null
+      try { stored = localStorage.getItem('theme') } catch (e) { /* 存储不可用, 当没存过 */ }
+      var light = stored
+        ? stored === 'light'
+        : window.matchMedia('(prefers-color-scheme: light)').matches
+      if (light) document.body.classList.add('light')
+      var meta = document.querySelector('meta[name="theme-color"]')
+      if (meta) meta.setAttribute('content', light ? '#fcf1f0' : '#0d0c0b')
     })()
   </script>
 

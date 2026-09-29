@@ -9,9 +9,9 @@
   outline:none; background:var(--input-bg); color:var(--text);
   transition: border-color var(--transition);
 }
-.search-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(168,85,247,.15); }
+.search-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus-ring-soft); }
 .search-btn {
-  padding:12px 28px; background: var(--primary); color:#fff; border:none;
+  padding:12px 28px; background: var(--primary); color:var(--primary-foreground); border:none;
   border-radius: var(--radius); font-size:14px; font-weight:600; cursor:pointer;
   transition: background var(--transition);
 }

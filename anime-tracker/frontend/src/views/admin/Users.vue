@@ -154,7 +154,7 @@ onMounted(async () => {
    而且只有浅色那一套 —— 暗色主题下每一枚徽章都是一块自发光的浅色块,
    一排操作按钮则是四个扎眼的荧光描边. 现在两种主题各有一套(见 tokens.css). */
 .role-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-.role-admin { background: var(--badge-purple-bg); color: var(--badge-purple-fg); }
+.role-admin { background: var(--badge-ink-bg); color: var(--badge-ink-fg); }
 .role-user { background: var(--badge-blue-bg); color: var(--badge-blue-fg); }
 .status-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
 .status-active { background: var(--badge-green-bg); color: var(--badge-green-fg); }
@@ -165,6 +165,10 @@ onMounted(async () => {
   cursor: pointer; margin-right: 4px; background: var(--card-bg);
 }
 .btn-danger { border: 1px solid var(--badge-red-fg); color: var(--badge-red-fg); }
-.btn-purple { border: 1px solid var(--badge-purple-fg); color: var(--badge-purple-fg); }
+/* 改前叫 .btn-purple, 取的是徽章那套紫。现在"更高权限"这件事由墨色表达,
+   所以它是个普通的主色描边按钮 —— 用 --primary-line/--primary 而不是
+   --badge-ink-fg: 后者是"压在墨色实心徽章上的字"(深色主题下是黑的),
+   拿来当描边色会在深色底上直接看不见。 */
+.btn-purple { border: 1px solid var(--primary-line); color: var(--primary); }
 .btn-warn { border: 1px solid var(--badge-amber-fg); color: var(--badge-amber-fg); }
 </style>

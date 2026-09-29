@@ -9,7 +9,10 @@
   border:1px solid var(--card-border); transition:border-color var(--transition);
 }
 .stat-card:hover { border-color: var(--primary); }
-.stat-num { font-size:30px; font-weight:800; background:linear-gradient(135deg,var(--primary),var(--accent)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+/* 改前是紫→粉渐变 + background-clip:text 的描字。那种"渐变文字"是最典型的
+   模板签名 —— 它不表达任何信息, 只是让字看起来有颜色。一个统计数字本来就该
+   是版面里最实的那个点, 用显示体实心排出来比描成渐变有力。 */
+.stat-num { font-family: var(--font-display); font-size:30px; font-weight:800; color:var(--text); }
 .stat-label { font-size:12px; color:var(--text-secondary); margin-top:4px; }
 
 @media (max-width: 768px) {

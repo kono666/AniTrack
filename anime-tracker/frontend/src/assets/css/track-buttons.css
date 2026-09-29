@@ -9,4 +9,4 @@
   color:var(--text-secondary); transition:all var(--transition);
 }
 .track-status-btn:hover { border-color: var(--primary); color: var(--primary); }
-.track-status-btn.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+.track-status-btn.active { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }

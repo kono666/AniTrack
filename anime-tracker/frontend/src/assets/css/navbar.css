@@ -22,9 +22,9 @@
   gap: 8px;
   font-size: 20px;
   font-weight: 800;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  /* 品牌字原本是紫→粉的渐变描字(AI 模板最常见的那个签名)。改成实心墨色:
+     这个站的名字不需要靠变色来被认出来。 */
+  color: var(--text);
 }
 .navbar-links { display: flex; gap: 4px; align-items: center; }
 .navbar-links a, .navbar-links button {
@@ -55,8 +55,10 @@
   color: var(--text);
 }
 .nav-btn:hover { border-color: var(--primary); color: var(--primary); }
-.nav-btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-.nav-btn.primary:hover { background: var(--primary-hover); }
+/* 这里原本还有 .nav-btn.primary / :hover 两条。删掉是因为**它们从来没生效过**:
+   NavBar.vue 的模板写的是 class="nav-btn nav-btn-primary", 两个类名并列,
+   永远匹配不到 .nav-btn.primary —— 真正生效的是那个组件 scoped 里的
+   .nav-btn-primary(unlayered, 本来就压过本文件所在的 layer)。 */
 
 @media (max-width: 768px) {
   .navbar { padding:0 16px; }

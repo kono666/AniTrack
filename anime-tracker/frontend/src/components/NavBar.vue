@@ -84,7 +84,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import {
-  PhCompass, PhMagnifyingGlass, PhBookmarkSimple, PhGear,
+  PhCompass, PhMagnifyingGlass, PhGear,
   PhUserCircle, PhSunHorizon, PhMoonStars, PhCaretDown,
   PhUser, PhSignOut, PhSparkle
 } from '@phosphor-icons/vue'
@@ -112,14 +112,31 @@ function closeMenu() { menuOpen.value = false }
 // 首屏那一次由 index.html 里的内联脚本负责; 这里只读初始值, 给按钮状态用.
 // 读的时候包 try: 隐私模式/禁用存储下 localStorage 会直接抛, 不该让整个导航栏挂掉
 // (与 index.html 那段内联脚本保持一致).
+//
+// 「没存过」和「存了 dark」是**两件事**, 改前把它们当成一件事了(默认深色):
+// localStorage 里没有记录时应该跟系统走, 而不是替用户选深色。
+const metaThemeColor = () => document.querySelector('meta[name="theme-color"]')
+const THEME_COLORS = { light: '#fcf1f0', dark: '#0d0c0b' }  // 与 tokens.css 的 --bg 一致
+
 function storedTheme() {
   try { return localStorage.getItem('theme') } catch (e) { return null }
 }
-const light = ref(storedTheme() === 'light')
+function initialLight() {
+  const stored = storedTheme()
+  if (stored) return stored === 'light'
+  return window.matchMedia('(prefers-color-scheme: light)').matches
+}
+const light = ref(initialLight())
 function toggleLight() {
   light.value = !light.value
   document.body.classList.toggle('light', light.value)
-  localStorage.setItem('theme', light.value ? 'light' : 'dark')
+  // 地址栏颜色得跟着 body 走, 而它只认 meta, 拿不到 CSS 变量 —— 所以这里必须
+  // 再写一遍色值(与 index.html 那段内联脚本是同一份, 改一处要改两处).
+  const meta = metaThemeColor()
+  if (meta) meta.setAttribute('content', light.value ? THEME_COLORS.light : THEME_COLORS.dark)
+  // 写也包 try: 存储被禁用时 getItem 会抛, setItem 一样会 —— 改前这一行是裸的,
+  // 隐私模式下点一下主题按钮就会抛出去
+  try { localStorage.setItem('theme', light.value ? 'light' : 'dark') } catch (e) { /* 存储不可用 */ }
 }
 
 // Scroll shrink
@@ -155,7 +172,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 .nav-search-wrap.focused {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(168,85,247,.15);
+  box-shadow: 0 0 0 3px var(--focus-ring-soft);
   background: var(--card);
 }
 .nav-search-icon { color: var(--text-muted); flex-shrink: 0; transition: color var(--transition); }
@@ -174,11 +191,9 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 
 /* ── Brand ── */
 .brand-icon { font-size: 22px; }
-.brand-text {
-  background: linear-gradient(135deg, var(--primary), var(--accent));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+/* 改前是紫→粉的渐变描字。那是 AI 生成界面最常见的签名之一, 也是这个站
+   "模板感"最直观的一处 —— 换成实心墨色。真正的品牌处理放到导航改版那一步。 */
+.brand-text { color: var(--text); }
 
 /* ── Nav Links with Indicator ── */
 .nav-link {
@@ -199,9 +214,12 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   color: var(--text);
   background: var(--card-hover);
 }
+/* 选中态靠**洗色底**表达, 不靠换文字色: --primary 现在是墨色, 深色主题下就是
+   近白, 跟 --text 几乎同一个色 —— 拿它当文字色的话, 选中和没选中看不出区别。
+   底色的对比度不受主题影响, 所以这个做法两套主题下都成立。 */
 .nav-link--active {
-  color: var(--primary) !important;
-  background: rgba(168,85,247,.1);
+  color: var(--text) !important;
+  background: var(--primary-soft);
 }
 .nav-link-label { display: inline; }
 
@@ -280,7 +298,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 .dropdown-item:hover { background: var(--card-hover); color: var(--text); }
 .dropdown-danger { color: var(--danger); }
-.dropdown-danger:hover { background: rgba(248,113,113,.1); color: var(--danger); }
+.dropdown-danger:hover { background: var(--danger-soft); color: var(--danger); }
 
 /* ── Dropdown Transition ── */
 .dropdown-enter-active { transition: all .15s ease; }
@@ -306,7 +324,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 .nav-btn:hover { border-color: var(--primary); color: var(--primary); }
 .nav-btn-primary {
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-foreground);
   border-color: var(--primary);
 }
 .nav-btn-primary:hover { background: var(--primary-hover); opacity: 0.95; }

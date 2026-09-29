@@ -25,7 +25,7 @@ defineEmits(['action'])
   margin-top: 12px;
   padding: 8px 24px;
   background: var(--primary);
-  color: #fff;
+  color: var(--primary-foreground);
   border: none;
   border-radius: 8px;
   font-size: 13px;

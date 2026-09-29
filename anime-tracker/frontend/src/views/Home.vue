@@ -322,13 +322,18 @@ async function loadHome() {
   position: absolute; top: -8px; left: -8px; z-index: 3;
   width: 32px; height: 32px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 15px; font-weight: 900; color: #fff;
+  font-size: 15px; font-weight: 900; color: var(--rank-fg);
   background: var(--text-muted);
   box-shadow: 0 2px 8px rgba(0,0,0,.3);
 }
-.hs-card-rank.rank-1 { background: linear-gradient(135deg, #f59e0b, #d97706); }
-.hs-card-rank.rank-2 { background: linear-gradient(135deg, #94a3b8, #64748b); }
-.hs-card-rank.rank-3 { background: linear-gradient(135deg, #d97706, #92400e); }
+/* 金银铜是整个配色方案里**唯一**允许出现彩色的地方 —— 前三名值得一个颜色,
+   其余一切靠墨色和留白说话。改成纯色不用渐变: 改前是 Tailwind 的 amber/slate
+   渐变(#f59e0b→#d97706 / #94a3b8→#64748b), 那种"给什么都加个渐变"的手法是
+   上一个版本的模板签名。
+   第 4 名往后不给颜色, 用中性的 --text-muted —— 榜位颜色本身也是信息。 */
+.hs-card-rank.rank-1 { background: var(--rank-1); }
+.hs-card-rank.rank-2 { background: var(--rank-2); }
+.hs-card-rank.rank-3 { background: var(--rank-3); }
 .hs-card-img-wrap {
   aspect-ratio: 3/4; border-radius: var(--radius-sm);
   overflow: hidden; background: var(--bg-secondary);
@@ -339,13 +344,13 @@ async function loadHome() {
 .hs-card-score {
   position: absolute; bottom: 6px; right: 6px;
   font-size: 10px; padding: 2px 7px;
-  background: rgba(0,0,0,.8); color: var(--star);
+  background: var(--cover-scrim); color: var(--cover-star);
   border-radius: 4px; font-weight: 700;
 }
 .hs-card-badge {
   position: absolute; bottom: 6px; left: 6px;
   font-size: 10px; padding: 2px 7px;
-  background: rgba(0,0,0,.75); color: #fff;
+  background: var(--cover-scrim); color: var(--cover-fg);
   border-radius: 4px; font-weight: 600;
 }
 .hs-card-title {

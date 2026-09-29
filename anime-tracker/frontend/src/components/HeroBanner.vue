@@ -167,9 +167,16 @@ onUnmounted(() => {
   filter: blur(8px) brightness(.35);
   transform: scale(1.1);
 }
+/* 压在模糊封面上的幕布, 是「这一块永远深色」的第三处孤岛(另两处见 tokens.css).
+   改前是紫→靛→紫(#0c0418/#1a1040/#140824), 上一版配色的残留 —— 底下那张封面被
+   blur+brightness(.35) 处理过, 再盖一层紫, 整块轮播就泛着一层谁也没挑过的色.
+   换成中性深色, 分量和明暗关系原样保留.
+   这里的三个色值是 --hero-bg / --hero-bg-2 / --hero-bg 的**半透明版本**:
+   幕布必须透, 否则底下的封面就白模糊了. CSS 变量带不进透明度, 所以只能写死 rgba,
+   改 --hero-bg 时记得回来同步(同 fallbackImg.js 的那条注记). */
 .hero-gradient {
   position: absolute; inset: 0;
-  background: linear-gradient(135deg, rgba(12,4,24,.9) 0%, rgba(26,16,64,.7) 50%, rgba(20,8,36,.85) 100%);
+  background: linear-gradient(135deg, rgba(18,15,15,.9) 0%, rgba(34,28,28,.7) 50%, rgba(18,15,15,.85) 100%);
 }
 
 /* Content */
@@ -191,7 +198,7 @@ onUnmounted(() => {
 }
 .hero-title {
   font-size: 36px; font-weight: 900;
-  color: #fff; line-height: 1.2;
+  color: var(--cover-fg); line-height: 1.2;
   margin-bottom: 4px;
   text-shadow: 0 2px 12px rgba(0,0,0,.5);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -202,7 +209,7 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 .hero-meta { display: flex; gap: 18px; margin-bottom: 14px; font-size: 13px; color: rgba(255,255,255,.7); }
-.hero-score { color: var(--star); font-weight: 700; }
+.hero-score { color: var(--cover-star); font-weight: 700; }
 .hero-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 22px; }
 .hero-tag {
   padding: 4px 12px; border-radius: 14px;
@@ -211,11 +218,11 @@ onUnmounted(() => {
 }
 .hero-btn {
   padding: 12px 32px; border-radius: 24px;
-  background: var(--primary); color: #fff; border: none;
+  background: var(--primary); color: var(--primary-foreground); border: none;
   font-size: 15px; font-weight: 700; cursor: pointer;
   transition: all var(--transition);
 }
-.hero-btn:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(168,85,247,.4); }
+.hero-btn:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 4px 20px var(--primary-glow); }
 
 /* Cover */
 .hero-cover-wrap { flex-shrink: 0; }
@@ -236,19 +243,23 @@ onUnmounted(() => {
   background: rgba(255,255,255,.3); border: none; cursor: pointer;
   transition: all var(--transition);
 }
-.hero-dot.active { background: var(--primary); transform: scale(1.3); }
+/* 改前用的是 --primary。轮播**刻意保持深色**(见 tokens.css 的深色孤岛),
+   而 --primary 是跟着主题走的 —— 浅色主题下它变成近黑, 于是"当前是第几张"
+   这个指示点在深色头图上几乎看不见。压在封面上的东西一律用 --cover-* */
+.hero-dot.active { background: var(--cover-fg); transform: scale(1.3); }
 
 /* Arrows */
 .hero-arrow {
   position: absolute; top: 50%; transform: translateY(-50%);
   z-index: 3; width: 42px; height: 42px; border-radius: 50%;
   background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.15);
-  color: #fff; font-size: 22px; cursor: pointer;
+  color: var(--cover-fg); font-size: 22px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: all var(--transition);
   backdrop-filter: blur(8px);
 }
-.hero-arrow:hover { background: rgba(168,85,247,.3); border-color: rgba(168,85,247,.5); }
+/* 悬停用白色加亮而不是换色相 —— 箭头压在封面图上, 色相会跟底下的图打架 */
+.hero-arrow:hover { background: rgba(255,255,255,.22); border-color: rgba(255,255,255,.38); }
 .hero-arrow-left { left: 16px; }
 .hero-arrow-right { right: 16px; }
 

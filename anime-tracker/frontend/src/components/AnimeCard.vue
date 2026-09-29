@@ -126,8 +126,8 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
 }
 .anime-card:hover {
   transform: translateY(-6px);
-  box-shadow: 0 16px 48px rgba(0,0,0,.5), 0 0 0 1px rgba(168,85,247,.3);
-  border-color: rgba(168,85,247,.2);
+  box-shadow: 0 16px 48px rgba(0,0,0,.5), 0 0 0 1px var(--primary-line);
+  border-color: var(--primary-line);
 }
 
 /* Image */
@@ -166,10 +166,12 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   position: absolute; top: 8px; left: 8px; z-index: 3;
   font-size: 10px; font-weight: 800; letter-spacing: .5px;
   padding: 3px 8px; border-radius: 4px;
-  color: #fff; backdrop-filter: blur(8px);
+  color: var(--cover-fg); backdrop-filter: blur(8px);
 }
 /* 类型标签压在封面图上, 所以这三个**不随主题变**(见 tokens.css 的注释):
-   底下的图不认主题, 换一套更亮的底色只会让白字糊掉 */
+   底下的图不认主题, 换一套更亮的底色只会让白字糊掉。
+   三个 token 现在同值(一块黑纱), 类型由文字本身区分 —— 蓝/粉/紫三个彩色药丸
+   并排出现时, 抢的是封面自己的戏。角标之间的进一步区分交给卡片改版那一步 */
 .type-tv { background: var(--cover-tag-tv); }
 .type-movie { background: var(--cover-tag-movie); }
 .type-other { background: var(--cover-tag-other); }
@@ -179,8 +181,8 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   position: absolute; top: 8px; right: 8px; z-index: 3;
   display: flex; align-items: center; gap: 3px;
   padding: 4px 9px; border-radius: 6px;
-  background: rgba(0,0,0,.75); backdrop-filter: blur(8px);
-  color: var(--star); font-size: 12px; font-weight: 800;
+  background: var(--cover-scrim); backdrop-filter: blur(8px);
+  color: var(--cover-star); font-size: 12px; font-weight: 800;
 }
 .card-rating-badge.no-score {
   color: var(--text-muted); font-size: 10px; font-weight: 500;
@@ -198,7 +200,7 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
 .card-overlay-info { display: flex; gap: 10px; margin-bottom: 6px; }
 .overlay-year, .overlay-eps { font-size: 11px; color: rgba(255,255,255,.6); }
 .overlay-action {
-  font-size: 12px; color: #fff; font-weight: 700;
+  font-size: 12px; color: var(--cover-fg); font-weight: 700;
   opacity: 0; transform: translateY(8px);
   transition: all .3s .05s;
 }
@@ -214,7 +216,11 @@ function goDetail() { router.push(`/anime/${props.anime.id}`) }
   overflow: hidden;
   transition: color var(--transition);
 }
-.anime-card:hover .anime-card-title { color: var(--primary); }
+/* 改前是悬停时标题变 --primary(紫)。--primary 现在是墨色, 跟标题已有的
+   --text 是同一个色 —— 这条规则会变成空操作, 而"看着写了其实没效果"正是
+   这次要清掉的东西。先换成下划线: 它表达的是"这里可以点进去", 不依赖色相。
+   卡片真正的悬停语言(切角/描边/位移)放到卡片改版那一步统一做 */
+.anime-card:hover .anime-card-title { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .anime-card-meta {
   font-size: 11px; color: var(--text-secondary);
   margin-top: 6px; display: flex; align-items: center; gap: 3px;
