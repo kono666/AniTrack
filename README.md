@@ -402,14 +402,18 @@ docker compose start nginx backend
 - Agent 全链路跑得通：`scripts/verify-agent.py` 在 `LLM_PROVIDER=mock` 下真的执行一遍（工具调用 → 番剧卡片 → SSE 分帧 → 额度扣减）。这一段和上面几条打在同一个入口上，用的是同一套栈
 - 两个镜像各过一遍 Trivy（`CRITICAL` / `HIGH`，只看上游已有补丁的那些）。注意它扫的**不只是基础镜像**：后端镜像里装着 fat jar，Trivy 会连 `BOOT-INF/lib` 下那一堆 Java 依赖一起读——所以"我们的依赖有没有洞"这条也在它的覆盖里
 
+  这一条不是推测，第一次跑就给出了实数：**基础镜像自己是 0 条**，34 条全在后端 fat jar 的 Java 依赖里（其中 8 条 `CRITICAL`，包括 `tomcat-embed-core` 10.1.33 的 CVE-2025-24813 与 `spring-security-web` 的 CVE-2026-22732）；前端镜像只有基础镜像里的 1 条（`libexpat`）。换句话说，这个项目的漏洞面基本全是"依赖变旧"，而不是"FROM 那一行选错了"
+
 最后一条额外钉了一个别的断言覆盖不到的地方：脚本里那些卡片断言写的是「**如果**工具有番剧行，就必须带卡片」，所以在 `api.bgm.tv` 不通、工具返回空的时候，它们会**全部空转通过**——`RESULT` 照样 `FAIL=0`。CI 因此单独查了一条「工具结果里确实有番剧行」，专门堵这个绿色的空转。
 
 镜像扫描**只报告、不拦 CI**（`exit-code: '0'`），这是刻意的，不是漏了。两个原因：
 
-1. 扫出来的东西里有一大块来自 Spring Boot 3.2 这条**已经停更**的线（3.2.12 是这条线最后一个版本）。真拦下来的话，它要求的是「换到 3.4 / 3.5 / 4.x 哪一条」——那是个该单独决定的项目级决定，不该由一次依赖升级顺手定死。（顺带记一笔：3.4.13 + springdoc 2.8.17 实测 423 个用例全过，想升随时能升。）
+1. 扫出来的东西里有一大块来自 Spring Boot 3.2 这条**已经停更**的线（3.2.12 是这条线最后一个版本），最典型的就是 `spring-boot` 自己的 CVE-2025-22235——它的修复版本写得很直白：3.3.11 / 3.4.5。真拦下来的话，它要求的是「换到 3.4 / 3.5 / 4.x 哪一条」——那是个该单独决定的项目级决定，不该由一次依赖升级顺手定死。（顺带记一笔：3.4.13 + springdoc 2.8.17 实测 423 个用例全过。但要注意那次全绿**只证明了 H2 这一半**，原因见下。）
 2. 漏洞库每天都在变。一个会拦的扫描器意味着：某天有人发了一条 CVE，这个镜像一行代码没动，但所有人开着的 PR 全变红。那种红和「你这次改错了」长得一模一样，于是它会退化成一种需要被忽略的噪音——**那比不扫更糟**。
 
 需要注意的是，`exit-code` 管的是「扫出漏洞」这件事；扫描器**自己**跑挂了（比如拉不到漏洞库）仍然会让那一步失败。这是故意的：那意味着扫描已经不再提供信息，而「以为在扫、其实没扫」是这里唯一真正危险的状态。想改成拦截，把 `exit-code` 写成 `'1'` 即可。
+
+**换 Spring Boot 线时的一个坑，值得单独写下来。** Flyway 10 把 PostgreSQL 支持从 `flyway-core` 里移进了独立的 `flyway-database-postgresql`（H2 留在了核心里，`sqlite` 也是）。Spring Boot 从 3.3 起带的正是 Flyway 10，所以「升 Boot」这件事在这条链上等于「**必须同时加那个依赖**」：只升 Boot 的话，H2 那条路一切正常、测试全绿，走真 PostgreSQL 的生产库会在启动时报 `Unsupported Database`。上面说的「3.4.13 实测 423 个用例全过」就是这么一次全绿——它没能证明 PG 那一半，因为测试用的是 H2。这条只能由 CI 的镜像那一关（真 PG）来验。
 
 冒烟用的 `JWT_SECRET` 与管理员密码在每次运行时用 `openssl rand` 现生成，**仓库里不存任何看起来像密钥的值**——就算它只服务于一个跑完就 `down -v` 丢掉的容器，躺在仓库里的 `JWT_SECRET=...` 也一定会在某个时刻被人复制到别处。
 
@@ -549,7 +553,7 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 另外两件维护时才需要知道的事：
 
 - **删掉或改名迁移脚本之后要 `mvn clean`**。Flyway 扫的是 classpath，`target/classes` 里的旧脚本还在，于是启动时报 `Found more than one migration with version N`——这条信息里没有任何线索指向「构建残留」，自己踩过一次。
-- Flyway 的版本跟着 Spring Boot 走（3.2.0 → 9.22.3），它声明支持到 H2 2.2.220 与 PostgreSQL 15，而本项目用的是 H2 2.2.224 与 PG 16：实测都能跑通，只是每次启动会打一条 `Flyway upgrade recommended`，升到 Spring Boot 3.3（带 Flyway 10）后消失。
+- Flyway 的版本跟着 Spring Boot 走（3.2.12 → 9.22.3），它声明支持到 H2 2.2.220 与 PostgreSQL 15，而本项目用的是 H2 2.2.224 与 PG 16：实测都能跑通，只是每次启动会打一条 `Flyway upgrade recommended`。**这条提示不要照着「升到 Boot 3.3+」去消**——那个方向确实能让它消失（Flyway 10 支持到 H2 2.2.224），但同一版本起 PostgreSQL 支持被移出了 `flyway-core`，得连着加 `flyway-database-postgresql` 才行；具体见前面「镜像扫描」那一节写的坑。
 
 `MigrationScriptPairTest` 把「两套脚本必须成对」钉住了：校验文件名、版本号连续性、命名规则，并要求脚本只能放在方言子目录里（放在根目录会被静默忽略）。每加一列要写两遍，靠这条测试防止漏写一边。
 
@@ -616,9 +620,11 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - **`ENTRYPOINT` 用 `sh -c "exec java ..."`**，让 java 成为 PID 1。这样 `docker stop` 发的 SIGTERM 直接进 JVM，Spring 才能走完优雅关闭（停止接收新请求、关连接池）；否则信号被 shell 吃掉，容器只能等到超时被硬杀。
 - **探针在 compose 文件里又写了一遍**。Dockerfile 里的 `HEALTHCHECK` 决定容器自身的健康状态，而 `docker compose ps` 展示的是 compose 的配置——两处不一致时（这种文件很容易改一处忘另一处），人看到的和实际生效的就不是一回事。所以两处都写，并在注释里互相指认。
 
-**16. 前端依赖：为什么 `devDependencies` 里有一个没人 import 的 esbuild**
+**16. 前端依赖：那个没人 import 的 esbuild**
 
-`anime-tracker/frontend/package.json` 里除了 vite，还单独写了 `"esbuild": "^0.28.2"`，而代码里没有任何地方 `import` 它。它是刻意留在那里的，理由是一条挺绕的链：
+`anime-tracker/frontend/package.json` 的 `devDependencies` 里写着 `"esbuild": "^0.28.2"`，而代码里没有任何地方 `import` 它（`vite.config.js` 和 `src/` 都没有）。它当初是为一个具体的 npm 行为加的——一个看起来多余的依赖，往往就是某个 bug 留下的化石。分两段记，因为它的前提后来消失了。
+
+**当初为什么加：**
 
 - 应用构建用 `vite@5`，而 `vitest@4` 要求 vite `^6 || ^7 || ^8`——两者不可能共用一个版本，于是 npm 会在 `vitest` 目录下**再装一份 vite**。
 - 那份 vite 把 `esbuild` 声明为**可选 peer**（`peerDependenciesMeta.esbuild.optional`）。npm 碰到 peer 会主动去装，但这条路径装出来的 `@esbuild/*` 平台包**丢掉了 `optional` 标记**。
@@ -626,6 +632,14 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - 后果二：丢掉 `optional` 标记意味着 npm 认为这些包**在当前平台上也必须装**。换到别的平台就会报 `EBADPLATFORM`（在 Windows 上它要装 netbsd-arm64，想装也装不了）。
 
 把 esbuild 提成根上的直接依赖后，那个 peer 由一份**普通依赖**来满足，npm 不再嵌套复制，平台包的 `optional` 标记也就正常了。
+
+**现在它已经不需要了：**
+
+- 应用构建升到了 `vite@8`，与 vitest 用的是同一个版本，**树里只剩一份 vite**——上面第一条那条链从根上没有了。回头看，这个依赖存在的真正前提是「两个 vite 大版本并存」，而不是 esbuild 本身。
+- vite 8 改用 rolldown 打包，esbuild 对它只是可选 peer。去掉这个直接依赖后重新解析，锁文件里**一个 esbuild 条目都没有**，`@esbuild/*` 那 26 个平台包全部消失。
+- 实测：把它从 `node_modules` 里挪走，`npm run build` 与 177 个用例**全过**，构建产物的 chunk 哈希与挪走前**一模一样**。
+
+所以它现在是一份多余的依赖。这次**没有直接删**——删它属于改动构建配置，和这一批的文档修正不是一回事——但结论记在这里：删是安全的，前提已经验证过。
 
 顺带记下一条操作性的坑：**锁文件不能在项目目录里重新生成**。`npm install --package-lock-only` 会参考已存在的 `node_modules`，而 `node_modules` 里只装了当前平台那一份二进制——生成出来的锁文件就只剩 Windows 的 rolldown 绑定（实测：15 个平台二进制只剩 1 个），推到 Linux 上照样失败。正确做法是在一个「只有 `package.json`、没有 `node_modules`」的干净目录里解析，再把锁文件拷回来。
 
@@ -642,5 +656,5 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 - 没有接入向量检索，助手回答依据的是数据库查询结果，不做相似度召回。
 - 关注、私信、动态等社交功能尚未实现。
 - 没有邮箱验证与找回密码流程，注册时填的邮箱目前只作为账号标识，尚不能用来收信。
-- **表结构变更已交给 Flyway**（见设计要点 12）：脚本在 `db/migration/{h2,postgres}` 下，启动时自动执行并校验，`ddl-auto` 已从 `update` 改成 `validate`。仍然存在的限制：Flyway 版本跟着 Spring Boot 走（3.2.0 → 9.22.3），它声明支持的 H2 版本到 2.2.220、PostgreSQL 到 15，而本项目用的是 H2 2.2.224 与 PG 16——实测正常，只是每次启动会打一条「upgrade recommended」，升级 Spring Boot 后自然消失。
-- **开发机上没有 Docker**：`docker build` 与 `docker compose up` 没法在本机实跑，所以改动镜像或编排相关的文件时，只能等 CI 的结果来确认。CI 里那个 `image` job 就是为这件事存在的：每次推送都会真的构建镜像、起一套完整的 compose 栈（后端 + PostgreSQL 16 + 空库跑完 Flyway），再打六项冒烟断言（探活免登录、liveness/readiness 分工、其余 actuator 端点匿名 401、管理员由环境变量建出并能登录、迁移出来的表能读）。本地能验证的部分也验证过：用容器会拿到的同一套环境变量在真实 PostgreSQL 16 上启动成功，密码认证确认生效（错误密码会被拒）。
+- **表结构变更已交给 Flyway**（见设计要点 12）：脚本在 `db/migration/{h2,postgres}` 下，启动时自动执行并校验，`ddl-auto` 已从 `update` 改成 `validate`。仍然存在的限制：Flyway 版本跟着 Spring Boot 走（3.2.12 → 9.22.3），它声明支持的 H2 版本到 2.2.220、PostgreSQL 到 15，而本项目用的是 H2 2.2.224 与 PG 16——实测正常，只是每次启动会打一条「upgrade recommended」。它能靠升级 Spring Boot 消掉，但那条路要连着加一个依赖（Flyway 10 起 PostgreSQL 支持不在 `flyway-core` 里了），别照着提示直接升——见「持续集成」一节。
+- **开发机上没有 Docker**：`docker build` 与 `docker compose up` 没法在本机实跑，所以改动镜像或编排相关的文件时，只能等 CI 的结果来确认。CI 里那个 `image` job 就是为这件事存在的：每次推送都会真的构建镜像、起一套完整的 compose 栈（后端 + PostgreSQL 16 + 空库跑完 Flyway），再跑 9 节冒烟（从「静态站真的被托管了」到「备份真的恢复得回来」，逐条列在「持续集成」那一节；这里是概览，那份才是权威）。本地能验证的部分也验证过：用容器会拿到的同一套环境变量在真实 PostgreSQL 16 上启动成功，密码认证确认生效（错误密码会被拒）。
