@@ -1,0 +1,114 @@
+# ============================================================
+#  Dependabot —— 依赖更新 PR
+#
+#  为什么要有这个文件: 一个没人动的依赖不会自己变旧, 但它会在某个下午
+#  变成一条 CVE 通告. 「时不时手跑一遍 npm outdated」这种约定的失效方式
+#  不是"某次忘了", 是"从某一周起再也没人做过, 而没有任何地方会提醒你"。
+#  这个文件把这件事变成一条会自动发生的 PR。
+#
+#  为什么是 weekly 而不是 daily: 每天的 PR 会把 Issues 列表占满,
+#  于是真正要看的那条被淹掉 —— 而"淹掉"和"没人看"是同一个结果。
+#  每周一次, 配合下面的分组, 一次能看完。
+# ============================================================
+version: 2
+
+updates:
+  # ----------------------------------------------------------
+  #  前端依赖
+  # ----------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /anime-tracker/frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      # 仓库的提交信息是中文的「类型：描述」. Dependabot 生成不出中文正文,
+      # 但类型这一截能对上, 免得日志里突然冒出一行全英文的。
+      #
+      # 冒号是全角的, 不是打错了: dependabot 只在前缀以字母/数字/右括号结尾时
+      # **自己补一个半角冒号**, 结尾是全角「：」时它就不补了 —— 于是生成出来的
+      # 正好是「依赖：bump ...」, 和仓库里现有的「修复：…」「部署：…」同形。
+      # 写成 "依赖" 的话会得到「依赖: bump ...」, 半角冒号, 一眼就不像本仓库的。
+      prefix: "依赖："
+    groups:
+      # minor + patch 合成一个 PR.
+      # 这类更新要么没影响要么是修 bug, 一个个开 PR 只会让人练成"看到就点合并"。
+      # major 刻意**不**并进来: 那种 PR 是拿来读的, 混在一起就会被顺手合掉。
+      frontend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ----------------------------------------------------------
+  #  后端依赖
+  # ----------------------------------------------------------
+  - package-ecosystem: maven
+    directory: /anime-tracker/backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "依赖："
+    groups:
+      backend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ----------------------------------------------------------
+  #  容器基础镜像
+  #
+  #  docker 这个 ecosystem 不递归: 一个目录一条, 三份 Dockerfile 就是三条。
+  #  (漏掉一条不会报错, 只是那个镜像再也不会被更新 —— 所以三条都写上。)
+  # ----------------------------------------------------------
+  - package-ecosystem: docker
+    directory: /anime-tracker/backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "依赖："
+
+  - package-ecosystem: docker
+    directory: /anime-tracker/frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "依赖："
+
+  - package-ecosystem: docker
+    directory: /anime-tracker/scripts/backup
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "依赖："
+    ignore:
+      # postgres 的大版本不能靠合并一个 PR 来升。
+      #
+      # 那个 pgdata 卷里躺着的数据文件是 PG16 的格式, PG17 读不了 ——
+      # 换镜像之后容器的表现是启动失败(或者更糟: 初始化出一个空库),
+      # 而 "把 postgres:16-alpine 改成 17-alpine" 这个 diff 看起来
+      # 和"把 1.27 改成 1.28" 没有任何区别。
+      # 大版本升级是一次要规划的操作(pg_upgrade / dump & restore),
+      # 不是一次依赖更新 —— 让它只出成小版本的 PR。
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+
+  # ----------------------------------------------------------
+  #  Actions 自身
+  #
+  #  和上面几项一样重要: actions/checkout@v4 这类引用被固定的同时,
+  #  旧的大版本会被 GitHub 逐步弃用(我们这批 CI 日志里已经能看到
+  #  "Node.js 20 is deprecated" 的警告了)。
+  # ----------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "依赖："
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
