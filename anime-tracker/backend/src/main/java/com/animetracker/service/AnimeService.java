@@ -1,6 +1,7 @@
 package com.animetracker.service;
 
 import com.animetracker.config.BangumiApiProperties;
+import com.animetracker.config.RankingProperties;
 import com.animetracker.dto.BangumiDTO.*;
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.AnimeTag;
@@ -69,19 +70,36 @@ public class AnimeService {
     private final AnimeTagRepository animeTagRepository;
     private final BangumiApiClient bangumiApiClient;
     private final BangumiApiProperties props;
+    private final RankingProperties rankingProperties;
 
     public AnimeService(AnimeRepository animeRepository,
                         EpisodeRepository episodeRepository,
                         TagRepository tagRepository,
                         AnimeTagRepository animeTagRepository,
                         BangumiApiClient bangumiApiClient,
-                        BangumiApiProperties props) {
+                        BangumiApiProperties props,
+                        RankingProperties rankingProperties) {
         this.animeRepository = animeRepository;
         this.episodeRepository = episodeRepository;
         this.tagRepository = tagRepository;
         this.animeTagRepository = animeTagRepository;
         this.bangumiApiClient = bangumiApiClient;
         this.props = props;
+        this.rankingProperties = rankingProperties;
+    }
+
+    /**
+     * 排行榜的那一条查询: 全表按加权评分取回.
+     *
+     * <p>抽成一个方法而不是在调用处各写一遍仓库方法, 是因为它有**三个**调用点 ——
+     * 浏览模式的默认序({@link #searchAnime} 无关键词分支)、{@link #getRanking} 的
+     * 首次查询、以及回源补齐之后的**重查**. 三处必须是同一个序: 只改前两处的话,
+     * 表现是"平时是对的, 一旦本地不够触发回源就变回按评分原值排"—— 最难发现的那种,
+     * 因为它在数据少的时候不出现.
+     */
+    private List<Anime> rankedByWeightedScore() {
+        return animeRepository.findByWeightedScoreDesc(
+                rankingProperties.getPriorVotes(), rankingProperties.getPriorScore());
     }
 
     // ==================== 搜索 ====================
@@ -123,8 +141,10 @@ public class AnimeService {
         boolean hasKeyword = keyword != null && !keyword.trim().isEmpty();
 
         if (!hasKeyword) {
-            // 无关键词：返回全部本地数据（排行页用）
-            List<Anime> all = animeRepository.findByOrderByRatingDesc();
+            // 无关键词：返回全部本地数据（排行页用）。序与 /bangumi/ranking 一致 ——
+            // 两处都是"把最好的排前面", 用两个不同的序会让同一批数据在两个页面上
+            // 排出两个榜首, 看起来就像其中一个坏了。
+            List<Anime> all = rankedByWeightedScore();
             return buildSearchResult(all, page, limit);
         }
 
@@ -173,16 +193,26 @@ public class AnimeService {
     // ==================== 排行 / 最新 / 浏览 ====================
     // 以下全部从本地缓存读取，启动预加载器已拉取 Top 200 到本地
 
+    /**
+     * 排行榜.
+     *
+     * <p>序是**加权评分**而不是评分原值 —— 否则"1 个人打 10 分"会稳稳压过
+     * "两万个人打出 9.1", 而界面上看不出任何异常(分数确实是 10.0). 完整推导见
+     * {@link RankingProperties}.
+     *
+     * <p>下面那次回源补齐之后的**重查**必须走同一个序, 所以两处都调
+     * {@link #rankedByWeightedScore()} 而不是各写一遍仓库方法.
+     */
     @Cacheable(value = "ranking", key = "'rank_' + #limit")
     public List<Anime> getRanking(int limit) {
-        List<Anime> local = animeRepository.findByOrderByRatingDesc();
+        List<Anime> local = rankedByWeightedScore();
         // 本地不够20条时从 API 补充热门排行
         if (local.size() < Math.min(limit, 20)) {
             try {
                 SearchResponse resp = bangumiApiClient.searchSubjects("", 1, Math.max(limit, 30));
                 if (resp != null && resp.getData() != null) {
                     cacheAll(resp.getData());
-                    local = animeRepository.findByOrderByRatingDesc();
+                    local = rankedByWeightedScore();
                     log.info("排行榜: API补充后共 {} 条", local.size());
                 }
             } catch (Exception e) {

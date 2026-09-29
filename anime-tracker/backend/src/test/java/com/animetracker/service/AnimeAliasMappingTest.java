@@ -1,6 +1,7 @@
 package com.animetracker.service;
 
 import com.animetracker.config.BangumiApiProperties;
+import com.animetracker.config.RankingProperties;
 import com.animetracker.dto.BangumiDTO.InfoboxItem;
 import com.animetracker.dto.BangumiDTO.SubjectDTO;
 import com.animetracker.entity.Anime;
@@ -51,7 +52,8 @@ class AnimeAliasMappingTest {
                 mock(TagRepository.class),
                 mock(AnimeTagRepository.class),
                 mock(BangumiApiClient.class),
-                mock(BangumiApiProperties.class));
+                mock(BangumiApiProperties.class),
+                new RankingProperties());
 
         when(animeRepository.save(any(Anime.class))).thenAnswer(inv -> {
             saved = inv.getArgument(0);

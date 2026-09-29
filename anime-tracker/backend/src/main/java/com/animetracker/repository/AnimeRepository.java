@@ -3,12 +3,70 @@ package com.animetracker.repository;
 import com.animetracker.entity.Anime;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.util.List;
 
 public interface AnimeRepository extends JpaRepository<Anime, Integer> {
     List<Anime> findByOrderByRankAsc();
-    List<Anime> findByOrderByRatingDesc();
     List<Anime> findByOrderByDateDesc();
+
+    /**
+     * 排行榜: 按**加权评分**倒序, 而不是评分原值.
+     *
+     * <p>为什么必须加权、m 与 C 为什么取那两个值, 见
+     * {@link com.animetracker.config.RankingProperties} —— 完整推导在那里.
+     * 这里只记三件与这条 SQL 本身有关的事.
+     *
+     * <p><b>一, 没有票的条目排在最后, 而不是被过滤掉.</b> 排序分成两级: 先按
+     * "有没有票"分成 0/1 两组, 组内再按加权分倒序. 之所以不写成
+     * {@code WHERE rating_count > 0}, 是因为 {@code rating_count} 允许为 NULL
+     * (历史行, 以及 Bangumi 偶尔不返回 rating 块的条目), 过滤会把它们**悄悄删掉**
+     * —— 而这是排行榜唯一的数据源, 一旦库里多数行都是 NULL, 榜就空了, 接口还照样
+     * 返回 200. 分组排序同时保证"没票的不会霸榜"和"榜不会空", 是这两条约束里唯一
+     * 都满足的写法. 把 {@code <= 0} 也算成"没有票", 与
+     * {@link com.animetracker.util.AnimeFields#rankOf} 把 {@code rank <= 0} 归一成
+     * NULL 是同一个口径: <b>Bangumi 的 0 表示"没有这个值", 不是"值为零"</b>.
+     *
+     * <p><b>一之补, 那个 {@code CASE} 在第二排序键上又写了一遍, 不是重复.</b>
+     * 如果第二键直接写加权表达式, 没票的那些行算出来会是 NULL —— 而
+     * <b>NULL 在 {@code DESC} 里排哪, H2 与 PostgreSQL 的默认正好相反</b>
+     * (H2 把 NULL 当最小值, PG 当最大值; 与
+     * {@code AnimeService#getByTags} 那段注释警告的是同一件事). 也就是说"没票的行
+     * 之间谁在前"会随数据库而变, 而分页是在这个序上切片的. 写成
+     * {@code CASE ... THEN 0 ELSE 加权表达式 END} 之后, 没票的行第二键统一是常量 0
+     * (彼此相等, 交给 {@code a.id} 定序), 有票的行则必然大于 0 —— 整条 ORDER BY
+     * 里不再出现任何 NULL, 两个库上排出来的序完全一致. 这个坑是
+     * {@code AnimeRankingIntegrationTest#rowsWithoutVotesSortLastAndSurvive} 在 H2 上
+     * 抓出来的.
+     *
+     * <p><b>二, {@code * 1.0} 不是多余的.</b> {@code rating_count} 是整型, 整数除法
+     * 在 H2 与 PostgreSQL 上都会截断({@code 1/201} 得 0), 那样算出来的权重恒为 0,
+     * 整个表达式退化成 {@code rating} 原值 —— 也就是这次要修的那个 bug 原样复活,
+     * 而且不报错、不抛异常, 只是榜首又变回那条 1 票 10 分的番. 乘 1.0 把分子提成
+     * 浮点, 两个参数也声明成 {@code double}, 是同一个理由. 这条有测试钉着
+     * (见 {@code AnimeRankingIntegrationTest} 里"加权序与原始分序不一致"那一组).
+     *
+     * <p><b>三, 最后按 {@code a.id} 兜底</b>, 理由与
+     * {@link #searchByKeywordPattern} 里那条相同: 没有它, 同分的行(最典型的就是
+     * 所有"没票"的行, 它们的第二排序键是 NULL)在两次查询之间顺序不定, 而分页是
+     * 在这个序上切片的. id 就是 Bangumi 的 subject_id, 天然唯一, 不必再加 tiebreaker.
+     */
+    @Query("""
+            SELECT a FROM Anime a
+             ORDER BY
+               CASE WHEN a.rating IS NULL OR a.rating <= 0
+                      OR a.ratingCount IS NULL OR a.ratingCount <= 0
+                    THEN 1 ELSE 0 END ASC,
+               CASE WHEN a.rating IS NULL OR a.rating <= 0
+                      OR a.ratingCount IS NULL OR a.ratingCount <= 0
+                    THEN 0
+                    ELSE ((a.ratingCount * 1.0 / (a.ratingCount + :priorVotes)) * a.rating
+                          + (:priorVotes * 1.0 / (a.ratingCount + :priorVotes)) * :priorScore)
+               END DESC,
+               a.id ASC
+            """)
+    List<Anime> findByWeightedScoreDesc(@Param("priorVotes") double priorVotes,
+                                        @Param("priorScore") double priorScore);
 
     /**
      * 按关键词找番剧: title / title_cn / aliases 三列任一命中, 大小写不敏感.

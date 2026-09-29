@@ -394,6 +394,16 @@ anitrack:
     max-pages: ${BACKFILL_MAX_PAGES:700}
     delay-ms: ${BACKFILL_DELAY_MS:1000}
 
+  # 排行榜的加权评分参数(贝叶斯平均 score = v/(v+m)·R + m/(v+m)·C).
+  # 不加权的话"1 个人打 10 分"会压过"两万个人打 9.1", 因为 Bangumi 的 score
+  # 是平均分、与人数无关. 完整推导与实测数字见 config/RankingProperties.
+  #
+  #   prior-votes  m  要多少票才有资格代表自己的分数. 调大更稳但更迟钝.
+  #   prior-score  C  零票条目的得分, 也是小样本被拉向的那条及格线.
+  ranking:
+    prior-votes: ${RANKING_PRIOR_VOTES:200}
+    prior-score: ${RANKING_PRIOR_SCORE:7.0}
+
 # ============================================================
 # 大模型接入 (AI 助手)
 # 密钥只从环境变量读取, 绝不写进代码库.

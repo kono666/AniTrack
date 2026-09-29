@@ -1,6 +1,7 @@
 package com.animetracker.service;
 
 import com.animetracker.config.BangumiApiProperties;
+import com.animetracker.config.RankingProperties;
 import com.animetracker.dto.BangumiDTO.InfoboxItem;
 import com.animetracker.dto.BangumiDTO.SearchResponse;
 import com.animetracker.dto.BangumiDTO.SubjectDTO;
@@ -70,7 +71,8 @@ class AnimeSearchBackfillTest {
                 mock(TagRepository.class),
                 mock(AnimeTagRepository.class),
                 bangumiApiClient,
-                mock(BangumiApiProperties.class));
+                mock(BangumiApiProperties.class),
+                new RankingProperties());
 
         when(animeRepository.save(any(Anime.class))).thenAnswer(inv -> {
             Anime a = inv.getArgument(0);

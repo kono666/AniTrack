@@ -1,6 +1,7 @@
 package com.animetracker.service;
 
 import com.animetracker.config.BangumiApiProperties;
+import com.animetracker.config.RankingProperties;
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.Tag;
 import com.animetracker.repository.AnimeRepository;
@@ -62,7 +63,8 @@ class AnimeServiceTagTest {
                 tagRepository,
                 animeTagRepository,
                 mock(BangumiApiClient.class),
-                mock(BangumiApiProperties.class));
+                mock(BangumiApiProperties.class),
+                new RankingProperties());
     }
 
     private static Anime anime(int id, String title, String date) {

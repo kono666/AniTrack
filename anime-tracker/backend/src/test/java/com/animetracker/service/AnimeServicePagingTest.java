@@ -1,6 +1,7 @@
 package com.animetracker.service;
 
 import com.animetracker.config.BangumiApiProperties;
+import com.animetracker.config.RankingProperties;
 import com.animetracker.entity.Anime;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.AnimeTagRepository;
@@ -16,6 +17,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -47,10 +49,14 @@ class AnimeServicePagingTest {
                 mock(TagRepository.class),
                 mock(AnimeTagRepository.class),
                 mock(BangumiApiClient.class),
-                mock(BangumiApiProperties.class));
+                mock(BangumiApiProperties.class),
+                new RankingProperties());
 
-        // 不带关键词那条分支只读这一个方法, 不会联网
-        when(animeRepository.findByOrderByRatingDesc()).thenReturn(fiveAnime());
+        // 不带关键词那条分支只读这一个方法, 不会联网.
+        // 参数用 anyDouble(): 这里要验的是分页算术, 与加权参数取多少无关 ——
+        // 权重本身对不对由 AnimeRankingIntegrationTest 打真库验.
+        when(animeRepository.findByWeightedScoreDesc(anyDouble(), anyDouble()))
+                .thenReturn(fiveAnime());
     }
 
     private static List<Anime> fiveAnime() {
@@ -146,7 +152,7 @@ class AnimeServicePagingTest {
     @Test
     @DisplayName("一条数据都没有时, 任何分页参数都返回空列表")
     void emptySourceIsAlwaysEmpty() {
-        when(animeRepository.findByOrderByRatingDesc()).thenReturn(List.of());
+        when(animeRepository.findByWeightedScoreDesc(anyDouble(), anyDouble())).thenReturn(List.of());
 
         assertThat(listOf(animeService.searchAnime("", 1, 20))).isEmpty();
         assertThat(listOf(animeService.searchAnime("", 0, 0))).isEmpty();
