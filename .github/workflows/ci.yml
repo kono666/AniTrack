@@ -17,6 +17,10 @@
 #  每天那份备份真的产出了而且真的恢复得回来、以及 Agent 全链路
 #  (工具调用 -> 番剧卡片 -> SSE 分帧 -> 额度扣减) 在 mock 模型下真的跑得通.
 #
+#  两个镜像还会各过一遍 Trivy. 它**只报告、不拦 CI**, 理由写在那两步上面.
+#  一句话: 漏洞库每天都在变, 一个会拦的扫描器会让「镜像一行没动,
+#  但所有人的 PR 全红」变成常态, 而那种红只会训练人去忽略它.
+#
 #  曾经写着「不跑 scripts/verify-agent.py」, 理由是「它要真实 LLM 额度」.
 #  那句理由是错的: 脚本对应的 README 那一段自己就写着 LLM_PROVIDER=mock
 #  「不产生任何费用」—— 同一件事在两处说法相反, 而且恰好是让 CI 少跑一段的那个说法
@@ -154,6 +158,52 @@ jobs:
           load: true
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
+
+      # ---------- 镜像漏洞扫描 ----------
+      #
+      # 位置放在两个镜像都构建完之后: 它们都是 load: true, 镜像就在本机 docker 里,
+      # 扫的正是「将要部署的那个东西」, 而不是某个近似物.
+      #
+      # 扫出来不止是基础镜像的洞. 后端镜像里装着 fat jar, 所以 Trivy 会连
+      # BOOT-INF/lib 下那一堆 Java 依赖一起读 —— 也就是说它同时回答了
+      # 「alpine 基础镜像干净吗」和「我们自己的依赖干净吗」. 这一条值得知道,
+      # 否则很容易以为它只跟 FROM 那一行有关.
+      #
+      # **只报告, 不拦 CI** (exit-code: '0'). 两条理由, 都是刻意的:
+      #
+      #   1. 报出来的东西里有一大块来自 Spring Boot 3.2 这条已经停更的线
+      #      (3.2.12 是这条线最后一个版本). 拦住的话, 它要求的是「换到 3.4 / 3.5 / 4.x
+      #      哪一条」—— 那是一个该单独决定的项目级决定, 不该由一次依赖升级顺手定下.
+      #      已实测: 3.4.13 + springdoc 2.8.17 下 423 个用例全过, 想升随时可以升.
+      #   2. 漏洞库每天在变. 会拦的扫描器意味着: 某天有人发了一条 CVE, 这个镜像
+      #      一行代码没动, 但所有人开着的 PR 全变红. 那种红和"你这次改错了"长得一样,
+      #      于是它会变成一种需要被忽略的噪音 —— 那比不扫更糟.
+      #
+      # 注意 exit-code 管的是"扫出漏洞"这件事. 扫描器**自己**跑挂了(拉不到漏洞库之类)
+      # 仍然会让这一步失败 —— 这是故意的: 那说明这个扫描已经不再提供信息,
+      # 而"以为在扫、其实没扫"是这里唯一真正危险的状态.
+      #
+      # 想改成拦: 把 exit-code 写成 '1'. 要放宽就配合 severity / ignore-unfixed 调.
+      #
+      # ignore-unfixed 只报"上游已有补丁"的那些. 没补丁的报了也无从下手,
+      # 只会把真能动手的那几条淹掉.
+      - name: 扫镜像漏洞 · 后端 (Trivy, 只报告)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: anitrack-backend:latest
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: 'true'
+          exit-code: '0'
+
+      - name: 扫镜像漏洞 · 前端 (Trivy, 只报告)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: anitrack-frontend:latest
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: 'true'
+          exit-code: '0'
 
       # 这两个值在本次运行里现生成.
       # 不在仓库里写死任何看起来像密钥的东西 —— 就算它只是给一次性的冒烟容器用,
