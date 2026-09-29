@@ -328,6 +328,36 @@ https://你的域名/actuator/health
 
 两件别做的事：不要把探针指到 `/`（首页是个静态文件，后端整个挂了它照样 200，等于装了个永远不响的警报）；不要给它加缓存（一个被缓存住的 `UP` 会在服务真挂之后继续报 `UP`，而那正是监控最不该骗人的时候）。
 
+### 备份与恢复
+
+`backup` 服务每天 `pg_dump` 一次（起栈时先做一次，不用等第一个周期），保留 14 天，文件放在 `pgbackup` 这个卷里——**与数据库的卷分开**。脚本与它的取舍写在 [`anime-tracker/scripts/backup/backup.sh`](anime-tracker/scripts/backup/backup.sh)，一句话概括：先写 `.part`、验完整（`pg_dump` 的收尾标记）、才改名，所以那个目录里不会出现半截的备份文件。
+
+```bash
+docker compose exec backup ls -lh /backup                     # 看看有哪些
+docker compose cp backup:/backup/anitrack-20260929-030000.sql.gz .   # 取一份到本机
+```
+
+**恢复**（先把现状也备份一份——恢复本身是一次会改数据的操作，恢复错了得有得回头）：
+
+```bash
+docker compose exec backup sh -c 'pg_dump -Fp --no-owner --clean --if-exists' | gzip > 恢复前的现状.sql.gz
+docker compose stop nginx backend                     # 恢复期间别让应用写库
+gunzip -c anitrack-20260929-030000.sql.gz \
+  | docker compose exec -T postgres psql -U anitrack -d anitrack -v ON_ERROR_STOP=1
+docker compose start nginx backend
+```
+
+`-v ON_ERROR_STOP=1` 不能省：不加的话 `psql` 遇到错误也会继续往下跑并返回 0，于是「恢复成功」和「恢复了一半」在终端里长得一模一样。
+
+想先看看这份备份里是什么，或者练习一次恢复（不会碰生产库）：把最后那句的 `-d anitrack` 换成先建一个临时库，例如 `psql -U anitrack -d postgres -c 'CREATE DATABASE restore_check'` 然后灌进 `restore_check`。
+
+两件必须说清楚的事：
+
+- **`docker compose down -v` 会把 `pgbackup` 一起删掉**。「清理环境」和「删掉所有备份」是同一个命令，别在线上顺手敲它。
+- **备份和数据在同一台机器上，只能防「误删了数据、改坏了数据」，防不了「这台机器没了」**。真要抗后者，得把备份同步到别处去——在宿主机上加一条 cron 把那个卷推到对象存储即可，例如 `docker run --rm -v <项目名>_pgbackup:/backup:ro rclone/rclone sync /backup remote:anitrack-backup`。
+
+一份**从没恢复过**的备份等于一份猜测。CI 里每次都会拿真 PostgreSQL 做一次恢复演练（把 dump 灌进一个临时库，再和源库比对行数），但那证明的是脚本本身没问题，不证明你手上那份 dump 一定恢复得出来——上线前自己走一遍上面那三条命令。
+
 ### 后端镜像本身做的事
 
 （`anime-tracker/backend/Dockerfile`）
@@ -351,7 +381,7 @@ https://你的域名/actuator/health
 | --- | --- | --- |
 | `backend` | JDK 17 + `mvn -B test`（423 个用例） | 代码逻辑还对吗？ |
 | `frontend` | `npm ci` + `npm test`（177 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
-| `image` | 构建后端与前端两个镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
+| `image` | 构建后端与前端镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
 
 第三个 job 是有意加的。Dockerfile 和 `docker-compose.yml` 在写完的那一刻处于「看起来对」的状态——开发机上没有 Docker，谁也没法执行一次；而部署配置最大的特点就是「写错了不会报错，只会在别人机器上炸」。所以 CI 里用真实 PostgreSQL 把它整个跑起来。
 
@@ -366,6 +396,7 @@ https://你的域名/actuator/health
 - 空库上由 `ADMIN_*` 环境变量建出管理员，并且能真的登录成功
 - 迁移建出来的表能读（不只是启动时校验过得去）
 - 迁移脚本在**已经迁移过**的库上重放安全（唯一索引数不变，没有重复添加），并且把其中一条约束拿掉后能重新补回来——这一支在全新的库上永远不会被执行到，而部署到真服务器时用的恰恰是它
+- 备份真的产出了、是完整的（有 `pg_dump` 的收尾标记，不是截断的），而且**真的恢复得回来**：把 dump 灌进一个临时库，再和源库比对一张有数据的表的行数
 
 冒烟用的 `JWT_SECRET` 与管理员密码在每次运行时用 `openssl rand` 现生成，**仓库里不存任何看起来像密钥的值**——就算它只服务于一个跑完就 `down -v` 丢掉的容器，躺在仓库里的 `JWT_SECRET=...` 也一定会在某个时刻被人复制到别处。
 

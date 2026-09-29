@@ -61,8 +61,16 @@ EXPOSE 80
 # 这个探针要回答的是「nginx 还在不在」. 把它指到后端的话, 后端一抖动
 # 就会让 nginx 被判成 unhealthy 然后被重启 —— 而重启 nginx 解决不了后端的问题.
 # 后端自己的健康由它自己的探针表达 (docker-compose.yml 里的 depends_on).
+#
+# 地址写 127.0.0.1 而不是 localhost, 这是踩过一次的:
+# 这个镜像里 /etc/hosts 有 "::1 localhost", 而 musl 的解析顺序把 IPv6 排在前面,
+# 于是 wget localhost 会先去连 [::1]:80. 本镜像只 listen 80 (IPv4),
+# 那个连接被拒 —— 结果是 nginx 明明起得好好的, 却被判成 unhealthy,
+# 整个 compose up --wait 直接失败 (CI #22 就是这么红的).
+# 写死 127.0.0.1 让这个探针不依赖解析顺序.
+# (后端的探针用 localhost 没问题: Tomcat 是双栈监听的, ::1 也连得上.)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget -q -O /dev/null http://localhost/healthz
+    CMD wget -q -O /dev/null http://127.0.0.1/healthz
 
 # 官方镜像自带的 ENTRYPOINT/CMD 保持不动 (它已经处理了信号转发:
 # docker stop 会让 nginx 走完 graceful shutdown, 而不是掐断正在传的响应)
