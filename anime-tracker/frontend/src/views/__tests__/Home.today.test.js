@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
+// 工厂里只有 Home 真的 import 的那两个 —— 分类搬走之后 getTags/getFiltered
+// 都成了死桩(桩留着不会报错, 但会让下一个读的人以为首页还在拉标签)
 vi.mock('../../api', () => ({
   getRanking: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   getCalendar: vi.fn(() => Promise.resolve({ data: { data: [] } })),
-  getTags: vi.fn(() => Promise.resolve({ data: { data: [] } })),
-  getFiltered: vi.fn(() => Promise.resolve({ data: { data: { list: [], total: 0 } } })),
 }))
 
 import Home from '../Home.vue'
@@ -26,8 +26,8 @@ import { resetHomeCache } from '../../utils/homeCache'
  *   · 假数据按真接口的形状**静态**写死, 不复用被测代码的任何一个常量;
  *   · 日期钉死在星期三(getDay() → 3), 不跟着运行的那天跑.
  *
- * 单独一个文件而不是并进 Home.test.js: 与 Home.tagUrl.test.js 同一个理由 ——
- * 卸载不干净的 wrapper 会把它的 route watcher 留给后面的用例.
+ * 单独一个文件而不是并进 Home.test.js: 这个文件要钉死"今天是星期三", 而
+ * Home.test.js 里的用例跟着真实日期跑, 混在一起会互相污染.
  */
 
 const WED = 3

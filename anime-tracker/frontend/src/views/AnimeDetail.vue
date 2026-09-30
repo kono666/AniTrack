@@ -79,18 +79,28 @@
             <span v-if="userStore.loggedIn && watchedEpisodes.length > 0">已看 {{ watchedEpisodes.length }} / {{ episodes.length }}</span>
           </template>
         </SectionHeader>
-        <div v-if="episodes.length > 0" class="ep-tile-grid">
-          <button
-            v-for="ep in episodes" :key="ep.id"
-            class="ep-tile"
-            :class="{ watched: watchedEpisodes.includes(ep.sort) }"
-            @click="toggleEp(ep.sort)"
-          >
-            <span class="ep-tile-num">{{ ep.sort }}</span>
-            <span class="ep-tile-name">{{ ep.nameCn || ep.name || '第'+ep.sort+'集' }}</span>
-            <span v-if="watchedEpisodes.includes(ep.sort)" class="ep-check">✓</span>
-          </button>
-        </div>
+        <!-- 判据仍然是 episodes.length(全量), 不是切片后的那个 —— 否则"这一页空了"
+             这种错觉会出现(篇幅长的番翻到最后一页时不该说"暂无剧集数据") -->
+        <template v-if="episodes.length > 0">
+          <div ref="epSectionTop" class="ep-tile-grid">
+            <button
+              v-for="ep in visibleEpisodes" :key="ep.id"
+              class="ep-tile"
+              :class="{ watched: watchedEpisodes.includes(ep.sort) }"
+              @click="toggleEp(ep.sort)"
+            >
+              <span class="ep-tile-num">{{ ep.sort }}</span>
+              <span class="ep-tile-name">{{ ep.nameCn || ep.name || '第'+ep.sort+'集' }}</span>
+              <span v-if="watchedEpisodes.includes(ep.sort)" class="ep-check">✓</span>
+            </button>
+          </div>
+          <Pagination
+            v-if="epPaginated"
+            :current-page="epPage"
+            :total-pages="epTotalPages"
+            @change="changeEpPage"
+          />
+        </template>
         <EmptyState v-else type="episode" message="暂无剧集数据" />
       </section>
 
@@ -198,6 +208,7 @@ import { useToast } from '../composables/useToast'
 import SectionHeader from '../components/SectionHeader.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
+import Pagination from '../components/Pagination.vue'
 
 const route = useRoute()
 const userStore = useUserStore()
@@ -206,6 +217,33 @@ const sid = Number(route.params.id)
 
 const subject = ref(null)
 const episodes = ref([])
+
+/* ── 剧集分页 ──
+   长篇番(海贼王 1000+)改前是一次把**全部**剧集铺成 DOM: 1000 集 = 4000+ 个节点,
+   而每个 tile 还要做两次 O(n) 的 watchedEpisodes.includes(...) —— 点进去要卡一下,
+   点一个格子更卡. 而站内绝大多数是 12/13/24/25/26 集的季番, 给它们加一个分页控件
+   只是多一层要点的东西, 所以**超过阈值才分页**.
+
+   只是把**渲染**切片, episodes 保持全量 —— 这样一来「已看 N / M」的分母(M 是全量)、
+   toggleEp(ep.sort) 的集号语义、watched 高亮(按 ep.sort 比)三处口径一个字都不用动.
+   追番进度与剧集列表本来就是解耦的: 高亮的是"这一集看过没有", 与它现在在第几页无关.
+
+   阈值卡的是**实到条数**(episodes.length)而不是条目声明的 totalEpisodes ——
+   两者已知不相等(episode 表只有被点开过的番才有剧集, 声明值会虚高),
+   卡声明值会出现"说 500 集所以给个分页控件, 实际只取到 12 集"的空控件. */
+const EPISODE_PAGE_THRESHOLD = 100
+const EPISODE_PAGE_SIZE = 50
+const epPage = ref(1)
+const epSectionTop = ref(null)
+const epPaginated = computed(() => episodes.value.length > EPISODE_PAGE_THRESHOLD)
+const epTotalPages = computed(() => epPaginated.value
+  ? Math.max(1, Math.ceil(episodes.value.length / EPISODE_PAGE_SIZE))
+  : 1)
+const visibleEpisodes = computed(() => {
+  if (!epPaginated.value) return episodes.value
+  const start = (epPage.value - 1) * EPISODE_PAGE_SIZE
+  return episodes.value.slice(start, start + EPISODE_PAGE_SIZE)
+})
 const reviews = ref([])
 const ratingStats = ref({ average: 0, count: 0, distribution: Array(10).fill(0) })
 const watchedEpisodes = ref([])
@@ -265,6 +303,7 @@ async function load(){
   // loading 的初值就是 true, 所以不需要自己置位)
   loading.value = true
   error.value = ''
+  epPage.value = 1  // 重试会重跑 load(): 不复位的话可能停在新列表里不存在的那一页
   try{
     const [dr,er,sr,rr] = await Promise.all([getAnimeDetail(sid),getEpisodes(sid),getRatingStats(sid),getSubjectReviews(sid,userStore.user?.id||0)])
     subject.value = dr.data.data
@@ -305,6 +344,27 @@ async function load(){
 async function toggleEp(n){
   if(!userStore.loggedIn) return
   try{ await toggleEpisode(sid,n); const i=watchedEpisodes.value.indexOf(n); if(i>=0) watchedEpisodes.value.splice(i,1); else watchedEpisodes.value.push(n) }catch(e){}
+}
+
+/**
+ * 翻到剧集列表的另一页, 并把剧集区送回视野.
+ *
+ * 不这么做的话, 用户点完「下一页」视口停在分页按钮那一行 —— 也就是新一页 50 张
+ * 格子的**末尾**, 看到的是中间而不是开头.
+ *
+ * block 用 'start' 而不是 'nearest': 点分页按钮时剧集区**已经部分可见**,
+ * 'nearest' 的语义是"已经看得见就不动", 于是整个调用变成空操作. 这里要的是
+ * "把这一区从头给我看".
+ *
+ * 刻意不传 behavior: 交给 base.css 的 html{scroll-behavior:smooth}, 而它在
+ * prefers-reduced-motion 下被改成 auto —— "减少动效"的用户自动得到瞬移,
+ * 不用在 JS 里再查一次媒体查询.
+ *
+ * 落点会不会被 sticky 的导航栏盖住由 CSS 管: .ep-tile-grid 上有 scroll-margin-top.
+ */
+function changeEpPage(page){
+  epPage.value = page
+  epSectionTop.value?.scrollIntoView({ block: 'start' })
 }
 async function quickTrack(){
   trackForm.status='watching'; trackForm.progress=0; trackForm.score=0
@@ -397,7 +457,11 @@ onMounted(load)
 .d-section{ margin-bottom:32px; }
 
 /* ====== EPISODE TILES ====== */
-.ep-tile-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); gap:10px; }
+/* scroll-margin-top 是必须的, 不是美化: .navbar 是 position:sticky; top:0; height:64px,
+   不留这段高度的话翻页时 block:'start' 会把「剧集列表」标题压到导航栏底下.
+   80 = 64 + 16 呼吸. 滚动后 navbar 会缩到 48px, 多出的 32px 空隙可以接受 ——
+   比被盖住强. */
+.ep-tile-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); gap:10px; scroll-margin-top:80px; }
 .ep-tile{
   position:relative; display:flex; flex-direction:column; align-items:center; gap:6px;
   padding:16px 8px 12px; border-radius:var(--radius-sm);

@@ -8,6 +8,16 @@ import { rememberPath } from '../utils/loginRedirect'
 const routes = [
   { path: '/', name: 'Home', component: () => import('../views/Home.vue'), meta: { title: '首页' } },
   { path: '/search', name: 'Search', component: () => import('../views/Search.vue'), meta: { title: '搜索' } },
+  // 「分类浏览」原先挤在首页最底部, 现在整块搬出来成了独立页(首页只留导航栏一个入口).
+  //
+  // meta.scrollOnQueryChange: 同一条路径上只换 query(点标签、翻页)时**不要**回顶.
+  // 改前 query 一变就 {top:0}, 于是"点一个标签, 页面跳回顶部, 而结果在标签墙底下
+  // 根本看不见". 这一页自己决定要不要把结果送去视野(见 Tags.vue 的 scrollToResults).
+  //
+  // 这条例外**必须挂在 meta 上**, 不能写成全局的"同 path 就不滚": 搜索页的翻页
+  // 与"在 /search 上再搜一次"也是同 path 的 query 变化, 那两处正是靠回顶让用户
+  // 看到新结果的开头.
+  { path: '/tags', name: 'Tags', component: () => import('../views/Tags.vue'), meta: { title: '分类浏览', scrollOnQueryChange: false } },
   { path: '/anime/:id', name: 'AnimeDetail', component: () => import('../views/AnimeDetail.vue'), props: true, meta: { title: '番剧详情' } },
   // AI 助手刻意不要求登录: 访客能直接对话是公网 Demo 的重点,
   // 而服务端只会把公开工具暴露给访客, 不存在越权的可能
@@ -91,7 +101,7 @@ function pageTransitionMs() {
  * 改前这里写死 `{ top: 0 }` —— 后退也是回顶, 于是「首页翻到第 3 页 → 点进详情 →
  * 按后退」回到的是首页顶部, 用户滚到哪儿完全不记得.
  *
- * 三件事让它不是一个"一行就能改"的改动:
+ * 四件事让它不是一个"一行就能改"的改动:
  *
  * 一、必须**延迟到页面过渡结束之后**再滚.
  *   vue-router 的 handleScroll 是 `nextTick().then(() => scrollBehavior(...))`
@@ -119,15 +129,41 @@ function pageTransitionMs() {
  * ⚠️ 已知落差(接受, 见计划取舍): 延迟只保证"页面过渡"结束, 不保证"数据"到齐.
  * 首页冷缓存 / 搜索结果页要等各自的请求回来才会变高, 那时文档还不够高, 位置会被
  * 钳到当时的底部. 缓存命中的首页、以及本来就在底部附近的后退是准的.
+ *
+ * 四、目标是**同一条路径上只换了 query** 的页面可以声明"这次别滚"(见下面第二条).
+ *   分类页的筛选条件写在 query 里, 而点一个标签 / 翻一页并不是"到了另一个地方" ——
+ *   回顶会把用户从"我刚点的那排标签"扔回页面最上面, 而他点的那个标签在几百像素
+ *   以下. 判据挂在目标路由的 meta 上而不是写成全局的 `to.path === from.path`:
+ *   搜索页的翻页与"在 /search 上再搜一次"也是同 path 的 query 变化, 那两处正是
+ *   靠回顶让用户看到新结果的开头, 放宽成全局会把它弄坏.
  */
 export function scrollBehavior(to, from, savedPosition) {
-  if (!savedPosition) return { top: 0 }
-  return new Promise((resolve) => {
-    setTimeout(
-      () => resolve({ ...savedPosition, behavior: 'instant' }),
-      pageTransitionMs() + TRANSITION_SLACK_MS,
-    )
-  })
+  // 一、后退/前进优先. 这一条必须排在最前面: 有 savedPosition 就是 popstate,
+  //    那时候"恢复到哪儿"比"这一页要不要自己滚"更权威. 反过来的话, 同一条路径的
+  //    两个历史条目之间后退会被判成"query 变了, 不滚", 恢复位置就丢了.
+  if (savedPosition) {
+    return new Promise((resolve) => {
+      setTimeout(
+        () => resolve({ ...savedPosition, behavior: 'instant' }),
+        pageTransitionMs() + TRANSITION_SLACK_MS,
+      )
+    })
+  }
+  // 二、同 path 且只有 query 变了, 而目标页声明了自己管滚动 → 一次都不滚.
+  //    `to.path === from.path` 这一半不能省: 从别处**进入** /tags 时 to.meta 上
+  //    同样有这个标记, 但那一次是换页, 应该照常回顶.
+  //    `to.fullPath !== from.fullPath` 也不能省: 已经在 /tags 上再点一次导航栏
+  //    「分类」时 query 一个字都没变, 那次仍然是"重新去这一页", 该回顶.
+  //    判据写 `=== false` 而不是 `!to.meta?.x`: 单测里传的是 {} , meta 是
+  //    undefined, 必须短路到下面那条既有的回顶分支(见 scrollBehavior.test.js).
+  //    返回 false 会被 vue-router 的 handleScroll 用 `position &&` 短路掉 ——
+  //    确实一次滚动都不发生, 而不是"滚到 0".
+  if (to.meta?.scrollOnQueryChange === false
+      && to.path === from.path && to.fullPath !== from.fullPath) {
+    return false
+  }
+  // 三、其余 push 式导航维持原样, 逐字不动
+  return { top: 0 }
 }
 
 const router = createRouter({

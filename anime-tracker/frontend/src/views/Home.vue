@@ -123,67 +123,20 @@
           </HorizontalScroll>
         </section>
 
-        <!-- Browse by Tag -->
-        <section class="home-block">
-          <SectionHeader title="分类浏览" v-reveal />
-          <!-- 分类是同一类问题的第三处: 一排 <span @click>, 键盘同样到不了.
-               这几个没做成 <button>: interactions.css 与 tag-filter.css 里
-               已有的 .tag-chip 样式(以及 :active 的按下反馈)是按 span 写的,
-               换成 button 会把它们全部作废, 而这一批要修的不是样式. -->
-          <div class="tag-filter">
-            <span
-              class="tag-chip"
-              role="button"
-              tabindex="0"
-              :class="{ active: selectedTag === '' }"
-              @click="selectTag('')"
-              @keydown.enter.prevent="selectTag('')"
-              @keydown.space.prevent="selectTag('')"
-            >全部</span>
-            <span
-              class="tag-chip"
-              v-for="tag in tags"
-              :key="tag.name"
-              role="button"
-              tabindex="0"
-              :class="{ active: selectedTag === tag.name }"
-              @click="selectTag(tag.name)"
-              @keydown.enter.prevent="selectTag(tag.name)"
-              @keydown.space.prevent="selectTag(tag.name)"
-            >
-              {{ tag.name }}
-              <span style="font-size:10px;opacity:.7;">({{ tag.count }})</span>
-            </span>
-          </div>
-          <div v-if="tagError" class="tag-error">
-            {{ tagError }}
-            <button class="tag-retry" @click="loadTagPage">重试</button>
-          </div>
-          <div v-else-if="tagItems.length > 0">
-            <div class="anime-grid">
-              <AnimeCard v-for="(item, idx) in tagItems" :key="item.id" :anime="item" v-reveal="{ delay: idx * 40 }" />
-            </div>
-            <Pagination
-              :current-page="tagPage"
-              :total-pages="tagTotalPages"
-              @change="changeTagPage"
-            />
-          </div>
-          <EmptyState v-else-if="selectedTag" type="tag" message="该分类暂无数据" />
-        </section>
+        <!-- 分类浏览原先在这里(首页的第 6 个区块), 整块搬成了 /tags 独立页 ——
+             导航栏是它现在唯一的入口. 删掉的不只是模板: 首页因此也不再请求
+             /api/bangumi/tags, 首屏少一个请求. -->
       </template>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import PhStar from '@icons/PhStar.vue.mjs'
-import { getRanking, getCalendar, getTags, getFiltered } from '../api'
+import { getRanking, getCalendar } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
-import { strParam, pageParam } from '../utils/query'
-import { useLatestOnly } from '../composables/useLatestOnly'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
 import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
@@ -193,34 +146,16 @@ import { vReveal } from '../directives/reveal'
 import HeroBanner from '../components/HeroBanner.vue'
 import HorizontalScroll from '../components/HorizontalScroll.vue'
 import SectionHeader from '../components/SectionHeader.vue'
-import AnimeCard from '../components/AnimeCard.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
-import Pagination from '../components/Pagination.vue'
 
 const $router = useRouter()
-const route = useRoute()
-/** 分类页的请求令牌: 只认最后一次, 见 composables/useLatestOnly.js */
-const tagRequest = useLatestOnly()
 const loading = ref(true)
 const heroItems = ref([])
 const popularList = ref([])
 const recentList = ref([])
 const todayAnime = ref([])
-const tags = ref([])
-const selectedTag = ref('')
 const error = ref('')
-/* 分类浏览是**服务端分页**: tagItems 是当前这一页, tagTotal 是这个分类的总条数.
-   改前这里是"一次把服务端给的全都拿回来, 自己 slice 24 条一页" —— 而服务端那条
-   /by-tag 封顶 50 条(BY_TAG_LIMIT), 于是任何分类都只有 3 页, 第 3 页还只有 2 张.
-   改用 /filter: 它返回 {list, total, page}, total 是 SQL count 出来的真实值,
-   切页也在 SQL 里. 排序口径不变 —— /by-tag 与 /filter?sort=date 走的是同一条
-   仓储方法、同一套 ORDER_DATE_DESC_NULL_LAST(见 AnimeRepository 的注释). */
-const tagItems = ref([])
-const tagTotal = ref(0)
-const tagPage = ref(1)
-const tagError = ref('')
-const pageSize = 24
 
 // 今日放送默认只铺前 8 部, 其余收在「全部 N 部」后面(改前是直接丢掉)
 const TODAY_LIMIT = 8
@@ -229,11 +164,9 @@ const visibleToday = computed(() =>
   showAllToday.value ? todayAnime.value : todayAnime.value.slice(0, TODAY_LIMIT)
 )
 
-/** 打开详情页. 卡片和分类标签都用它 —— 同一段跳转原先在模板里写了 4 遍,
+/** 打开详情页. 首页三类卡片都用它 —— 同一段跳转原先在模板里写了 4 遍,
  *  补键盘支持时要写 12 遍, 这正是该收成一个函数的时候 */
 function open(id) { $router.push(`/anime/${id}`) }
-
-const tagTotalPages = computed(() => Math.max(1, Math.ceil(tagTotal.value / pageSize)))
 
 /** 给人看的一行日期. 这里的「周三」是**显示用**的中文简写, 不是拿去匹配的键 ——
  *  匹配用的是 bgmWeekdayId(), 那是另一套写法, 理由见它上面那段 */
@@ -264,128 +197,7 @@ function bgmWeekdayId() {
   return String(dow === 0 ? 7 : dow)
 }
 
-/**
- * 取当前分类的当前这一页.
- *
- * 「全部」(tag 为空串)走的是同一条接口 —— 不给 tag 参数就是不按标签筛, sort=date
- * 与改前那个 getRanking('date', 200) 是同一个序(两处共用 ORDER_DATE_DESC_NULL_LAST),
- * 区别只是改前封顶 200 条、现在有真实 total.
- */
-async function loadTagPage() {
-  // 令牌要在发请求**之前**取. 快速连点时会有多个请求同时在飞, 而谁先回来不确定 ——
-  // 没有这个, 先发的那次后到就会把界面盖成上一个筛选条件的内容(见下面对 isCurrent
-  // 的两处判断).
-  const token = tagRequest.begin()
-  tagError.value = ''
-  try {
-    const res = await getFiltered({
-      tag: selectedTag.value || undefined,
-      sort: 'date',
-      page: tagPage.value,
-      limit: pageSize,
-    })
-    // 过期: 后面每一行写的都是别人的状态, 一行都不能执行
-    if (!tagRequest.isCurrent(token)) return
-    const body = res.data.data || {}
-    tagItems.value = body.list || []
-    tagTotal.value = body.total || 0
-  } catch (e) {
-    // 过期那次的失败同样不能写 tagError —— 否则界面上会留下一条属于上一个
-    // 筛选条件的报错, 而它对应的请求早就没人关心了
-    if (!tagRequest.isCurrent(token)) return
-    // 改前这里只有 console.error: 页面会停在"这个分类没有数据"那个空态上,
-    // 把一次加载失败说成了一句事实
-    tagError.value = loadErrorMessage(e, '加载分类')
-    tagItems.value = []
-    tagTotal.value = 0
-  }
-}
-
-/**
- * 把当前分类与页码写进 URL.
- *
- * 为什么筛选状态必须进 URL: App.vue 里 router-view 的 key 是 route.path, 路径一变
- * 组件就重建 —— 从首页点进详情再按后退, Home 是**重新挂载**的. 筛选只活在组件里
- * 的话, 那时它已经是一个全新的「未筛选」页了. 这与 Search.vue 的 syncQuery 是同一个
- * 理由(那边早就把 q/page 写进了 URL, 这里一直漏着).
- *
- * 默认值不写进去(空 tag / 第 1 页): ?tag=&page=1 是噪音, 与「没有这个参数」等价,
- * 写进去只会让地址栏变长、让分享出去的链接看起来比实际更特殊.
- * 用 replace 不用 push: 换分类/翻页不该在历史里堆层, 否则从第 5 页退回未筛选
- * 要按好几次后退.
- */
-function syncTagQuery() {
-  const next = { ...route.query }
-  if (selectedTag.value) next.tag = selectedTag.value
-  else delete next.tag
-  if (tagPage.value > 1) next.page = String(tagPage.value)
-  else delete next.page
-  if (route.query.tag === next.tag && route.query.page === next.page) return
-  $router.replace({ query: next })
-}
-
-/**
- * 反向: URL 变了 → 读回来再取数. 后退/前进走的是这条路.
- *
- * 两处刻意的地方:
- *   · tag 与 page 合成**一个** watch. 拆成两个的话,「换个分类同时回到第 1 页」
- *     会让两条都触发, 发两次请求.
- *   · 开头的早退判断是必须的 —— 我们自己调 syncTagQuery 写 URL 同样会让这个 watch
- *     触发, 不判断就变成「点一次 chip 发两次请求」. 判据是「URL 解析出来的值与当前
- *     ref 是否一致」: 写之前 ref 已经先改好了, 所以那次一定一致.
- *     这与改前那句「刻意不用 watch(tagPage)」防的是同一件事 —— 当时防的是页码 ref,
- *     现在防的是 URL, 换了个对象而已, 歧义的形状没变.
- */
-watch(
-  () => [route.query.tag, route.query.page],
-  ([rawTag, rawPage]) => {
-    const tag = strParam(rawTag)
-    const page = pageParam(rawPage)
-    if (tag === selectedTag.value && page === tagPage.value) return
-    selectedTag.value = tag
-    tagPage.value = page
-    loadTagPage()
-  },
-)
-
-/** 先改 ref → 再写 URL → 再取数. 顺序不能换: 写 URL 触发的那个 watch 靠
- *  "ref 已经等于 URL"来早退, ref 晚一步改就会多打一次请求. */
-async function selectTag(tag) {
-  selectedTag.value = tag
-  tagPage.value = 1
-  syncTagQuery()
-  await loadTagPage()
-}
-
-/**
- * 翻页.
- *
- * 这里仍然**不用 watch(tagPage)**(改前那段注释的结论保留): selectTag 也要把页码
- * 复位成 1, 而 watch 分不清"复位导致的"和"用户点的", 从第 3 页换分类时两条路都会
- * 触发, 于是发两次请求. 让每个改写 tagPage 的地方自己决定要不要取数, 歧义就不存在.
- */
-function changeTagPage(page) {
-  tagPage.value = page
-  syncTagQuery()
-  loadTagPage()
-}
-
-/**
- * 首访: 先把 URL 里的筛选收下, 再一并加载.
- *
- * 改前这里是 `onMounted(loadHome)` —— **分类区在首访时根本没有初次加载**:
- * loadTagPage 只被 selectTag / changeTagPage / 重试按钮调用过, 于是模板里那句
- * `v-else-if="tagItems.length > 0"` 首访必然为假, 分类区只剩标题和一排 chip;
- * 而 v-else-if="selectedTag" 的空态也出不来(此时 selectedTag 是空串), 所以连
- * 一句「暂无数据」都没有. 用户必须先点一下 chip 才知道那里会出东西.
- *
- * 两件事可以并行: loadTagPage 不依赖 tags 列表 —— tag 只是原样传给 /filter 的字符串.
- */
-onMounted(async () => {
-  selectedTag.value = strParam(route.query.tag)
-  tagPage.value = pageParam(route.query.page)
-  await Promise.all([loadHome(), loadTagPage()])
-})
+onMounted(loadHome)
 
 // 单独取名(原来是直接写在 onMounted 里的匿名函数)是为了让错误态上的「重试」
 // 有东西可调 —— 重试就是把这一次加载原样再跑一遍
@@ -397,24 +209,22 @@ async function loadHome() {
     const c = homeCache.data
     heroItems.value = c.hero; popularList.value = c.popular
     recentList.value = c.recent; todayAnime.value = c.today
-    tags.value = c.tags; loading.value = false
+    loading.value = false
     return
   }
 
   let coreLoaded = false
   try {
     // Phase1: 核心数据先加载 (快, 不阻塞页面)
-    const [rankRes, dateRes, tagRes] = await Promise.all([
+    const [rankRes, dateRes] = await Promise.all([
       getRanking('rank', 30),
       getRanking('date', 12),
-      getTags(),
     ])
     const rankData = rankRes.data.data || []
     const dateData = dateRes.data.data || []
     heroItems.value = rankData.slice(0, 6)
     popularList.value = rankData
     recentList.value = dateData
-    tags.value = tagRes.data.data || []
     loading.value = false  // 页面立即可见
     coreLoaded = true
   } catch (e) {
@@ -437,7 +247,7 @@ async function loadHome() {
   // 数据缓存 5 分钟. 于是错误被缓存成了事实 —— 用户点重试(或者切走再回来)拿到的
   // 还是那份空缓存, 连一次新的请求都不会发出去.
   if (coreLoaded) {
-    homeCache.data = { hero: heroItems.value, popular: popularList.value, recent: recentList.value, today: todayAnime.value, tags: tags.value }
+    homeCache.data = { hero: heroItems.value, popular: popularList.value, recent: recentList.value, today: todayAnime.value }
     homeCache.time = Date.now()
   }
 }
@@ -462,27 +272,6 @@ async function loadHome() {
   color: var(--text-secondary); transition: color var(--transition);
 }
 .today-toggle:hover { color: var(--text); }
-
-/* 分类那一块自己的错误态. 不复用整页那个 EmptyState type="error":
-   整页失败时首页的其他分区还是好的, 用整页的样式会把"只是这一块没加载出来"
-   说成"这一页坏了" */
-.tag-error {
-  display: flex; align-items: center; gap: 12px;
-  padding: 16px 18px;
-  font-size: 13px; color: var(--text-secondary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.tag-retry {
-  margin-left: auto;
-  padding: 5px 14px;
-  font-family: inherit; font-size: 12px; font-weight: 600;
-  color: var(--text); background: var(--card);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  cursor: pointer; transition: border-color var(--transition), color var(--transition);
-}
-.tag-retry:hover { border-color: var(--primary); color: var(--primary); }
 
 /* ── Today's Schedule ── */
 .today-grid {

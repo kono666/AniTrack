@@ -21,15 +21,23 @@
 
     <!-- Right: Nav links + User -->
     <div class="navbar-links">
-      <!-- 这两个图标只在窄屏是"内容": ≤768px 时下面的 .nav-link-label 被隐藏,
+      <!-- 这三个图标只在窄屏是"内容": ≤768px 时下面的 .nav-link-label 被隐藏,
            图标成了唯一能说明这一项是什么的东西, 所以它们不能按"标签前面的
            装饰"删掉。宽屏下它们确实只是装饰 —— 但同一个元素在两个断点下身份
            不同, 删了没法在窄屏补回来。
-           AI 助手用 PhRobot: 和 ChatMessage 里助手头像用的是同一个图标 ——
+           AI 助手用 PhRobot: 和 ChatMessage 里助手头像用的是同一个图标。
+           分类用 PhTag: 和 EmptyState 的 tag 空态用的是同一个图标 ——
            站内两处指同一件事时用同一个形状, 比换个更漂亮的火花重要。 -->
       <router-link to="/" class="nav-link" exact-active-class="nav-link--active" @click="closeMenu">
         <PhCompass :size="18" weight="bold" />
         <span class="nav-link-label">发现</span>
+      </router-link>
+      <!-- 分类原先挤在首页最底部, 现在搬成了独立页, 这里成了它唯一的入口。
+           用 active-class 不用 exact-active-class: /tags 没有子路径, 与 AI 助手
+           同一档; 「发现」那个 exact 是给 to="/"(所有路径的前缀)用的。 -->
+      <router-link to="/tags" class="nav-link" active-class="nav-link--active" @click="closeMenu">
+        <PhTag :size="18" weight="bold" />
+        <span class="nav-link-label">分类</span>
       </router-link>
       <router-link to="/assistant" class="nav-link" active-class="nav-link--active" @click="closeMenu">
         <PhRobot :size="18" weight="bold" />
@@ -95,6 +103,7 @@ import { useUserStore } from '../stores/user'
    小尺寸用粗一档、大尺寸用细一档, 和 c71 定空态图标时(40px 用 light)是同一条规则。
    （原先这里还有个 PhSparkle 给 AI 助手用 —— 火花是 AI 产品的陈词滥调, 已换掉。）*/
 import PhCompass from '@icons/PhCompass.vue.mjs'
+import PhTag from '@icons/PhTag.vue.mjs'
 import PhMagnifyingGlass from '@icons/PhMagnifyingGlass.vue.mjs'
 import PhGear from '@icons/PhGear.vue.mjs'
 import PhUserCircle from '@icons/PhUserCircle.vue.mjs'

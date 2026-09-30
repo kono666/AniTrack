@@ -45,6 +45,13 @@ describe('标签页标题', () => {
     expect(document.title).toBe('AI 助手 · AniTrack')
   })
 
+  it('分类页', async () => {
+    // 从首页搬出来的独立页, 导航栏是它唯一的入口 —— 它要是没挂上路由或漏了
+    // meta.title, 用户点进去会看到站名兜底的那个标题, 而页面本身照常渲染
+    await router.push('/tags')
+    expect(document.title).toBe('分类浏览 · AniTrack')
+  })
+
   it('被守卫重定向掉的那一页, 标题不会先闪一下', async () => {
     // 未登录访问 /profile: 真的进去的是登录页. 标题必须是「登录」——
     // 用 beforeEach 改名的话这里会先写成「个人中心」再被覆盖, 标签页上闪一下

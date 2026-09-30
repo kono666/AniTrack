@@ -102,7 +102,6 @@ export const getCalendar = () => api.get('/bangumi/calendar')
 export const getRanking = (sort = 'rank', limit = 20) =>
   api.get('/bangumi/ranking', { params: { sort, limit } })
 export const getTags = () => api.get('/bangumi/tags')
-export const getByTag = (tag) => api.get('/bangumi/by-tag', { params: { tag } })
 
 // ========== 追番管理 ==========
 export const saveTracking = (data) => api.post('/track', data)

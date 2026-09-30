@@ -5,14 +5,15 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 vi.mock('../../api', () => ({
   getRanking: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   getCalendar: vi.fn(() => Promise.resolve({ data: { data: [] } })),
+  // 分类浏览整块搬去了 /tags, Home 已经不再 import `getTags` —— 这里**故意**
+  // 留着它当哨兵: 一个"不该被调用"的桩, 才能断言它没被调用. 工厂里删掉它的话
+  // 那条断言就无从写起(而 Home 一旦把它 import 回来, 构建也不会报错).
   getTags: vi.fn(() => Promise.resolve({ data: { data: [] } })),
-  // 分类浏览改走 /filter(它返回 {list,total,page}, 有真实 total 才谈得上翻页)
-  getFiltered: vi.fn(() => Promise.resolve({ data: { data: { list: [], total: 0 } } })),
 }))
 
 import Home from '../Home.vue'
-import { getRanking, getCalendar, getTags, getFiltered } from '../../api'
-import { resetHomeCache } from '../../utils/homeCache'
+import { getRanking, getCalendar, getTags } from '../../api'
+import { homeCache, resetHomeCache } from '../../utils/homeCache'
 
 /**
  * 首页缓存的 TTL 只有在缓存对象**活得比组件实例久**的时候才谈得上生效.
@@ -62,6 +63,21 @@ describe('首页缓存', () => {
     second.unmount()
   })
 
+  it('首页不再请求标签, 缓存载荷里也没有它', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    // 分类区搬去 /tags 之后, 首屏少一个请求. 这条断言是这条改动**唯一**的守卫:
+    // 仓内没有 homeCache.test.js, 载荷收窄这件事没有别的地方看着
+    expect(getTags).not.toHaveBeenCalled()
+
+    // 两半必须同时改: 写缓存的那半若还塞着 tags, 读缓存的那半会拿到它;
+    // 只改一侧就是 undefined 静默流传. 钉形状比钉某一侧安全
+    expect(Object.keys(homeCache.data).sort()).toEqual(['hero', 'popular', 'recent', 'today'])
+
+    wrapper.unmount()
+  })
+
   it('过了 5 分钟 TTL 就重新请求', async () => {
     // 只伪造 Date, 不伪造定时器 —— flushPromises 自己要用定时器
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -102,13 +118,14 @@ describe('首页缓存', () => {
 /**
  * 首页三类入口的键盘可达性.
  *
- * 改前 today-card / hs-card / tag-chip 全都只有 @click: 它们是 div 和 span,
- * tab 键直接跳过去, 读屏软件也不说这是能按的东西. 鼠标用户永远看不出这个
- * 问题, 所以只能靠断言把 role / tabindex / 按键这三件事钉住.
+ * 改前 today-card / hs-card 全都只有 @click: 它们是 div 和 span, tab 键直接
+ * 跳过去, 读屏软件也不说这是能按的东西. 鼠标用户永远看不出这个问题, 所以只能
+ * 靠断言把 role / tabindex / 按键这三件事钉住.
  *
  * 题外话: interactions.css 里那份 :focus-visible 名单**早就**把 .anime-card、
  * .tag-chip 这些类写进去了 —— 也就是说当初是打算给它们做焦点态的,
  * 只是一直没有元素能被 focus, 那条规则从写下那天起就没匹配过任何东西.
+ * (.tag-chip 那一半现在归 Tags.vue 管了, 见 Tags.test.js.)
  */
 
 const TODAY_ITEM = { id: 501, nameCn: '今日番', name: 'Today', images: { medium: 'a.jpg' } }
@@ -146,8 +163,6 @@ describe('首页卡片的键盘操作', () => {
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
     getRanking.mockResolvedValue({ data: { data: [HS_ITEM] } })
     getCalendar.mockResolvedValue(calendarForToday([TODAY_ITEM]))
-    getTags.mockResolvedValue({ data: { data: [{ name: '治愈', count: 3 }] } })
-    getFiltered.mockResolvedValue({ data: { data: { list: [], total: 0 } } })
 
     await router.push('/')
     await router.isReady()
@@ -186,19 +201,15 @@ describe('首页卡片的键盘操作', () => {
     expect(router.currentRoute.value.path).toBe('/anime/502')
   })
 
-  it('分类标签能选中, 回车即切换分类', async () => {
+  it('首页没有分类区了 —— 整块搬去了 /tags', async () => {
     const wrapper = mountHome()
     await flushPromises()
 
-    const chips = wrapper.findAll('.tag-chip')
-    expect(chips[0].text()).toBe('全部')
-    expect(chips[0].attributes('tabindex')).toBe('0')
-    expect(chips[1].attributes('role')).toBe('button')
-
-    await chips[1].trigger('keydown.enter')
-    await flushPromises()
-    // 回车要真的等于点了一下, 而不只是把焦点停在那儿
-    expect(getFiltered).toHaveBeenCalledWith(expect.objectContaining({ tag: '治愈', page: 1 }))
+    // 键盘可达性那几条跟着标签一起搬走了(见 Tags.test.js), 这里留下的是"搬干净了"
+    // 本身: 首页**不该**再有任何 chip. 半搬半留的话, 同一个筛选会有两个入口,
+    // 而首页那个仍然会把页面拽回顶部
+    expect(wrapper.find('.tag-chip').exists()).toBe(false)
+    expect(wrapper.find('.tag-filter').exists()).toBe(false)
   })
 
   it('按空格不会把页面往下滚(默认行为被拦掉了)', async () => {
