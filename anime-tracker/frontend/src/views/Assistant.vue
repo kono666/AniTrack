@@ -117,7 +117,7 @@
           <button
             v-else
             class="composer-btn"
-            :disabled="!input.trim() || !canSend"
+            :disabled="!input.trim() || !canSend || overLimit"
             aria-label="发送"
             title="发送"
             @click="send()"
@@ -127,6 +127,16 @@
         </div>
         <div class="composer-foot">
           <span>Enter 发送 · Shift+Enter 换行</span>
+          <!-- 有输入才出现: 空着的时候不需要提醒"还剩 1000 字".
+               role=status + aria-live: 接近上限/超限时读屏也能听到, 否则这个数
+               只对看得见的人存在 -->
+          <span
+            v-if="inputLength > 0"
+            class="composer-count"
+            :class="{ over: overLimit }"
+            role="status"
+            aria-live="polite"
+          >{{ overLimit ? `超出 ${inputLength - MAX_INPUT} 字` : `剩余 ${MAX_INPUT - inputLength} 字` }}</span>
           <span v-if="!canSend" class="composer-blocked">{{ blockedReason }}</span>
         </div>
       </footer>
@@ -178,6 +188,24 @@ const quotaLow = computed(() => dailyLimit.value > 0 && remaining.value <= daily
 const exhausted = computed(() => dailyLimit.value > 0 && remaining.value === 0)
 const canSend = computed(() => !exhausted.value)
 const blockedReason = computed(() => (exhausted.value ? '今日体验额度已用完, 明天再来' : ''))
+
+/**
+ * 输入长度上限.
+ *
+ * 与后端对齐: LlmProperties.maxInputLength = 1000 (application.yml 里也是 1000),
+ * 校验在 AgentController 里, 超了直接被拒.
+ *
+ * 前端这里也 trim() —— Java 的 String.length() 与 JS 的 .length 都数 UTF-16 码元
+ * (emoji 这种代理对两边都算 2), 所以同一个串两边的计数**逐位相同**:
+ * 这个「剩余 N 字」不是估算, 是后端会看到的那个数.
+ *
+ * 刻意**不加** textarea 的 maxlength 属性: 它会静默截断粘贴进来的内容 ——
+ * 用户粘一段超长的 prompt, 发现少了一截却没有任何提示, 比不让发更糟.
+ * 这里给的是"看得见的计数 + 超限时不让发".
+ */
+const MAX_INPUT = 1000
+const inputLength = computed(() => input.value.trim().length)
+const overLimit = computed(() => inputLength.value > MAX_INPUT)
 
 const placeholder = computed(() => {
   if (exhausted.value) return blockedReason.value
@@ -255,7 +283,9 @@ function localHistory() {
 
 async function send(preset) {
   const text = (preset ?? input.value).trim()
-  if (!text || busy.value || !canSend.value) return
+  // 长度判的是 **text**(这次真正要发的串)而不是 input: 输入框里可能躺着一份
+  // 超长的草稿, 而预设问句都是短的 —— 判 input 会让草稿把上面的建议按钮一起锁死.
+  if (!text || busy.value || !canSend.value || text.length > MAX_INPUT) return
 
   input.value = ''
   resetInputHeight()
@@ -269,7 +299,8 @@ async function send(preset) {
     streaming: true,
   })
   messages.push(assistant)
-  scrollToBottom()
+  // 用户自己刚发了一条 → 强制到底, 哪怕他发之前正在上翻看历史
+  scrollToBottom(true)
 
   busy.value = true
   controller = new AbortController()
@@ -304,6 +335,7 @@ async function send(preset) {
           step.cards = data.cards || []
         }
       }
+      // 每帧都调, 所以这里最不能是"无条件滚" —— 用户上翻时会被持续拽回底部
       scrollToBottom()
     }, controller.signal)
 
@@ -334,6 +366,7 @@ async function send(preset) {
     assistant.streaming = false
     busy.value = false
     controller = null
+    // 不 force: 收流时用户多半还在刚才的位置, 不该被这一下弹到底部
     scrollToBottom()
   }
 }
@@ -369,7 +402,8 @@ async function openConversation(id) {
     conversationId.value = id
     if (detail.persona) persona.value = detail.persona
     sidebarOpen.value = false
-    scrollToBottom()
+    // 刚打开一个会话 → 从最新一条看起
+    scrollToBottom(true)
   } catch (e) {
     console.error('打开会话失败', e)
   }
@@ -397,7 +431,37 @@ function resetInputHeight() {
   if (inputEl.value) inputEl.value.style.height = 'auto'
 }
 
-function scrollToBottom() {
+/** 判定「已经贴在底部」的余量(px) */
+const STICK_THRESHOLD = 100
+
+/**
+ * 是否已经贴底.
+ *
+ * ⚠️ 必须在**新内容进 DOM 之前**同步读. 一旦挪到 nextTick 之后, 新消息已经把
+ * scrollHeight 撑大, 读数永远超阈值 —— 于是「贴底才跟着滚」退化成「永远不跟着滚」,
+ * 表现是发完消息页面纹丝不动.
+ *
+ * el 还不存在时当贴底: 首次打开就是这种情况(内容刚挂上去, 本来就该在底部).
+ */
+function isNearBottom() {
+  const el = scrollEl.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_THRESHOLD
+}
+
+/**
+ * 滚到底.
+ *
+ * @param {boolean} force 无视当前位置强制到底. 只给「用户自己发了一条」与
+ *   「打开一个会话」用 —— 那两下本来就是"跳到最新"的意图.
+ *
+ * 每帧 SSE 与收流后那两次**不能** force: 用户往上翻看历史时, 一个 token 一个 token
+ * 地把他拽回底部, 正是这一条要修的 bug(改前这 4 处全都是无条件的).
+ *
+ * 判断刻意放在 nextTick **之前** —— 理由见 isNearBottom 上面那段.
+ */
+function scrollToBottom(force = false) {
+  if (!force && !isNearBottom()) return
   nextTick(() => {
     if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
   })

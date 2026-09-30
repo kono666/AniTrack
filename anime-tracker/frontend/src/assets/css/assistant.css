@@ -166,7 +166,11 @@
 .persona-btn.disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── 消息区 ── */
-.chat-scroll { flex: 1; overflow-y: auto; padding: 22px 24px; scroll-behavior: smooth; }
+/* 刻意**没有** scroll-behavior: smooth —— 流式回答是每帧一次 scrollTop 赋值,
+   smooth 会让这些赋值各自变成一段动画、互相打断; 更要紧的是动画途中读到的
+   scrollTop 是中间值, "用户是否还贴在底部"那个判断会读到假的, 于是要么该跟不跟、
+   要么不该跟却跟着跑. 即时赋值才是这里要的. */
+.chat-scroll { flex: 1; overflow-y: auto; padding: 22px 24px; }
 
 .chat-msg { display: flex; gap: 10px; margin-bottom: 18px; }
 .chat-msg--user { flex-direction: row-reverse; }
@@ -468,13 +472,19 @@
 .composer-foot {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  /* 三个子元素(提示/字数/禁用原因)在窄屏上会挤, 允许换行比让它们互相叠字好 */
+  flex-wrap: wrap;
+  gap: 4px 12px;
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 7px;
   padding: 0 2px;
 }
 .composer-blocked { color: var(--danger); }
+/* 字数提示. 平时与提示语同色(不重要), 超限时用 --danger —— 那一瞬间它不再是
+   "信息"而是"发不出去的原因", 与右边的 .composer-blocked 同一语义 */
+.composer-count { margin-left: auto; }
+.composer-count.over { color: var(--danger); font-weight: 600; }
 
 /* ── 响应式 ── */
 @media (max-width: 860px) {

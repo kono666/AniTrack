@@ -177,11 +177,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import PhStar from '@icons/PhStar.vue.mjs'
 import { getRanking, getCalendar, getTags, getFiltered } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { strParam, pageParam } from '../utils/query'
+import { useLatestOnly } from '../composables/useLatestOnly'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
 import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
@@ -197,6 +199,9 @@ import EmptyState from '../components/EmptyState.vue'
 import Pagination from '../components/Pagination.vue'
 
 const $router = useRouter()
+const route = useRoute()
+/** 分类页的请求令牌: 只认最后一次, 见 composables/useLatestOnly.js */
+const tagRequest = useLatestOnly()
 const loading = ref(true)
 const heroItems = ref([])
 const popularList = ref([])
@@ -244,6 +249,10 @@ const todayLabel = computed(() => {
  * 区别只是改前封顶 200 条、现在有真实 total.
  */
 async function loadTagPage() {
+  // 令牌要在发请求**之前**取. 快速连点时会有多个请求同时在飞, 而谁先回来不确定 ——
+  // 没有这个, 先发的那次后到就会把界面盖成上一个筛选条件的内容(见下面对 isCurrent
+  // 的两处判断).
+  const token = tagRequest.begin()
   tagError.value = ''
   try {
     const res = await getFiltered({
@@ -252,10 +261,15 @@ async function loadTagPage() {
       page: tagPage.value,
       limit: pageSize,
     })
+    // 过期: 后面每一行写的都是别人的状态, 一行都不能执行
+    if (!tagRequest.isCurrent(token)) return
     const body = res.data.data || {}
     tagItems.value = body.list || []
     tagTotal.value = body.total || 0
   } catch (e) {
+    // 过期那次的失败同样不能写 tagError —— 否则界面上会留下一条属于上一个
+    // 筛选条件的报错, 而它对应的请求早就没人关心了
+    if (!tagRequest.isCurrent(token)) return
     // 改前这里只有 console.error: 页面会停在"这个分类没有数据"那个空态上,
     // 把一次加载失败说成了一句事实
     tagError.value = loadErrorMessage(e, '加载分类')
@@ -264,25 +278,91 @@ async function loadTagPage() {
   }
 }
 
+/**
+ * 把当前分类与页码写进 URL.
+ *
+ * 为什么筛选状态必须进 URL: App.vue 里 router-view 的 key 是 route.path, 路径一变
+ * 组件就重建 —— 从首页点进详情再按后退, Home 是**重新挂载**的. 筛选只活在组件里
+ * 的话, 那时它已经是一个全新的「未筛选」页了. 这与 Search.vue 的 syncQuery 是同一个
+ * 理由(那边早就把 q/page 写进了 URL, 这里一直漏着).
+ *
+ * 默认值不写进去(空 tag / 第 1 页): ?tag=&page=1 是噪音, 与「没有这个参数」等价,
+ * 写进去只会让地址栏变长、让分享出去的链接看起来比实际更特殊.
+ * 用 replace 不用 push: 换分类/翻页不该在历史里堆层, 否则从第 5 页退回未筛选
+ * 要按好几次后退.
+ */
+function syncTagQuery() {
+  const next = { ...route.query }
+  if (selectedTag.value) next.tag = selectedTag.value
+  else delete next.tag
+  if (tagPage.value > 1) next.page = String(tagPage.value)
+  else delete next.page
+  if (route.query.tag === next.tag && route.query.page === next.page) return
+  $router.replace({ query: next })
+}
+
+/**
+ * 反向: URL 变了 → 读回来再取数. 后退/前进走的是这条路.
+ *
+ * 两处刻意的地方:
+ *   · tag 与 page 合成**一个** watch. 拆成两个的话,「换个分类同时回到第 1 页」
+ *     会让两条都触发, 发两次请求.
+ *   · 开头的早退判断是必须的 —— 我们自己调 syncTagQuery 写 URL 同样会让这个 watch
+ *     触发, 不判断就变成「点一次 chip 发两次请求」. 判据是「URL 解析出来的值与当前
+ *     ref 是否一致」: 写之前 ref 已经先改好了, 所以那次一定一致.
+ *     这与改前那句「刻意不用 watch(tagPage)」防的是同一件事 —— 当时防的是页码 ref,
+ *     现在防的是 URL, 换了个对象而已, 歧义的形状没变.
+ */
+watch(
+  () => [route.query.tag, route.query.page],
+  ([rawTag, rawPage]) => {
+    const tag = strParam(rawTag)
+    const page = pageParam(rawPage)
+    if (tag === selectedTag.value && page === tagPage.value) return
+    selectedTag.value = tag
+    tagPage.value = page
+    loadTagPage()
+  },
+)
+
+/** 先改 ref → 再写 URL → 再取数. 顺序不能换: 写 URL 触发的那个 watch 靠
+ *  "ref 已经等于 URL"来早退, ref 晚一步改就会多打一次请求. */
 async function selectTag(tag) {
   selectedTag.value = tag
   tagPage.value = 1
+  syncTagQuery()
   await loadTagPage()
 }
 
 /**
  * 翻页.
  *
- * 这里刻意**不用 watch(tagPage)**: selectTag 也要把页码复位成 1, 而 watch 分不清
- * "复位导致的"和"用户点的" —— 从第 3 页换分类时两条路都会触发, 于是发两次请求.
- * 让每个改写 tagPage 的地方自己决定要不要取数, 这个歧义就不存在了.
+ * 这里仍然**不用 watch(tagPage)**(改前那段注释的结论保留): selectTag 也要把页码
+ * 复位成 1, 而 watch 分不清"复位导致的"和"用户点的", 从第 3 页换分类时两条路都会
+ * 触发, 于是发两次请求. 让每个改写 tagPage 的地方自己决定要不要取数, 歧义就不存在.
  */
 function changeTagPage(page) {
   tagPage.value = page
+  syncTagQuery()
   loadTagPage()
 }
 
-onMounted(loadHome)
+/**
+ * 首访: 先把 URL 里的筛选收下, 再一并加载.
+ *
+ * 改前这里是 `onMounted(loadHome)` —— **分类区在首访时根本没有初次加载**:
+ * loadTagPage 只被 selectTag / changeTagPage / 重试按钮调用过, 于是模板里那句
+ * `v-else-if="tagItems.length > 0"` 首访必然为假, 分类区只剩标题和一排 chip;
+ * 而 v-else-if="selectedTag" 的空态也出不来(此时 selectedTag 是空串), 所以连
+ * 一句「暂无数据」都没有. 用户必须先点一下 chip 才知道那里会出东西.
+ *
+ * 两件事可以并行: loadTagPage 不依赖 tags 列表 —— tag 只是原样传给 /filter 的字符串.
+ */
+onMounted(async () => {
+  selectedTag.value = strParam(route.query.tag)
+  tagPage.value = pageParam(route.query.page)
+  await Promise.all([loadHome(), loadTagPage()])
+})
 
 // 单独取名(原来是直接写在 onMounted 里的匿名函数)是为了让错误态上的「重试」
 // 有东西可调 —— 重试就是把这一次加载原样再跑一遍

@@ -2,15 +2,18 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { loadStoredUser } from '../utils/userStorage'
 import { rememberPath } from '../utils/loginRedirect'
 
+// 每条路由的 meta.title 都会被 afterEach 拼成 document.title.
+// 它是**页面名**不是完整标题 —— 后缀「· AniTrack」由 afterEach 统一加,
+// 免得 11 条路由各写一遍站点名、改站名时漏掉几条.
 const routes = [
-  { path: '/', name: 'Home', component: () => import('../views/Home.vue') },
-  { path: '/search', name: 'Search', component: () => import('../views/Search.vue') },
-  { path: '/anime/:id', name: 'AnimeDetail', component: () => import('../views/AnimeDetail.vue'), props: true },
+  { path: '/', name: 'Home', component: () => import('../views/Home.vue'), meta: { title: '首页' } },
+  { path: '/search', name: 'Search', component: () => import('../views/Search.vue'), meta: { title: '搜索' } },
+  { path: '/anime/:id', name: 'AnimeDetail', component: () => import('../views/AnimeDetail.vue'), props: true, meta: { title: '番剧详情' } },
   // AI 助手刻意不要求登录: 访客能直接对话是公网 Demo 的重点,
   // 而服务端只会把公开工具暴露给访客, 不存在越权的可能
-  { path: '/assistant', name: 'Assistant', component: () => import('../views/Assistant.vue') },
-  { path: '/login', name: 'Login', component: () => import('../views/Login.vue') },
-  { path: '/register', name: 'Register', component: () => import('../views/Register.vue') },
+  { path: '/assistant', name: 'Assistant', component: () => import('../views/Assistant.vue'), meta: { title: 'AI 助手' } },
+  { path: '/login', name: 'Login', component: () => import('../views/Login.vue'), meta: { title: '登录' } },
+  { path: '/register', name: 'Register', component: () => import('../views/Register.vue'), meta: { title: '注册' } },
 
   // ── 需要登录的路由 ──────────────────────────────
   {
@@ -21,7 +24,7 @@ const routes = [
     path: '/profile',
     name: 'Profile',
     component: () => import('../views/Profile.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, title: '个人中心' },
   },
 
   // ── 需要管理员权限的路由 ──────────────────────────
@@ -29,19 +32,19 @@ const routes = [
     path: '/admin',
     name: 'AdminDashboard',
     component: () => import('../views/admin/Dashboard.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, title: '后台概览' },
   },
   {
     path: '/admin/users',
     name: 'AdminUsers',
     component: () => import('../views/admin/Users.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, title: '用户管理' },
   },
   {
     path: '/admin/reviews',
     name: 'AdminReviews',
     component: () => import('../views/admin/Reviews.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, title: '评论管理' },
   },
 
   // ── 兜底: 必须放在最后 ────────────────────────────
@@ -59,13 +62,78 @@ const routes = [
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/NotFound.vue'),
+    meta: { title: '页面不存在' },
   },
 ]
+
+/** 页面过渡时长读不到时的兜底值, 与 tokens.css 的 --dur 同值 */
+const PAGE_TRANSITION_FALLBACK_MS = 200
+/** 过渡结束后再多等一点, 让新页面把内容铺进 DOM 之后再滚 */
+const TRANSITION_SLACK_MS = 40
+
+/**
+ * 读 tokens.css 的 --dur(页面切换过渡时长).
+ *
+ * 必须**调用时**读, 不能模块加载时读成一个常量: main.js 里 `./router` 先于
+ * `./assets/css/style.css` 求值, 那一刻样式表还没注入, 读到的是空串.
+ * 读不到就用兜底值 —— jsdom 里也走这条(getComputedStyle 不解析自定义属性),
+ * 单测因此可以按 200ms 来打点.
+ */
+function pageTransitionMs() {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--dur').trim()
+  const n = Number.parseFloat(raw) // '200ms' -> 200
+  return Number.isFinite(n) ? n : PAGE_TRANSITION_FALLBACK_MS
+}
+
+/**
+ * 后退/前进时把滚动位置放回去.
+ *
+ * 改前这里写死 `{ top: 0 }` —— 后退也是回顶, 于是「首页翻到第 3 页 → 点进详情 →
+ * 按后退」回到的是首页顶部, 用户滚到哪儿完全不记得.
+ *
+ * 三件事让它不是一个"一行就能改"的改动:
+ *
+ * 一、必须**延迟到页面过渡结束之后**再滚.
+ *   vue-router 的 handleScroll 是 `nextTick().then(() => scrollBehavior(...))`
+ *   (vue-router.esm-browser.js 的 handleScroll), 也就是路由一变就在下一个微任务
+ *   里滚. 而 App.vue 是 `<Transition mode="out-in">` —— 新页面要等旧页面走完
+ *   --dur(200ms)才挂载. 所以那一刻 DOM 里**还是旧页面**: 滚动作用在旧页面的高度
+ *   上, 紧接着旧页面卸载、高度塌掉, scrollTop 被夹回 0, 而且不会再补一次
+ *   (getSavedScrollPosition 读完就 delete, 只有一次机会). 直接 return
+ *   savedPosition 在本项目里等于没写 —— 这是实测过 vue-router 源码才敢下的结论.
+ *   返回 Promise 把滚动推迟过去, 顺便白拿一个好处: handleScroll 最后有
+ *   `to === currentRoute.value &&` 的判断, 等待期间用户又导航了, 这次滚动会自动
+ *   被丢掉, 不会滚错页面.
+ *
+ * 二、behavior 必须是 'instant', 不能是 'auto'.
+ *   'auto' 的意思是"按 CSS 的 scroll-behavior 来", 而 base.css 上写着
+ *   `html { scroll-behavior: smooth }` —— 用 'auto' 等于让它平滑滚动, 而这段
+ *   平滑动画正好和页面切换撞在一起. 'instant' 才是"立刻到那儿".
+ *   回顶那条**刻意不带 behavior**(与改动前逐字一致), 那是既有的观感, 本轮不动.
+ *
+ * 三、浏览器自带的恢复已经被关掉了.
+ *   createRouter 见到 options.scrollBehavior 就会把 history.scrollRestoration
+ *   设成 'manual'(vue-router.esm-browser.js 里那一行), 也就是说这套是"全有或全无",
+ *   设了就得自己负责放回去.
+ *
+ * ⚠️ 已知落差(接受, 见计划取舍): 延迟只保证"页面过渡"结束, 不保证"数据"到齐.
+ * 首页冷缓存 / 搜索结果页要等各自的请求回来才会变高, 那时文档还不够高, 位置会被
+ * 钳到当时的底部. 缓存命中的首页、以及本来就在底部附近的后退是准的.
+ */
+export function scrollBehavior(to, from, savedPosition) {
+  if (!savedPosition) return { top: 0 }
+  return new Promise((resolve) => {
+    setTimeout(
+      () => resolve({ ...savedPosition, behavior: 'instant' }),
+      pageTransitionMs() + TRANSITION_SLACK_MS,
+    )
+  })
+}
 
 const router = createRouter({
   history: createWebHistory(),
   routes,
-  scrollBehavior() { return { top: 0 } },
+  scrollBehavior,
 })
 
 /**
@@ -108,6 +176,28 @@ router.beforeEach((to, from, next) => {
  */
 router.afterEach((to) => {
   rememberPath(to.fullPath)
+  setDocumentTitle(to)
 })
+
+/** 站点名. 只在两处出现: 这里, 以及 index.html 里那条首屏兜底 —— 改站名要一起改 */
+const SITE_NAME = 'AniTrack - 动漫追番'
+
+/**
+ * 把当前路由的 meta.title 写进标签页标题.
+ *
+ * 改前整站只有 index.html 里那条写死的标题: 从首页点到详情再点进助手, 浏览器
+ * 标签页、历史记录、书签**永远是同一句话**, 开三个标签分不清哪个是哪个.
+ *
+ * 没有 meta.title 就退回站点名, 而不是拼一个空串出来 —— 后者会让标签页标题
+ * 变成光秃秃的「 · AniTrack」, 比不写还难认.
+ *
+ * 用 afterEach 而不是 beforeEach: 只给**真的进去了**的页面改名. beforeEach 会在
+ * 被守卫重定向掉的那次跳转上先改一遍, 于是标签页会闪一下没去成的那一页的名字
+ * (记 rememberPath 用的是同一个理由).
+ */
+function setDocumentTitle(to) {
+  const title = to.meta?.title
+  document.title = title ? `${title} · AniTrack` : SITE_NAME
+}
 
 export default router

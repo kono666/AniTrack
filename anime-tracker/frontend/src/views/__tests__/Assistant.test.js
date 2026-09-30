@@ -335,3 +335,197 @@ describe('Assistant page', () => {
     await flushPromises()
   })
 })
+
+/**
+ * 输入长度上限.
+ *
+ * 上限是后端的(LlmProperties.maxInputLength = 1000, AgentController 里校验),
+ * 前端改前既不拦也不说: 用户写完一大段、点发送, 才知道被拒了.
+ *
+ * 这里刻意**没有**用 textarea 的原生 maxlength —— 它会静默截断粘贴进来的内容,
+ * 用户看见少了一截却没有任何提示, 比不让发更糟. 所以下面还要钉住"输入框本身
+ * 没有被禁用": 超限的人必须还能把内容删回合规长度.
+ */
+describe('Assistant 输入长度', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    getAgentInfo.mockResolvedValue({ data: { code: 200, data: INFO } })
+    getConversations.mockResolvedValue({ data: { code: 200, data: [] } })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /** 一个不自动跑完的流: 把 onEvent 抓在手里, 想什么时候推一帧就什么时候推 */
+  function openStream() {
+    let emit = null
+    let release = null
+    streamChat.mockImplementation(async (payload, onEvent) => {
+      emit = onEvent
+      await new Promise(r => { release = r })
+      return { answer: '好了', rounds: 1 }
+    })
+    return {
+      emit: (name, data) => emit?.(name, data),
+      release: () => release?.(),
+    }
+  }
+
+  /**
+   * 给 .chat-scroll 装上假的滚动尺寸.
+   *
+   * jsdom 不做布局: scrollHeight / clientHeight 恒为 0, 而 scrollTop 在原型上
+   * 是个只读的口子. 三个都定义到实例上, 才谈得上"用户在中间某个位置".
+   */
+  function fakeScroll(wrapper, { height = 1000, view = 400 } = {}) {
+    const el = wrapper.find('.chat-scroll').element
+    let top = 0
+    Object.defineProperty(el, 'scrollHeight', { value: height, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: view, configurable: true })
+    Object.defineProperty(el, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v) => { top = v },
+    })
+    return {
+      get top() { return top },
+      set top(v) { top = v },
+    }
+  }
+
+  it('没输入时不显示字数', async () => {
+    const wrapper = await mountPage()
+    expect(wrapper.find('.composer-count').exists()).toBe(false)
+  })
+
+  it('1000 字正好能发, 显示「剩余 0 字」', async () => {
+    scriptedStream([], { answer: '好', rounds: 1 })
+    const wrapper = await mountPage()
+
+    await wrapper.find('.composer-input').setValue('あ'.repeat(1000))
+    await flushPromises()
+
+    expect(wrapper.find('.composer-count').text()).toBe('剩余 0 字')
+    expect(wrapper.find('.composer-btn').attributes('disabled')).toBeUndefined()
+
+    await wrapper.find('.composer-btn').trigger('click')
+    await flushPromises()
+
+    expect(streamChat).toHaveBeenCalledTimes(1)
+    expect(streamChat.mock.calls[0][0].message).toHaveLength(1000)
+  })
+
+  it('超过 1000 字: 说清超了多少, 并且发不出去', async () => {
+    scriptedStream([], { answer: '好', rounds: 1 })
+    const wrapper = await mountPage()
+
+    await wrapper.find('.composer-input').setValue('あ'.repeat(1001))
+    await flushPromises()
+
+    const count = wrapper.find('.composer-count')
+    expect(count.text()).toBe('超出 1 字')
+    // 超限的那一刻它不再是"信息", 而是"发不出去的原因" —— 所以与禁用原因同色
+    expect(count.classes()).toContain('over')
+    expect(wrapper.find('.composer-btn').attributes('disabled')).toBeDefined()
+
+    await wrapper.find('.composer-btn').trigger('click')
+    await flushPromises()
+    expect(streamChat).not.toHaveBeenCalled()
+  })
+
+  it('超限时按回车也不发', async () => {
+    const wrapper = await mountPage()
+
+    await wrapper.find('.composer-input').setValue('あ'.repeat(1001))
+    await wrapper.find('.composer-input').trigger('keydown.enter')
+    await flushPromises()
+
+    expect(streamChat).not.toHaveBeenCalled()
+  })
+
+  it('超限时输入框本身没被禁用 —— 否则用户删不回合规长度', async () => {
+    const wrapper = await mountPage()
+
+    await wrapper.find('.composer-input').setValue('あ'.repeat(1001))
+    await flushPromises()
+
+    // canSend 只管额度. 把 overLimit 并进 canSend 会连带把 :disabled 挂到 textarea 上,
+    // 那一刻用户就被困在超限状态里了: 发不出去, 也改不回来
+    expect(wrapper.find('.composer-input').attributes('disabled')).toBeUndefined()
+  })
+
+  it('草稿超长时, 上面的预设问句仍然发得出去', async () => {
+    scriptedStream([])
+    const wrapper = await mountPage()
+
+    await wrapper.find('.composer-input').setValue('あ'.repeat(1001))
+    await flushPromises()
+
+    await wrapper.findAll('.suggestion')[0].trigger('click')
+    await flushPromises()
+
+    // 长度判的是**这次真正要发的串**, 不是输入框里那份草稿 ——
+    // 判 input 的话, 一份躺着的草稿会把上面的建议按钮一起锁死
+    expect(streamChat).toHaveBeenCalledTimes(1)
+    expect(streamChat.mock.calls[0][0].message).toBe('最近有什么高分番推荐？')
+  })
+
+  // ========== 流式回答时的滚动 ==========
+  //
+  // 改前 scrollToBottom() 在 4 处被**无条件**调用, 其中一处在每帧 SSE 的回调里:
+  // 用户往上翻看历史时, 页面被一个 token 一个 token 地拽回底部, 想翻回去都翻不了.
+
+  it('往上翻看历史时, 新事件不会把页面拽回底部', async () => {
+    const stream = openStream()
+    const wrapper = await mountPage()
+    const scroll = fakeScroll(wrapper)
+
+    await typeAndSend(wrapper)
+    scroll.top = 0 // 用户自己往上翻
+
+    stream.emit('tool_call', { round: 1, tool: 'get_ranking', args: {} })
+    await flushPromises()
+
+    expect(scroll.top).toBe(0)
+
+    stream.release()
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('本来就贴底时, 新内容继续跟着走', async () => {
+    // 上一条的对照: 不能为了"别拽用户"变成"永远不跟着滚" ——
+    // 那样发完消息页面纹丝不动, 看起来像坏了
+    const stream = openStream()
+    const wrapper = await mountPage()
+    const scroll = fakeScroll(wrapper)
+
+    await typeAndSend(wrapper)
+    scroll.top = 960 // 1000 - 960 - 400 远小于阈值 = 还贴着底
+
+    stream.emit('tool_call', { round: 1, tool: 'get_ranking', args: {} })
+    await flushPromises()
+
+    expect(scroll.top).toBe(1000)
+
+    stream.release()
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('用户自己发一条时, 即使正在上翻也强制到底', async () => {
+    scriptedStream([], { answer: '好了', rounds: 1 })
+    const wrapper = await mountPage()
+    const scroll = fakeScroll(wrapper)
+
+    scroll.top = 0
+    await typeAndSend(wrapper)
+
+    // 发消息是"跳到最新"的明确意图, 不该被那个阈值挡住
+    expect(scroll.top).toBe(1000)
+    wrapper.unmount()
+  })
+})
