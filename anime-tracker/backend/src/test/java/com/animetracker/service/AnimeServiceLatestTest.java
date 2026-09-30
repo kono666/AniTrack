@@ -10,9 +10,11 @@ import com.animetracker.repository.TagRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 
+import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -23,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
@@ -75,7 +78,7 @@ class AnimeServiceLatestTest {
 
     /** 库里的第一行是三年前的 —— needsRefresh 会判定为"旧" */
     private void givenTopRowIsOld() {
-        when(animeRepository.findLatest(any()))
+        when(animeRepository.findLatest(any(), any()))
                 .thenReturn(List.of(anime(OLD_ID, YearMonth.now().minusYears(3) + "-01")));
     }
 
@@ -116,7 +119,7 @@ class AnimeServiceLatestTest {
     @Test
     @DisplayName("第一行是近期的: 不回源, 一次 API 都不碰")
     void freshDataDoesNotTouchTheApi() {
-        when(animeRepository.findLatest(any()))
+        when(animeRepository.findLatest(any(), any()))
                 .thenReturn(List.of(anime(OLD_ID + 1, YearMonth.now() + "-01")));
 
         assertThat(animeService.getLatest(12)).hasSize(1);
@@ -216,6 +219,36 @@ class AnimeServiceLatestTest {
         animeService.getLatest(12);
 
         verify(apiClient, times(4)).searchSubjects(anyString(), anyInt(), anyInt());
+    }
+
+    // ========== 「排除未来」那一改的另一半 ==========
+
+    /**
+     * 传给仓储的 {@code today} 必须是 {@code LocalDate.now().toString()} 那个形状.
+     *
+     * <p>这条看着琐碎, 守的却是一个**静默失效**: 谓词是 {@code a.date <= :today},
+     * 两边都是字符串 —— 换成 {@code 2026/09/30} 或 {@code 20260930} 之后 SQL 照样跑,
+     * 接口照样 200, 只是比较结果全错, 而"最近更新少了几部 / 多出几部未来番"
+     * 没有任何人会立刻看出来. 查询本身的正确性由
+     * {@code AnimeLatestIntegrationTest} 钉, 这里只钉格式.
+     */
+    @Test
+    @DisplayName("传给仓储的 today 是 ISO 的 yyyy-MM-dd")
+    void passesAnIsoDateAsToday() {
+        when(animeRepository.findLatest(any(), any()))
+                .thenReturn(List.of(anime(OLD_ID + 1, YearMonth.now() + "-01")));
+
+        animeService.getLatest(12);
+
+        ArgumentCaptor<String> today = ArgumentCaptor.forClass(String.class);
+        verify(animeRepository, atLeastOnce()).findLatest(today.capture(), any());
+        assertThat(today.getAllValues()).isNotEmpty();
+        for (String value : today.getAllValues()) {
+            assertThat(value).as("形状错了整条谓词就静默错").matches("\\d{4}-\\d{2}-\\d{2}");
+            assertThat(LocalDate.parse(value))
+                    .as("跨零点的那一瞬可能与断言时的今天差一天")
+                    .isBetween(LocalDate.now().minusDays(1), LocalDate.now());
+        }
     }
 
     /** 等后台把清缓存那一步做完 —— 它在四个 sleep(500) 之后 */

@@ -111,13 +111,32 @@ describe('首页缓存', () => {
  * 只是一直没有元素能被 focus, 那条规则从写下那天起就没匹配过任何东西.
  */
 
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const TODAY_ITEM = { id: 501, nameCn: '今日番', name: 'Today', images: { medium: 'a.jpg' } }
 const HS_ITEM = { id: 502, nameCn: '热门番', name: 'Hot', images: { large: 'b.jpg' } }
 
+/**
+ * 日历假数据必须**独立于被测代码**推导.
+ *
+ * 改前这里是 `WEEKDAYS[new Date().getDay()]`, 而 WEEKDAYS 就是 Home.vue 里那个
+ * 数组 —— 断言与被测代码共用同一个常量, 于是把两边一起写错. 真接口回的是
+ * `{cn:'星期三', id:3}`, 假数据回的是 `{cn:'周三'}`, 在"匹配得上"这个意义上
+ * 长得一模一样, 所以「今日放送」整个区块消失了一整轮, 测试却全绿.
+ *
+ * 现在按真接口的形状独立写一遍: cn 是「星期X」(不是「周X」), id 是 1(周一)
+ * 到 7(周日) 的**字符串**(后端把它收成了 Map<String,String>, Jackson 会把 JSON
+ * 里的数字强制转成字符串).
+ */
+const CN_DIGIT = ['日', '一', '二', '三', '四', '五', '六']
+const EN_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+function todayCalendarDay(items) {
+  const dow = new Date().getDay()          // 0=周日 .. 6=周六
+  const id = dow === 0 ? 7 : dow           // Bangumi: 1=周一 .. 7=周日
+  return { weekday: { en: EN_DOW[dow], cn: `星期${CN_DIGIT[dow]}`, ja: 'x', id: String(id) }, items }
+}
+
 /** 日历是按"今天星期几"取的, 所以假数据也得挂在今天那一格上 */
 function calendarForToday(items) {
-  return { data: { data: [{ weekday: { cn: WEEKDAYS[new Date().getDay()] }, items }] } }
+  return { data: { data: [todayCalendarDay(items)] } }
 }
 
 describe('首页卡片的键盘操作', () => {

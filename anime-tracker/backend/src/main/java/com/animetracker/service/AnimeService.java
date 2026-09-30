@@ -418,7 +418,9 @@ public class AnimeService {
         if (limit <= 0) {
             return Collections.emptyList();
         }
-        List<Anime> local = animeRepository.findLatest(PageRequest.of(0, limit));
+        // today 用 LocalDate.now().toString() 而不是别的格式: 那条谓词是**字符串比较**
+        // (a.date 存的就是 'yyyy-MM-dd' 这样的串), 格式差一个字符整条筛选就静默错.
+        List<Anime> local = animeRepository.findLatest(LocalDate.now().toString(), PageRequest.of(0, limit));
         if (needsRefresh(local, limit)) {
             scheduleLatestRefresh();
         }

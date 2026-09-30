@@ -117,7 +117,19 @@ public class BangumiDTO {
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class CalendarDay {
-        private Map<String, String> weekday;  // {en: "Monday", cn: "周一", ja: "月曜日"}
+        /**
+         * 接口实际返回的形状: {@code {en:"Mon", cn:"星期一", ja:"月曜日", id:1}},
+         * id 从 1(周一) 到 7(周日).
+         *
+         * <p><b>注意 id 在 API 那边是数字, 而这里声明成 {@code Map<String,String>}</b>
+         * —— Jackson 会把它强制转成字符串, 前端拿到的因此是 {@code "1"} 而不是 {@code 1}.
+         * Home.vue 的星期比对依赖这一点(两边都 String() 归一).
+         *
+         * <p>改前这条注释写的是 {@code cn:"周一"}, 与真实返回值不符(是"星期一"),
+         * 而且漏了 id —— 前端照着它在错的方向上比对(拿"周三"比"星期三"), 区块整个
+         * 不显示, 却没有任何测试会红. 一条写错的注释比没有注释更贵.
+         */
+        private Map<String, String> weekday;
         private List<CalendarItem> items;
     }
 

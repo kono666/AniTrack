@@ -17,7 +17,8 @@ vi.mock('../../api', () => ({
   getWatchedEpisodes: vi.fn(),
   toggleEpisode: vi.fn(),
   getAnimeHeat: vi.fn(),
-  getByTag: vi.fn(),
+  // 相关推荐改走 /filter(sort=rating), 不再用 /by-tag —— 理由见 AnimeDetail.vue
+  getFiltered: vi.fn(),
 }))
 
 import AnimeDetail from '../AnimeDetail.vue'

@@ -23,18 +23,27 @@
         <div class="d-hero-right">
           <h1 class="d-title">{{ subject.nameCn || subject.name }}</h1>
           <p v-if="subject.nameCn && subject.name !== subject.nameCn" class="d-subtitle">{{ subject.name }}</p>
-          <div class="d-stats">
-            <div class="d-stat"><span class="ds-val">{{ subject.rating?.score ? subject.rating.score.toFixed(1) : '-' }}</span><span class="ds-lbl">评分</span></div>
-            <div class="d-stat"><span class="ds-val">#{{ subject.rating?.rank || '-' }}</span><span class="ds-lbl">排名</span></div>
-            <div class="d-stat"><span class="ds-val">{{ subject.totalEpisodes || '?' }}</span><span class="ds-lbl">总集数</span></div>
-            <div class="d-stat"><span class="ds-val">{{ subject.date?.substring(0,4) || '-' }}</span><span class="ds-lbl">年份</span></div>
-            <div class="d-stat"><span class="ds-val">{{ subject.platform || 'TV' }}</span><span class="ds-lbl">类型</span></div>
+          <!-- 缺哪一项就整项不渲染, 而不是摆一个 "#-" / "?" 出来.
+               两件事在这里被混成了一件: 「这个字段还没采到」和「这部番的这些值是零」.
+               访客读到的是「这站坏了」, 而不是「这站还年轻」; 而站内 2.9 万部里绝大多数
+               都是没名次、没总集数、没人追的 —— 出现在最显眼的那一排的, 恰恰是最常见的
+               那一种页面.
+               注意 类型 那一格: 改前写的是 platform || 'TV', 缺值时**猜一个 TV**.
+               一部剧场版没有 platform 就会被标成"类型 TV". 缺数据可以补, 错数据会被当真. -->
+          <div class="d-stats" v-if="hasStats">
+            <div class="d-stat" v-if="subject.rating?.score"><span class="ds-val">{{ subject.rating.score.toFixed(1) }}</span><span class="ds-lbl">评分</span></div>
+            <div class="d-stat" v-if="subject.rating?.rank"><span class="ds-val">#{{ subject.rating.rank }}</span><span class="ds-lbl">排名</span></div>
+            <div class="d-stat" v-if="subject.totalEpisodes"><span class="ds-val">{{ subject.totalEpisodes }}</span><span class="ds-lbl">总集数</span></div>
+            <div class="d-stat" v-if="subject.date"><span class="ds-val">{{ subject.date.substring(0,4) }}</span><span class="ds-lbl">年份</span></div>
+            <div class="d-stat" v-if="subject.platform"><span class="ds-val">{{ subject.platform }}</span><span class="ds-lbl">类型</span></div>
           </div>
           <div class="d-tags" v-if="subject.tags?.length">
             <span v-for="tag in subject.tags.slice(0, 6)" :key="tag.name" class="d-tag">{{ tag.name }}</span>
           </div>
           <p class="d-summary">{{ subject.summary || '暂无简介' }}</p>
-          <div class="d-heat" v-if="heat">
+          <!-- 三项全零 = 还没有人碰过它. 一行「0人想看 0人在看 0人看过」不是"人气为零",
+               是这个功能还没有数据 —— 那就别摆出来 -->
+          <div class="d-heat" v-if="heatTotal > 0">
             <span>{{ heat.wantToWatch }}人想看</span>
             <span>{{ heat.watching }}人在看</span>
             <span>{{ heat.watched }}人看过</span>
@@ -181,7 +190,7 @@ import {
   getAnimeDetail, getEpisodes, getRatingStats, getSubjectReviews,
   getMyReview, saveReview, deleteMyReview as delReviewApi,
   getTrackingStatus, saveTracking, deleteTracking,
-  getWatchedEpisodes, toggleEpisode, getAnimeHeat, getByTag
+  getWatchedEpisodes, toggleEpisode, getAnimeHeat, getFiltered
 } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
@@ -204,6 +213,18 @@ const heat = ref(null)
 const loading = ref(true)
 const relatedAnime = ref([])
 const coverFailed = ref(false)
+
+/** 那一排"评分/排名/总集数/年份/类型"里有没有任何一格有值. 全空时整排不渲染,
+ *  免得留下一个空容器和它的 18px 下边距 */
+const hasStats = computed(() => Boolean(
+  subject.value?.rating?.score || subject.value?.rating?.rank ||
+  subject.value?.totalEpisodes || subject.value?.date || subject.value?.platform
+))
+
+/** 热度三项之和. 全零 = 还没有人碰过这部番, 整行不显示 —— 见模板里那段注释 */
+const heatTotal = computed(() => heat.value
+  ? (heat.value.wantToWatch || 0) + (heat.value.watching || 0) + (heat.value.watched || 0)
+  : 0)
 const error = ref('')
 
 const maxProgress = computed(() => subject.value?.totalEpisodes || 999)
@@ -251,8 +272,22 @@ async function load(){
     ratingStats.value = sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)}
     reviews.value = rr.data.data||[]
 
+    // 相关番剧: 拿这部番的**第一个标签**, 去看同标签下的高分作品.
+    //
+    // 改前走的是 getByTag —— 那条接口按播出日倒序、封顶 50 条、取前 8. 而 tags[0] 是
+    // 票数最高的那个标签, 也就是**最泛**的那个: 命运石之门的 tags[0] 是「科幻」,
+    // 全站 25 万部挂着它. 于是"同标签 + 按日期倒序 + 取 8"实际等于"最近更新的 8 部
+    // 科幻" —— 与这部番本人毫无关系, 而它挂在「相关推荐」这个标题底下.
+    //
+    // 改成按加权评分取: 仍然是"最好的科幻"而不是"最相关的", 但至少从"最新的一批"
+    // 变成了"最好的几部". 真正的相关性要按多标签重合度算, 那是后端的活, 这一轮不做.
     const tags = subject.value?.tags
-    if(tags?.length>0){ try{ const tr=await getByTag(tags[0].name); relatedAnime.value=(tr.data.data||[]).filter(a=>a.id!==sid).slice(0,8) }catch(e){} }
+    if (tags?.length > 0) {
+      try {
+        const tr = await getFiltered({ tag: tags[0].name, sort: 'rating', page: 1, limit: 8 })
+        relatedAnime.value = (tr.data.data?.list || []).filter(a => a.id !== sid).slice(0, 8)
+      } catch (e) { /* 相关推荐拉不到不影响正文 */ }
+    }
 
     if(userStore.loggedIn){
       const [tk,mr] = await Promise.all([getTrackingStatus(sid),getMyReview(sid)])

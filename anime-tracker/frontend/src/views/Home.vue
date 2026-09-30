@@ -235,11 +235,34 @@ function open(id) { $router.push(`/anime/${id}`) }
 
 const tagTotalPages = computed(() => Math.max(1, Math.ceil(tagTotal.value / pageSize)))
 
+/** 给人看的一行日期. 这里的「周三」是**显示用**的中文简写, 不是拿去匹配的键 ——
+ *  匹配用的是 bgmWeekdayId(), 那是另一套写法, 理由见它上面那段 */
 const todayLabel = computed(() => {
   const d = new Date()
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
   return `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`
 })
+
+/**
+ * 「今天是星期几」在 Bangumi 日历里的编号.
+ *
+ * 日历是每天一格, 每格的 weekday 长这样: {en:'Mon', cn:'星期一', ja:'月曜日', id:1},
+ * id 从 1(周一) 到 7(周日); 而 JS 的 getDay() 是 0(周日) 到 6(周六) —— 两者差一次换算,
+ * 就是下面那一行.
+ *
+ * 改前比的是 cn, 拿 '周三' 去比接口回的 '星期三': 字符串对不上, find 永远返回
+ * undefined, todayAnime 恒为空数组, 于是整个「今日放送」被 v-if 藏掉 —— 一块内容
+ * 消失得悄无声息, 没有报错, 也没有任何测试会红(当时的假数据是用被测代码同一个
+ * WEEKDAYS 常量拼的, 见 Home.test.js 里的 calendarForToday).
+ *
+ * 两边都 String(): 后端把 weekday 收成了 Map<String,String>(BangumiDTO.CalendarDay),
+ * Jackson 会把 JSON 里的数字 3 强制转成字符串 "3" —— 所以这里拿到的是 "3" 不是 3.
+ * 只把 cn 换成 id、写成 === 3 是不够的, 那样仍然对不上.
+ */
+function bgmWeekdayId() {
+  const dow = new Date().getDay()
+  return String(dow === 0 ? 7 : dow)
+}
 
 /**
  * 取当前分类的当前这一页.
@@ -404,9 +427,7 @@ async function loadHome() {
   try {
     const calRes = await getCalendar()
     const calData = calRes.data.data || []
-    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-    const today = weekdays[new Date().getDay()]
-    const todayEntry = calData.find(d => d.weekday?.cn === today)
+    const todayEntry = calData.find(d => String(d.weekday?.id) === bgmWeekdayId())
     todayAnime.value = todayEntry?.items || []
   } catch (e) { /* 日历失败不影响主页 */ }
 

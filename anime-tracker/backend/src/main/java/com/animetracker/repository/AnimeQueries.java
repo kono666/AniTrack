@@ -69,6 +69,27 @@ final class AnimeQueries {
             " WHERE " + FILTER_YEAR + " AND " + FILTER_SEASON + " AND " + FILTER_STATUS;
 
     /**
+     * 「已经播了」—— 播出日不晚于 {@code :today}.
+     *
+     * <p><b>只给「最近更新」用</b>, 没给 {@link #FILTERED_DATE} / {@link #TAGGED_DATE}
+     * 那两条按日期倒序的路径用. 区别在于: 分类浏览里的「最新」只是一个排法, 未上映的
+     * 作品出现在那儿不算说谎; 而「最近更新」是一个对内容做了承诺的标题 —— 第一屏摆着
+     * 2029 年的电影, 用户不会认为"这站数据很全", 只会认为这站坏了.
+     *
+     * <p><b>{@code a.date IS NULL} 那一半不是可有可无的.</b> JPQL 里 NULL 参与的比较
+     * 结果还是 NULL, 也就是**假** —— 只写 {@code a.date <= :today} 会把库里所有没有
+     * 日期的行一起筛掉, 而 {@link #ORDER_DATE_DESC_NULL_LAST} 的口径明写的是
+     * 「缺日期的排最后」, 不是"不要它们". 这一条留白的代价是静默少行, 而榜单少几行
+     * 没有任何人会看出来.
+     *
+     * <p><b>比的是字符串.</b> date 列存的就是字符串, 形状是 ISO 的
+     * {@code 'yyyy-MM-dd'} / {@code 'yyyy-MM'} / {@code 'yyyy'} —— 按字典序比与按时间比
+     * 结果一致(短的天然排在同年更长的前缀前面). 这不是这次新引入的假设: 上面那条
+     * ORDER BY 本来就靠它成立.
+     */
+    static final String NOT_FUTURE = "(a.date IS NULL OR a.date <= :today)";
+
+    /**
      * "这部番挂着这几个标签里的任意一个" —— 半连接, 每部番至多出一行.
      *
      * <p><b>为什么不是顶层 JOIN {@code anime_tag}.</b> 顶层 JOIN 会让同一部番按命中的
@@ -212,8 +233,8 @@ final class AnimeQueries {
     /** 排行榜 / 无关键词浏览: 全表按加权评分, 由 Pageable 切片 */
     static final String RANKED = SELECT_ANIME + ORDER_WEIGHTED_DESC;
 
-    /** "最近更新": 全表按播出日倒序, 由 Pageable 切片 */
-    static final String LATEST = SELECT_ANIME + ORDER_DATE_DESC_NULL_LAST;
+    /** "最近更新": **已经播出的**按播出日倒序, 由 Pageable 切片(为什么排除未来见 {@link #NOT_FUTURE}) */
+    static final String LATEST = SELECT_ANIME + " WHERE " + NOT_FUTURE + ORDER_DATE_DESC_NULL_LAST;
 
     /** 筛选(不带标签), 默认序: 名次升序 */
     static final String FILTERED_RANK = SELECT_ANIME + FILTER_WHERE + ORDER_RANK_ASC_NULL_LAST;

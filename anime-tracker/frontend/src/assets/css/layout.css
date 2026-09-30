@@ -4,7 +4,10 @@
 
 /* ── Page Layout ── */
 .page-container { max-width: 1280px; margin: 0 auto; padding: 24px; }
-.page-header { margin-bottom: 28px; }
+/* 标题那一行. flex 是为了让页面能在标题右侧放一组控件(搜索页的「热门排行/最近更新」
+   就是第一个这么用的) —— 只有 h1 一个子元素的页面(后台那几页)看不出区别,
+   space-between 在单子元素下退化成"靠左" */
+.page-header { margin-bottom: 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .page-header h1 { font-size: var(--fs-h1); }
 
 /* 这里原本还有 .section-title 和 .section-card 两组规则。

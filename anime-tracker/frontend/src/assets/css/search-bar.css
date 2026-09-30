@@ -16,3 +16,18 @@
   transition: background var(--transition);
 }
 .search-btn:hover { background: var(--primary-hover); }
+
+/* ── 排行 / 最新 切换 ──
+   视觉照 Profile.vue 的 .p-tabs / .p-tab(下划线高亮那套), 保持全站一致.
+   焦点环不用在这里登记: interactions.css 那份按类名的白名单是给非 button 元素
+   用的, 这两个是 <button>, 已经被通用的 button:focus-visible 覆盖 */
+.view-switch { display: flex; gap: 4px; }
+.vs-btn {
+  padding: 8px 14px; border: none; background: none;
+  font-size: 13px; font-weight: 500; font-family: inherit;
+  color: var(--text-secondary); cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all var(--transition);
+}
+.vs-btn:hover { color: var(--text); }
+.vs-btn.active { color: var(--primary); border-bottom-color: var(--primary); }

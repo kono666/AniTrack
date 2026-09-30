@@ -42,9 +42,24 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
                                           @Param("priorScore") double priorScore,
                                           Pageable pageable);
 
-    /** 最近更新的前几部: 按播出日倒序, 缺日期的排最后(口径见 {@link AnimeQueries#ORDER_DATE_DESC_NULL_LAST}) */
+    /**
+     * 最近更新的前几部: 按播出日倒序, 缺日期的排最后, 且**只取已经播出的**.
+     *
+     * <p>排序口径见 {@link AnimeQueries#ORDER_DATE_DESC_NULL_LAST},
+     * "不晚于 today"见 {@link AnimeQueries#NOT_FUTURE}.
+     *
+     * <p>为什么要排除未来: 库里混着**还没上映**的条目, 来源是
+     * {@code AnimeService#refreshLatestFromApi} 搜的关键词「剧场版」—— Bangumi 上
+     * 一大批已定档未开播的电影, 日期是 2027/2028/2029. 按播出日倒序, 这批"最远的
+     * 未来"就顶在了「最近更新」的第一屏; 而它们恰好是日期最大的一批, 所以只要有一部
+     * 落进库里, 这一格的内容就再也不会变了.
+     *
+     * <p>顺带解开的死结: {@code AnimeService#needsRefresh} 读的正是这条查询的第一行,
+     * 拿它判断"这批数据是不是旧到该回源了". 第一行是 2029 时, 那个判断(是否早于
+     * 三个月前)永远为假 —— 回源从此不再触发, 「最近更新」不再更新. 两件事同一个根.
+     */
     @Query(AnimeQueries.LATEST)
-    List<Anime> findLatest(Pageable pageable);
+    List<Anime> findLatest(@Param("today") String today, Pageable pageable);
 
     /**
      * 年份下拉框的取值: date 的前四位, 已去重.

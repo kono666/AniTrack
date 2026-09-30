@@ -2,6 +2,22 @@
   <div class="page-container">
     <div class="page-header">
       <h1>{{ pageTitle }}</h1>
+      <!-- 排序切换.
+           改前这个状态**只藏在网址里**: 首页「查看全部 →」把人送进
+           /search?view=date, 而页面上没有任何地方能看见它、更别说改它 ——
+           到了这一页就出不去了, 只能自己动手改地址栏.
+           搜索态不显示: 那会儿列表里是搜索结果, 与"排行/最新"无关(loadBrowse
+           里本来就有 `if (q) return`). -->
+      <div v-if="!searched" class="view-switch" role="group" aria-label="列表排序">
+        <button
+          v-for="v in VIEWS"
+          :key="v.key"
+          class="vs-btn"
+          :class="{ active: viewMode === v.key }"
+          :aria-pressed="viewMode === v.key ? 'true' : 'false'"
+          @click="setView(v.key)"
+        >{{ v.label }}</button>
+      </div>
     </div>
 
     <!-- Search bar (always visible) -->
@@ -96,6 +112,26 @@ const pageTitle = computed(() => {
   if (viewMode.value === 'date') return '最近更新'
   return '热门排行'
 })
+
+const VIEWS = [
+  { key: 'rank', label: '热门排行' },
+  { key: 'date', label: '最近更新' },
+]
+
+/**
+ * 换排序. 只改 URL —— 列表由已有的 `watch(() => route.query.view)` 去重载,
+ * 这里再自己调一次 loadBrowse 就会发两个请求.
+ *
+ * rank 是默认值, 不写进 URL(与 page=1 同一个口径): /search?view=rank 与 /search
+ * 是同一个页面, 而首页那个「查看全部 →」链接仍然带着它, 两条路都能进来.
+ */
+function setView(v) {
+  if (viewMode.value === v) return
+  const next = { ...route.query }
+  if (v === 'rank') delete next.view
+  else next.view = v
+  router.replace({ query: next })
+}
 
 /**
  * 把 q 和 page 同步进 URL.
