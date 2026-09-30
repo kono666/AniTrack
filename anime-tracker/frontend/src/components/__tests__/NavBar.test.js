@@ -84,4 +84,15 @@ describe('导航栏', () => {
 
     expect(tagsLink(w).classes()).not.toContain('nav-link--active')
   })
+
+  it('品牌的链接自带一个读得出来的名字', async () => {
+    const w = await mountAt('/')
+
+    const brand = w.find('.navbar-brand')
+    expect(brand.exists()).toBe(true)
+    /* ≤480px 时 .brand-text 是 display:none —— 它连无障碍树一起摘掉, 那个链接
+       就只剩一个没有名字的胶片图标. aria-label 是补在那里的名字. 布局量不到,
+       但属性量得到, 所以这条钉得住. */
+    expect(brand.attributes('aria-label')).toBeTruthy()
+  })
 })

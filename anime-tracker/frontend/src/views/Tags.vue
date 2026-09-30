@@ -431,7 +431,12 @@ onMounted(async () => {
 /* 结果区. scroll-margin-top 是必须的, 不是美化: .navbar 是
    position:sticky; top:0; height:64px, 不留这段高度的话 scrollIntoView({block:'start'})
    的落点会被导航栏盖住. 88 = 64 + 24 呼吸. */
-.filter-results { scroll-margin-top: 88px; min-height: 240px; }
+/* min-width:0 是必须的, 不是美化 —— .filter-results 是 .browse-layout 的 grid item,
+   而 grid item 的 min-width 默认是 auto: 它**不能小于内容的 min-content**. 结果区里
+   最宽的那个 min-content 是翻页条(窄屏下 12 个按钮 × 36 + 间隙 = 476px), 于是整列被
+   撑到 476px, 连带 .anime-grid 的 repeat(3,1fr) 每格变成 153px(本该 114), 第三列直接
+   跑出 390px 的视口. 显式写 0 就是切断这条链: 列宽由容器说了算. */
+.filter-results { scroll-margin-top: 88px; min-height: 240px; min-width: 0; }
 .browse-total { font-size: 13px; color: var(--text-secondary); }
 
 /* 这一块自己的错误条. 不复用整页那个 EmptyState type="error":

@@ -68,7 +68,12 @@ const pageRange = computed(() => {
 </script>
 
 <style scoped>
-.pagination { display:flex; justify-content:center; align-items:center; gap:4px; margin-top:28px; }
+/* flex-wrap:wrap 是必须的, 不是美化: 这一行在窄屏放不下 —— 12 个按钮 × min-width 36
+   + 11 × 4 间隙 = 476px, 而 390px 的手机只剩 358px 可用. 不换行时它自己的 min-content
+   就是 476, 既会横着溢出屏幕, 又会被外层(如 /tags 的 .filter-results)当成"这一列不能
+   小于 476"而把整列撑宽. 允许换行之后 min-content 掉到一个按钮宽(36), 两条毛病一起
+   没有. 桌面端放得下, 永远是一行, 观感不变. */
+.pagination { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:4px; margin-top:28px; }
 .pg-btn {
   min-width: 36px; height: 36px; padding: 0 8px;
   border: 1.5px solid var(--border); border-radius: var(--radius-sm);

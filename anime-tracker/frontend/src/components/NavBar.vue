@@ -1,7 +1,10 @@
 <template>
   <nav class="navbar" :class="{ 'nav-scrolled': scrolled }">
     <!-- Left: Brand -->
-    <router-link to="/" class="navbar-brand" @click="closeMenu">
+    <!-- aria-label 是给窄屏补的: ≤480px 时 .brand-text 被 display:none 隐掉,
+         而 display:none 连同无障碍树一起摘 —— 那样这个链接就只剩一个没有名字
+         的图标. 宽屏下它覆盖掉里面的站名文字, 说的是同一件事, 不冲突. -->
+    <router-link to="/" class="navbar-brand" aria-label="AniTrack 首页" @click="closeMenu">
       <PhFilmSlate :size="22" weight="fill" class="brand-icon" aria-hidden="true" />
       <span class="brand-text">AniTrack</span>
     </router-link>
@@ -205,6 +208,19 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 .nav-search-wrap.focused .nav-search-icon { color: var(--primary); }
 .nav-search-input {
   flex: 1;
+  /* 这里两条都是必须的, 不是美化 —— 而且缺一不可, 各自管一件事:
+     (1) min-width:0 —— <input> 的 min-width 默认是 auto, 它的最小宽度来自
+         size 属性(默认 20 个字符), 实测 152px, 与内容无关. 不写 0, 它连
+         "可以被压缩"都不允许.
+     (2) width:0 —— 光有 (1) 只解决了布局, 没解决**固有尺寸**: 父级
+         .nav-search-wrap 算自己的 min-content 时, 输入框仍然报 152, 于是整个
+         navbar 的 min-content 是 541px, 390px 的手机装不下, 整页横向滚动.
+         实测: 只加 (1) → navbar min-content 476; 补上 (2) → 394, 文档也不再
+         横向滚(384).
+     flex:1 是 flex-basis 0%, 所以 width 只影响"报给父级的固有宽度", 不影响实际
+     渲染 —— 有空间时它照样撑满整条搜索框. */
+  min-width: 0;
+  width: 0;
   border: none;
   background: transparent;
   color: var(--text);
@@ -409,7 +425,17 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 @media (max-width: 480px) {
   .nav-search-wrap { max-width: 140px; margin: 0 8px; }
-  /* 窄屏的站名大小回到这里(原来挂在 navbar.css 的 .navbar-brand 上, 靠继承生效) */
-  .brand-text { font-size: 18px; }
+  /* 站名在 480 以下让位给搜索与登录/注册.
+     实测 390px: 就算把输入框压到 min-width:0, 图标 22 + 搜索 56 + 三个导航项
+     102 + 登录/注册 136 + 内边距与间隙, 加起来仍超出 390 —— 这一行里品牌是最
+     该让的那个(图标还是那个胶片标, 认得出来; 而搜索和登录是功能, 让了就没法用).
+     上面 router-link 上的 aria-label 就是为了补这个 display:none. */
+  .brand-text { display: none; }
+
+  /* 剩下这两条是把 394 再收到 338 —— 394 在 390 的机器上刚好不溢, 但 360px
+     的安卓(很常见)会差 20px. 收的都是内边距和 1px 字号, 观感上察觉不到, 换来
+     的是一直到 340px 都不用再动. */
+  .nav-link { padding: 6px 8px; }
+  .nav-btn { padding: 6px 10px; font-size: 12px; }
 }
 </style>
