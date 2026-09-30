@@ -143,8 +143,12 @@ onMounted(async () => {
 /* 这份是**实际生效**的那份, 不是 assets/css/admin.css 里那份.
    原因见 admin.css 的注释: 那份在 @layer components 里, scoped 不在层里,
    层叠层的规则一定输. 所以窄屏横向滚动这件事必须在这里改, 那边只是保持同步. */
+/* 这里原本写的是 --card-bg. 那是个只在 :root 里定义过的别名, 于是浅色主题下
+   它冻在深色值上 —— 整张表是 #171514 的深底配 --text 的 #211e1e, 1.1:1,
+   用户名/邮箱/注册时间全看不见. 改用 --card(admin.css 里那份一直是这么写的,
+   两处现在一致了). 见 tokens.css 顶部那段. */
 .admin-table-wrap {
-  background: var(--card-bg); border-radius: 12px; overflow-x: auto;
+  background: var(--card); border-radius: 12px; overflow-x: auto;
   box-shadow: var(--shadow);
 }
 .username-cell { font-size: 14px; font-weight: 500; color: var(--text); }
@@ -162,7 +166,7 @@ onMounted(async () => {
 .status-locked { background: var(--badge-amber-bg); color: var(--badge-amber-fg); margin-left: 6px; }
 .action-btn {
   padding: 4px 12px; font-size: 12px; border-radius: 4px;
-  cursor: pointer; margin-right: 4px; background: var(--card-bg);
+  cursor: pointer; margin-right: 4px; background: var(--card);
 }
 .btn-danger { border: 1px solid var(--badge-red-fg); color: var(--badge-red-fg); }
 /* 改前叫 .btn-purple, 取的是徽章那套紫。现在"更高权限"这件事由墨色表达,

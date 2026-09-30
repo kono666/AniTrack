@@ -87,8 +87,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* --card 而不是 --card-bg: 后者是只在 :root 里定义过的别名, 浅色主题下会冻在
+   深色值上(整个面板深底深字). 详见 tokens.css 顶部那段. */
 .reviews-wrap {
-  background: var(--card-bg); border-radius: 12px; padding: 4px;
+  background: var(--card); border-radius: 12px; padding: 4px;
   box-shadow: var(--shadow);
 }
 .review-row {
@@ -105,7 +107,7 @@ onMounted(async () => {
 .review-text { font-size: 14px; line-height: 1.6; color: var(--text); }
 .delete-btn {
   padding: 6px 16px; border: 1px solid var(--badge-red-fg); color: var(--badge-red-fg);
-  background: var(--card-bg); border-radius: 6px; cursor: pointer;
+  background: var(--card); border-radius: 6px; cursor: pointer;
   font-size: 13px; white-space: nowrap;
 }
 </style>
