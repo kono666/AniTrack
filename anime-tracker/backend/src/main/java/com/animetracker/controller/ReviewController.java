@@ -4,6 +4,7 @@ import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.entity.User;
+import com.animetracker.service.ReviewLikeService;
 import com.animetracker.service.ReviewService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -26,9 +27,11 @@ import java.util.*;
 public class ReviewController {
 
     private final ReviewService reviewService;
+    private final ReviewLikeService reviewLikeService;
 
-    public ReviewController(ReviewService reviewService) {
+    public ReviewController(ReviewService reviewService, ReviewLikeService reviewLikeService) {
         this.reviewService = reviewService;
+        this.reviewLikeService = reviewLikeService;
     }
 
     /** 添加或更新评论 */
@@ -67,6 +70,10 @@ public class ReviewController {
      * 番剧, 老调用方会少看到后面的评论(而 /api/review/stats 的 count 仍是总数,
      * 所以这个不一致是看得见的, 不是静默丢数据). 现实里一部番要凑够 20 条不同用户的
      * 评论才会碰到, 而"不封顶地一次倒出全部"是必须先堵上的那个洞.
+     *
+     * <p><b>{@code sort} 上没有 @Pattern/白名单校验</b>: 未知值由 service 退化成默认序,
+     * 不返回 400. 理由写在 ReviewService.getSubjectReviews 上. 这里 {@code required=false},
+     * 不传就是默认序 —— 与改前逐字一致的行为.
      */
     @GetMapping("/list")
     public ApiResponse<List<Map<String, Object>>> getSubjectReviews(
@@ -76,9 +83,57 @@ public class ReviewController {
             @Min(value = 1, message = "页码从 1 开始") Integer page,
             @RequestParam(defaultValue = "20")
             @Min(value = 1, message = "每页条数不能小于 1")
-            @Max(value = 50, message = "每页条数不能超过 50") Integer limit) {
-        Long userId = user != null ? user.getId() : 0L;
-        return ApiResponse.success(reviewService.getSubjectReviews(userId, subjectId, page, limit));
+            @Max(value = 50, message = "每页条数不能超过 50") Integer limit,
+            @RequestParam(required = false) String sort) {
+        Long userId = user != null ? user.getId() : ReviewService.ANONYMOUS_USER_ID;
+        return ApiResponse.success(
+                reviewService.getSubjectReviews(userId, subjectId, page, limit, sort));
+    }
+
+    /**
+     * 点赞. **幂等** —— 已经赞过再点一次, 仍然是 200 + {@code liked=true}, 计数不变.
+     *
+     * <p><b>为什么是 POST/DELETE 两条, 而不是一个 toggle 端点.</b>
+     *
+     * <p>toggle 表达的是"翻一下当前状态", 它**不幂等**: 一次点击因为超时重发变成两次
+     * 请求时, 结果会被翻回原样, 而两次都返回 200 —— 用户看到自己刚点的赞消失了,
+     * 日志和服务端状态却都正常, 这是最难查的一类问题。
+     *
+     * <p>POST/DELETE 让客户端表达**目标状态**("我要它处于已赞/未赞"), 于是重发安全:
+     * 发两次 POST 与发一次 POST 的结果相同。前端的乐观更新也更好写 —— 它知道自己
+     * 要去的方向, 不需要先读一次当前状态。
+     *
+     * @return {@code {liked, likeCount}} —— 新计数由服务端给, 不让前端自己 +1
+     */
+    @PostMapping("/{reviewId}/like")
+    public ApiResponse<Map<String, Object>> likeReview(
+            @CurrentUser User user,
+            @PathVariable Long reviewId) {
+        return ApiResponse.success("已点赞", reviewLikeService.like(user, reviewId));
+    }
+
+    /** 取消点赞. 同样幂等: 没赞过再删一次, 返回 200 + {@code liked=false} */
+    @DeleteMapping("/{reviewId}/like")
+    public ApiResponse<Map<String, Object>> unlikeReview(
+            @CurrentUser User user,
+            @PathVariable Long reviewId) {
+        return ApiResponse.success("已取消", reviewLikeService.unlike(user, reviewId));
+    }
+
+    /**
+     * 谁赞了这条短评（未登录也可查看）.
+     *
+     * <p>公开的理由与评论列表一样: 它是评论的附属信息, 而评论列表本身是公开的。
+     * <b>这条路径必须出现在 SecurityConfig 的公开清单里</b> —— 否则未登录访客看得见
+     * 评论、却一点"谁赞了"就收到 401, 而那不是权限设计, 是漏配。
+     *
+     * <p>{@code total} 就是该短评的 {@code likeCount}(不另发 COUNT), 所以它与列表上
+     * 显示的那个数字必然一致; {@code list} 最多 50 个名字, 见
+     * {@code ReviewLikeService.MAX_LIKERS_SHOWN}。
+     */
+    @GetMapping("/{reviewId}/likes")
+    public ApiResponse<Map<String, Object>> getReviewLikers(@PathVariable Long reviewId) {
+        return ApiResponse.success(reviewLikeService.getLikers(reviewId));
     }
 
     /** 获取番剧评分统计 */

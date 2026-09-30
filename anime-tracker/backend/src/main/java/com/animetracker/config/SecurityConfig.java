@@ -50,6 +50,14 @@ public class SecurityConfig {
                 "/api/bangumi/**",
                 "/api/review/list",
                 "/api/review/stats",
+                // 「谁赞了这条评论」也要免登录 —— 评论列表本身是公开的, 这一块是它的
+                // 附属信息; 漏了这条的表现是"未登录访客看得见评论, 一点'谁赞了'就 401",
+                // 而那不是权限设计, 是漏配.
+                //
+                // 这里必须用 *, 不能写成两条固定路径: 短评 id 是逐个不同的.
+                // 通配符在这一层是生效的(与上面 /actuator/health/** 同理) ——
+                // 没有通配符时字符串匹配是"路径完全相等", 这正是上面 health 写成两条的原因.
+                "/api/review/*/likes",
                 "/api/stats/anime-heat",
                 // 探活端点必须免登录: 请求它的是 Docker HEALTHCHECK、CI 冒烟脚本、
                 // nginx 的反代探针, 它们手里不可能有 JWT.

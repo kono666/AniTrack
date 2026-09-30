@@ -19,6 +19,14 @@ vi.mock('../../api', () => ({
   getAnimeHeat: vi.fn(),
   // 相关推荐改走 /filter(sort=rating), 不再用 /by-tag —— 理由见 AnimeDetail.vue
   getFiltered: vi.fn(),
+  // 点赞那三个, 加上两个排序常量. 常量也要列 —— vi.mock 是**整体替换**模块,
+  // 漏了它们组件里 REVIEW_SORT_CREATED 就是 undefined, 排序开关两个按钮会同时
+  // 命中 active
+  likeReview: vi.fn(),
+  unlikeReview: vi.fn(),
+  getReviewLikers: vi.fn(),
+  REVIEW_SORT_CREATED: 'createdAt',
+  REVIEW_SORT_HOT: 'hot',
 }))
 
 import AnimeDetail from '../AnimeDetail.vue'

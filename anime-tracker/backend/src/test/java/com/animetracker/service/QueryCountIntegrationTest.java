@@ -305,7 +305,7 @@ class QueryCountIntegrationTest {
     void reviewListCostsASingleQueryRegardlessOfRowCount(int n) {
         seedReviews(n);
 
-        long statements = statementsFor(() -> reviewService.getSubjectReviews(0L, SUBJECT_BASE, 1, 20));
+        long statements = statementsFor(() -> reviewService.getSubjectReviews(0L, SUBJECT_BASE, 1, 20, null));
 
         assertThat(statements).as("评论 %d 条", n).isEqualTo(1);
     }
@@ -321,8 +321,8 @@ class QueryCountIntegrationTest {
     void reviewListPagingSlicesInTheDatabase() {
         seedReviews(10);
 
-        List<String> firstPage = contentsOf(reviewService.getSubjectReviews(0L, SUBJECT_BASE, 1, 5));
-        List<String> secondPage = contentsOf(reviewService.getSubjectReviews(0L, SUBJECT_BASE, 2, 5));
+        List<String> firstPage = contentsOf(reviewService.getSubjectReviews(0L, SUBJECT_BASE, 1, 5, null));
+        List<String> secondPage = contentsOf(reviewService.getSubjectReviews(0L, SUBJECT_BASE, 2, 5, null));
 
         // c9 是最晚写的, 倒序排第一
         assertThat(firstPage).containsExactly("c9", "c8", "c7", "c6", "c5");
@@ -331,6 +331,153 @@ class QueryCountIntegrationTest {
 
     private static List<String> contentsOf(List<Map<String, Object>> reviews) {
         return reviews.stream().map(m -> (String) m.get("content")).toList();
+    }
+
+    /**
+     * 登录之后多出来的**恰好一条**: 批量问"这一页里我赞过哪些".
+     *
+     * <p>为什么把它和匿名那条分开断言而不是合成一条参数化: 两者的数字不一样
+     * (2 与 1), 而**差异本身就是这次改动的设计**—— 匿名的 {@code userId=0} 下
+     * "有没有赞过"对谁都恒为 false, 那条查询问不出任何东西, 所以整条不发。
+     * 只断言登录态是 2 的话, 看不出"匿名没多花"这件事; 只断言匿名是 1 的话,
+     * 又看不出登录态确实查了。
+     *
+     * <p>更要紧的是把条数**钉死在 2**: 逐条查会是 1+N, 而这是最容易被下一个人
+     * "顺手改成更好懂的写法"的地方。
+     */
+    @Test
+    @DisplayName("评论列表: 登录态是 2 次查询(列表 + 批量查我赞过哪些), 与条数无关")
+    void reviewListCostsTwoQueriesForALoggedInUser() {
+        seedReviews(5);
+
+        long statements = statementsFor(() -> reviewService.getSubjectReviews(
+                user.getId(), SUBJECT_BASE, 1, 20, null));
+
+        assertThat(statements).describedAs("列表 1 条 + likedByMe 批量 1 条").isEqualTo(2);
+    }
+
+    /**
+     * 一部**一条评论都没有**的番, 评论列表仍然是 1 条语句 —— 登录态也一样。
+     *
+     * <p>这条钉的是 {@code ReviewService.likedReviewIds} 里那个
+     * {@code reviews.isEmpty()} 提前返回。没有它, 空的 id 集合会被送进 JPQL 的
+     * {@code IN}, 而空集合在 JPQL 里没有合法写法(Hibernate 6 恰好把它渲染成
+     * {@code 1=0}, 但那是它的实现选择, 不是语言保证)。
+     *
+     * <p>这条断言确实分得开这两种写法, 而且实测过: 把守卫改成 {@code || false} 之后
+     * 这条会红在 {@code isEqualTo(1)} 上 —— 少这一道守卫, 那句 {@code IN} 查询**照样会被
+     * 发出去**, 于是"一条评论都没有的番"反而比有评论时多花一条语句。至于 Hibernate 把
+     * 空集合渲染成什么(它恰好渲染成 {@code 1=0}), 这条断言不依赖 —— 守卫的价值就是
+     * 那条语句根本不发, 与它长什么样无关。这与 {@code AnimeQueries} 那个哨兵参数守的是
+     * 同一处边界。
+     */
+    @Test
+    @DisplayName("没有评论的番: 登录态下也不多发查询, 更不会因为空 IN 报错")
+    void reviewListOfASubjectWithNoReviewsIsStillOneQuery() {
+        long statements = statementsFor(() -> reviewService.getSubjectReviews(
+                user.getId(), SUBJECT_BASE, 1, 20, null));
+
+        assertThat(statements).isEqualTo(1);
+    }
+
+    /**
+     * 按热度翻页拿到的确实是下一批, 而且**顺序真的由赞数决定**。
+     *
+     * <p>数据是**反着**灌的: 赞数与插入顺序相反(c0 赞最多, c9 最少)。这样热度序
+     * 恰好是时间序的倒序 —— 如果 {@code sort=hot} 被忽略、退回默认的时间序,
+     * 或者 ORDER BY 写成了升序, 这条都会红, 而"两个序碰巧一样"的假绿就不会出现。
+     *
+     * <p>这同时是唯一能证明热度序**排序做在数据库里**的断言: 若改成"全读出来在
+     * 内存里排", 语句条数一样是 1, 只有"拿回来的是哪几条"能分开。
+     */
+    @Test
+    @DisplayName("热度序: 真的按赞数排, 且翻页切在数据库上")
+    void reviewListHotOrderSlicesInTheDatabase() {
+        seedReviewsWithDescendingLikes(10);
+
+        List<String> firstPage = contentsOf(reviewService.getSubjectReviews(
+                0L, SUBJECT_BASE, 1, 5, ReviewService.SORT_HOT));
+        List<String> secondPage = contentsOf(reviewService.getSubjectReviews(
+                0L, SUBJECT_BASE, 2, 5, ReviewService.SORT_HOT));
+
+        assertThat(firstPage).containsExactly("c0", "c1", "c2", "c3", "c4");
+        assertThat(secondPage).containsExactly("c5", "c6", "c7", "c8", "c9");
+    }
+
+    /**
+     * 热度序的 SQL 里, 赞数并列之后那一键显式处理了 NULL, 且切片仍在库里。
+     *
+     * <p><b>为什么这条必须存在: 上面那条语义用例守不住它。</b>把 {@code ORDER BY} 里
+     * {@code CASE WHEN created_at IS NULL …} 那一段整个抹掉之后, 上面那条断言的
+     * 第一页/第二页**逐行不变**, 因为 H2 本来就把 NULL 当最小值排在 DESC 的最后,
+     * 与那个 CASE 分出来的组完全一致 —— 实测整个后端套件 607 条全绿, 一条都不红。
+     * 真正有差别的是 PG(DESC 下把 NULL 当最大值排最前), 而线上 PG 不在本地验证的
+     * 射程内。这与 {@code AnimeQueries}、以及下面
+     * {@link #userPageSqlIsPushedDownWithNullSafeOrdering} 记的是同一条限制:
+     * <b>SQL 文本是这种坑唯一的哨兵</b>, 条数与返回值都看不出来。
+     *
+     * <p>少了这一键的后果不是"排得难看"而是<b>翻页漏行</b>: 排序后面跟着 LIMIT/OFFSET,
+     * 两行并列时谁在前随库而定, 于是第 1 页的最后一条与第 2 页的第一条可能互换,
+     * 用户翻页时看到同一条评论两次, 而另一条永远翻不到。
+     */
+    @Test
+    @DisplayName("热度序的 SQL: 并列之后显式分组 NULL, 且行数限制在库里")
+    void hotOrderSqlIsPushedDownWithNullSafeOrdering() {
+        seedReviews(3);
+
+        reviewService.getSubjectReviews(0L, SUBJECT_BASE, 1, 5, ReviewService.SORT_HOT);
+        String sql = lastSqlNormalized();
+
+        assertThat(sql).containsIgnoringCase("order by")
+                .containsIgnoringCase("like_count desc")
+                .as("缺时间的行要显式分组, 否则 NULL 排哪随库变, 第 2 页就会混进第 1 页的行")
+                .containsIgnoringCase("case when")
+                .as("第二键要换成常量, 让 'ORDER BY 里没有 NULL' 字面成立")
+                .containsIgnoringCase("coalesce")
+                .as("分页必须是库做的, 不是读回来再切")
+                .containsIgnoringCase("fetch first");
+    }
+
+    /**
+     * 未知的 sort 值退化成默认的时间序, 不报错也不返回空。
+     *
+     * <p>与 {@code AdminService.getUserPage} 对 role/status/order 的处理是同一条规矩:
+     * 排序是展示偏好, 而 {@code sort} 会出现在用户分享出去的链接里 —— 为一个拼错的
+     * 值让整个评论列表打不开, 代价远大于按默认序显示。
+     */
+    @Test
+    @DisplayName("未知的 sort 值走默认时间序, 不是空列表也不是异常")
+    void unknownSortFallsBackToTheDefaultOrder() {
+        seedReviews(3);
+
+        List<String> byUnknown = contentsOf(reviewService.getSubjectReviews(
+                0L, SUBJECT_BASE, 1, 20, "sortByVibes"));
+        List<String> byDefault = contentsOf(reviewService.getSubjectReviews(
+                0L, SUBJECT_BASE, 1, 20, null));
+
+        assertThat(byUnknown).isEqualTo(byDefault).containsExactly("c2", "c1", "c0");
+    }
+
+    /**
+     * 同 {@link #seedReviews(int)}, 但赞数与插入顺序**相反**: c0 赞最多。
+     *
+     * <p>反着来是为了让热度序与时间序给出不同的答案 —— 只有两序不同,
+     * "热度序真的生效了"才断言得出来。
+     */
+    private void seedReviewsWithDescendingLikes(int n) {
+        long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
+        for (int i = 0; i < n; i++) {
+            User author = userRepository.save(User.builder()
+                    .username("h" + UUID.randomUUID().toString().substring(0, 12))
+                    .password("x")
+                    .role("USER")
+                    .status("ACTIVE")
+                    .build());
+            jdbc.update("INSERT INTO review (user_id, subject_id, rating, content, created_at, like_count) "
+                            + "VALUES (?, ?, ?, ?, ?, ?)",
+                    author.getId(), SUBJECT_BASE, 8, "c" + i,
+                    new java.sql.Timestamp(base + i * 60_000L), (long) (n - 1 - i));
+        }
     }
 
     /**

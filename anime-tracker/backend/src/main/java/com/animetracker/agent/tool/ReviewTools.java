@@ -44,8 +44,14 @@ public class ReviewTools implements ToolProvider {
                     // 没有意义: 它看的是一屏文本, 不是可交互的分页控件.
                     // count 因此是「本次返回的条数」, 不再是这部番的评论总数 ——
                     // 要总数用 get_rating_stats.
+                    // 传匿名哨兵而不是 null: 工具没有"当前登录用户"这回事(公开工具
+                    // 未登录也能调), 而 likedByMe 在这种调用下本来就恒为 false ——
+                    // 走匿名这条路还顺带省掉那条批量查询(见 ReviewService).
+                    // 每条评论里的 likeCount 会跟着带出去, 模型答"大家怎么评价这部"
+                    // 时多了一个可依据的信号; 回复数同理(V8).
                     List<Map<String, Object>> reviews = reviewService.getSubjectReviews(
-                            0L, id, 1, ReviewService.MAX_PAGE_SIZE);
+                            ReviewService.ANONYMOUS_USER_ID, id, 1, ReviewService.MAX_PAGE_SIZE,
+                            ReviewService.SORT_CREATED);
                     return Map.of("subjectId", id, "count", reviews.size(), "reviews", reviews);
                 })
                 .build();

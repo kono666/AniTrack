@@ -4,11 +4,13 @@ import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
+import com.animetracker.repository.ReviewLikeRepository;
 import com.animetracker.repository.ReviewRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import java.time.LocalDateTime;
 import java.util.*;
 
 @Service
@@ -20,11 +22,38 @@ public class ReviewService {
     /** 上限. 与控制器上的 @Max 是同一个值, 改的时候别只改一处 */
     public static final int MAX_PAGE_SIZE = 50;
 
+    /** 默认排序: 最新在前. 与前端 URL 上的 {@code sort} 同源 */
+    public static final String SORT_CREATED = "createdAt";
+
+    /** 按热度(赞数)倒序 */
+    public static final String SORT_HOT = "hot";
+
+    /**
+     * {@code COALESCE(r.createdAt, :epoch)} 的兜底值, 值**无所谓** ——
+     * 排序的第一键已经把缺时间的行分到最后一组, 组内第二键彼此相等, 由 {@code r.id}
+     * 定序; 写它只是为了让"ORDER BY 里没有 NULL"这句话字面成立(理由见
+     * {@code ReviewQueries})。与 {@code AdminService.EPOCH} 是同一个东西。
+     */
+    private static final LocalDateTime EPOCH = LocalDateTime.of(1970, 1, 1, 0, 0);
+
+    /**
+     * 匿名调用方的用户 id 哨兵.
+     *
+     * <p>用户 id 是 identity 从 1 起的, 所以 0 不会是任何真实用户 —— 这是把它当
+     * "没人登录"用的全部依据。改动前这个字面量散在三处(控制器、Agent 工具、测试),
+     * 现在收成一个常量, 免得有人把它改成 -1 而只改了其中一处。
+     */
+    public static final long ANONYMOUS_USER_ID = 0L;
+
     private final ReviewRepository reviewRepository;
+    private final ReviewLikeRepository reviewLikeRepository;
     private final IsolatedInsert isolatedInsert;
 
-    public ReviewService(ReviewRepository reviewRepository, IsolatedInsert isolatedInsert) {
+    public ReviewService(ReviewRepository reviewRepository,
+                         ReviewLikeRepository reviewLikeRepository,
+                         IsolatedInsert isolatedInsert) {
         this.reviewRepository = reviewRepository;
+        this.reviewLikeRepository = reviewLikeRepository;
         this.isolatedInsert = isolatedInsert;
     }
 
@@ -82,11 +111,27 @@ public class ReviewService {
      *
      * <p>limit 超过上限时**夹到上限**而不是报错, 理由同上: 这是只读列表, 少给几条
      * 远好过整个请求失败. 上界存在的意义是别让一个请求换走任意大的结果集.
+     *
+     * <p><b>sort 也要夹, 而且未知值退化成默认序, 不返回 400.</b> 与
+     * {@code AdminService.getUserPage} 对 role/status/order 的处理是同一条规矩:
+     * 排序是展示偏好, 前端把 {@code sort=hot} 写进 URL 之后, 这个值会出现在用户
+     * 分享出去的链接、浏览器的历史记录、以及别人手敲的地址里 —— 为一个拼错的值
+     * 让整个评论列表打不开, 代价远大于"按默认序显示"。传 null(不传 sort)也是默认序。
+     *
+     * <p><b>likedByMe 是批量查出来的, 不是每条一次。</b> 登录态下这一页多花**一条**
+     * 查询(不是 N 条); 匿名的 {@code userId=0} 一条都不花 —— 这时"有没有赞过"
+     * 对谁都恒为 false, 问题本身不存在。这条分界由 QueryCountIntegrationTest 钉着:
+     * 匿名 1 条, 登录 2 条。
      */
     public List<Map<String, Object>> getSubjectReviews(Long userId, Integer subjectId,
-                                                       int page, int limit) {
-        List<Review> reviews = reviewRepository.findPageBySubjectIdWithUser(
-                subjectId, pageOf(page, limit));
+                                                       int page, int limit, String sort) {
+        Pageable pageable = pageOf(page, limit);
+        List<Review> reviews = SORT_HOT.equals(sort)
+                ? reviewRepository.findPageBySubjectIdWithUserHot(subjectId, EPOCH, pageable)
+                : reviewRepository.findPageBySubjectIdWithUser(subjectId, EPOCH, pageable);
+
+        Set<Long> likedIds = likedReviewIds(userId, reviews);
+
         List<Map<String, Object>> result = new ArrayList<>();
         for (Review r : reviews) {
             Map<String, Object> map = new HashMap<>();
@@ -98,9 +143,38 @@ public class ReviewService {
             map.put("content", r.getContent());
             map.put("createdAt", r.getCreatedAt());
             map.put("isOwner", r.getUser().getId().equals(userId));
+            map.put("likeCount", r.getLikeCount());
+            map.put("likedByMe", likedIds.contains(r.getId()));
             result.add(map);
         }
         return result;
+    }
+
+    /**
+     * 这一页里, 当前用户赞过哪些 —— 一条查询问完.
+     *
+     * <p><b>三个提前返回都是必要的, 不是"省一点"。</b>
+     *
+     * <p>· {@code userId} 为空或等于匿名哨兵: 没有"我", 就不存在"我赞过没有"。
+     * <p>· {@code reviews} 为空: 这部番一条评论都没有。**这一条必须显式挡掉** ——
+     * 空集合进 JPQL 的 {@code IN} 没有合法写法(字面 {@code IN ()} 在 H2 上是语法错误),
+     * Hibernate 6 恰好把它渲染成 {@code 1=0} 绕开了它, 但那是它的实现选择、不是语言
+     * 保证。{@code AnimeQueries} 里那个哨兵参数就是为同一件事存在的, 那里的注释
+     * 记着这条边界。
+     *
+     * <p>挡掉之后, 「一条评论都没有的番」的评论列表**仍然是 1 条语句**。
+     *
+     * <p>{@code Set.of()} 是不可变空集, 后面只读不写, 正好。
+     */
+    private Set<Long> likedReviewIds(Long userId, List<Review> reviews) {
+        if (userId == null || userId == ANONYMOUS_USER_ID || reviews.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> ids = new ArrayList<>(reviews.size());
+        for (Review r : reviews) {
+            ids.add(r.getId());
+        }
+        return new HashSet<>(reviewLikeRepository.findLikedReviewIds(userId, ids));
     }
 
     /**

@@ -24,7 +24,15 @@
             <span class="review-stars">{{ '★'.repeat(r.rating) }}{{ '☆'.repeat(10 - r.rating) }}</span>
             <span class="review-time">{{ formatTime(r.createdAt) }}</span>
           </div>
-          <div class="review-subject">番剧ID: #{{ r.subjectId }}</div>
+          <!-- 赞数是给"这条该不该处理"当参考的: 一条被赞了很多的评论删掉, 影响面
+               比一条没人理的评论大得多. 缺这个字段(老后端)时整项不渲染, 不摆一个
+               "赞 0" —— 那是在替后端编数字 -->
+          <div class="review-subject">
+            番剧ID: #{{ r.subjectId }}
+            <span v-if="typeof r.likeCount === 'number'" class="review-likes">
+              <PhHeart :size="12" weight="fill" />{{ r.likeCount }}
+            </span>
+          </div>
           <div class="review-text">{{ r.content || '（无文字）' }}</div>
         </div>
         <button class="delete-btn" @click="handleDelete(r)">删除</button>
@@ -36,6 +44,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import PhHeart from '@icons/PhHeart.vue.mjs'
 import { getAdminReviews, adminDeleteReview } from '../../api'
 import { useToast } from '../../composables/useToast'
 import { loadErrorMessage } from '../../utils/loadError'
@@ -96,6 +105,11 @@ onMounted(loadReviews)
 .review-stars { color: var(--star); }
 .review-time { color: var(--text-muted); font-size: 12px; }
 .review-subject { font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
+/* 赞数与番剧 ID 同一行但不同色: 前者是个可比较的量, 后者只是条路由参数 */
+.review-likes {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 10px;
+  color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
 .review-text { font-size: 14px; line-height: 1.6; color: var(--text); }
 .delete-btn {
   padding: 6px 16px; border: 1px solid var(--badge-red-fg); color: var(--badge-red-fg);

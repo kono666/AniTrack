@@ -371,6 +371,10 @@ public class AdminService {
             map.put("userId", r.getUser().getId());
             map.put("rating", r.getRating());
             map.put("content", r.getContent());
+            // 赞数: 管理端拿它判断"这条是不是该被处理的热评". 列在 review 表上, 读实体
+            // 就顺手带回来了, 不额外发查询(与评论列表那条走批量查询的理由不同 ——
+            // 那里是每行都要问一次"我赞过没有", 这里只是读同一行的列).
+            map.put("likeCount", r.getLikeCount());
             map.put("createdAt", r.getCreatedAt());
             result.add(map);
         }

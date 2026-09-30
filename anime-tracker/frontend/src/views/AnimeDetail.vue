@@ -153,6 +153,19 @@
           </div>
         </div>
 
+        <!-- 排序开关. 放在列表正上方、右对齐 —— 视觉上就是这一块的右上角。
+             不塞进 SectionHeader 的 #extra: 那个插槽外面裹着 <span class="sec-extra">,
+             往里面放一排 <button> 是行内元素套块级内容, 而且那个插槽现在装的是
+             「均分 ★8.6」, 两者挤在一起会互相抢读的顺位。
+
+             少于一页时不渲染: 一条评论排序没有意义, 摆出来只是一行永远点不出差别的按钮. -->
+        <div v-if="reviews.length > 1" class="rv-sort">
+          <button class="rv-sort-btn" :class="{ active: reviewSort === REVIEW_SORT_CREATED }"
+            @click="setReviewSort(REVIEW_SORT_CREATED)">最新</button>
+          <button class="rv-sort-btn" :class="{ active: reviewSort === REVIEW_SORT_HOT }"
+            @click="setReviewSort(REVIEW_SORT_HOT)">最热</button>
+        </div>
+
         <!-- Review list -->
         <div v-if="reviews.length > 0" class="review-list">
           <div v-for="r in reviews" :key="r.id" class="rv-item">
@@ -164,6 +177,34 @@
                 <span class="rv-time">{{ fmt(r.createdAt) }}</span>
               </div>
               <div class="rv-text">{{ r.content || '（无文字）' }}</div>
+              <div class="rv-actions">
+                <!-- 未登录也照渲染, 点了去登录页(与这一页「+ 追番」同一套做法) ——
+                     藏起来的话, 访客根本不知道这站有点赞这回事 -->
+                <button class="rv-act" :class="{ on: r.likedByMe }" :disabled="Boolean(likeBusy[r.id])"
+                  :aria-pressed="r.likedByMe ? 'true' : 'false'" @click="toggleLike(r)">
+                  <PhHeart :size="14" :weight="r.likedByMe ? 'fill' : 'regular'" />
+                  <span>{{ r.likeCount || 0 }}</span>
+                </button>
+                <!-- 一个赞都没有时不摆「谁赞了」: 点开来是空的, 那是一句"这里有东西"
+                     的谎话. 计数偏了(行数比计数少)时会有名字为空的情况, 那种空态由
+                     下面那块自己兜 -->
+                <button v-if="(r.likeCount || 0) > 0" class="rv-act rv-act-quiet"
+                  @click="toggleLikers(r)">
+                  {{ likerBox[r.id]?.open ? '收起' : '谁赞了' }}
+                </button>
+              </div>
+              <div v-if="likerBox[r.id]?.open" class="rv-likers">
+                <span v-if="likerBox[r.id].loading" class="rv-likers-hint">加载中…</span>
+                <span v-else-if="!likerBox[r.id].names.length" class="rv-likers-hint">暂无</span>
+                <template v-else>
+                  <span v-for="u in likerBox[r.id].names" :key="u.userId" class="rv-liker">{{ u.username }}</span>
+                  <!-- 名单在服务端封顶(50), 超出时把真实总数说出来 ——
+                       否则"12 人赞过"下面只列 5 个名字, 看起来像漏了 -->
+                  <span v-if="likerBox[r.id].total > likerBox[r.id].names.length" class="rv-likers-hint">
+                    等共 {{ likerBox[r.id].total }} 人
+                  </span>
+                </template>
+              </div>
             </div>
           </div>
         </div>
@@ -194,13 +235,16 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import PhStar from '@icons/PhStar.vue.mjs'
-import { useRoute } from 'vue-router'
+import PhHeart from '@icons/PhHeart.vue.mjs'
+import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import {
   getAnimeDetail, getEpisodes, getRatingStats, getSubjectReviews,
   getMyReview, saveReview, deleteMyReview as delReviewApi,
   getTrackingStatus, saveTracking, deleteTracking,
-  getWatchedEpisodes, toggleEpisode, getAnimeHeat, getFiltered
+  getWatchedEpisodes, toggleEpisode, getAnimeHeat, getFiltered,
+  likeReview, unlikeReview, getReviewLikers,
+  REVIEW_SORT_CREATED, REVIEW_SORT_HOT
 } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
@@ -211,6 +255,7 @@ import EmptyState from '../components/EmptyState.vue'
 import Pagination from '../components/Pagination.vue'
 
 const route = useRoute()
+const router = useRouter()
 const userStore = useUserStore()
 const { show: toast } = useToast()
 const sid = Number(route.params.id)
@@ -246,6 +291,26 @@ const visibleEpisodes = computed(() => {
 })
 const reviews = ref([])
 const ratingStats = ref({ average: 0, count: 0, distribution: Array(10).fill(0) })
+
+/* ── 评论的排序与点赞 ──
+
+   排序是**组件本地状态**, 不进 URL —— 与同一页的剧集分页(epPage)是同一个做法.
+   它是展示偏好, 不是可分享的筛选条件: 把 sort=hot 写进地址栏之后, 任何一次刷新、
+   回退、以及转发出去的链接都会停在热度序上, 而详情页的评论列表没有分页控件,
+   热度序会让「我刚发的那条去哪了」变得无解 —— 所以默认永远是时间序. */
+const reviewSort = ref(REVIEW_SORT_CREATED)
+
+/* 「谁赞了」展开后的名单, 按评论 id 存: { open, loading, total, names }.
+   拉过一次就留着(收起再展开不重拉), 但**每次重新加载评论列表都要清掉** ——
+   里面存的是那批数据的快照, 列表换了(切排序、发/删评论)之后它就过期了. */
+const likerBox = ref({})
+
+/* 正在发点赞请求的那些评论 id.
+   不加这道闸的话连点会并发发出多个请求, 而它们的响应**不保证按发出的顺序回来**:
+   后到的旧响应会把计数写回一个过期的值, 于是数字卡在那儿 —— 界面上没有任何异常,
+   再刷新一次才对. 顺带也省掉"点 N 下打 N 个请求". */
+const likeBusy = ref({})
+
 const watchedEpisodes = ref([])
 const heat = ref(null)
 const loading = ref(true)
@@ -305,11 +370,11 @@ async function load(){
   error.value = ''
   epPage.value = 1  // 重试会重跑 load(): 不复位的话可能停在新列表里不存在的那一页
   try{
-    const [dr,er,sr,rr] = await Promise.all([getAnimeDetail(sid),getEpisodes(sid),getRatingStats(sid),getSubjectReviews(sid,userStore.user?.id||0)])
+    const [dr,er,sr,rr] = await Promise.all([getAnimeDetail(sid),getEpisodes(sid),getRatingStats(sid),getSubjectReviews(sid,userStore.user?.id||0,reviewSort.value)])
     subject.value = dr.data.data
     episodes.value = er.data.data||[]
     ratingStats.value = sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)}
-    reviews.value = rr.data.data||[]
+    applyReviews(rr.data.data)
 
     // 相关番剧: 拿这部番的**第一个标签**, 去看同标签下的高分作品.
     //
@@ -388,12 +453,107 @@ async function removeTrack(){
 async function submitReview(){
   if(!userStore.loggedIn||myReview.rating<=0){toast('请评分','warning');return}
   try{ const r=await saveReview({subjectId:sid,rating:myReview.rating,content:myReview.content}); myReview.id=r.data.data?.id; toast('已提交','success')
-    const [rr,sr]=await Promise.all([getSubjectReviews(sid,userStore.user.id),getRatingStats(sid)]); reviews.value=rr.data.data||[]; ratingStats.value=sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)} }catch(e){toast('失败','error')}
+    await reloadReviews() }catch(e){toast('失败','error')}
 }
 async function deleteMyReview(){
   if(!confirm('删除评论？')) return
   try{ await delReviewApi(myReview.id); myReview.id=null; myReview.rating=0; myReview.content=''
-    const [rr,sr]=await Promise.all([getSubjectReviews(sid,userStore.user.id),getRatingStats(sid)]); reviews.value=rr.data.data||[]; ratingStats.value=sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)} }catch(e){toast('失败','error')}
+    await reloadReviews() }catch(e){toast('失败','error')}
+}
+
+/**
+ * 把一批评论装进 reviews, 顺带丢掉「谁赞了」的旧名单.
+ *
+ * 两件事必须一起做: 名单里存的是某一条评论**那一刻**的点赞人, 而列表一换
+ * (切排序、发/删评论、重试加载)那份快照就过期了 —— 留着它, 展开后看到的是
+ * 上一批数据里的名字, 与旁边那个赞数对不上, 而且没有任何东西会报错.
+ */
+function applyReviews(list){
+  reviews.value = list || []
+  likerBox.value = {}
+}
+
+/** 重新拉评论列表(保持当前排序)与评分统计. 发/删评论之后走这里 */
+async function reloadReviews(){
+  const [rr,sr] = await Promise.all([
+    getSubjectReviews(sid, userStore.user?.id||0, reviewSort.value),
+    getRatingStats(sid),
+  ])
+  applyReviews(rr.data.data)
+  ratingStats.value = sr.data.data||{average:0,count:0,distribution:Array(10).fill(0)}
+}
+
+/**
+ * 切「最新 / 最热」.
+ *
+ * 点了同一个不重发(那个按钮本来就是选中态). 失败时**不把开关留在新状态上** ——
+ * 界面显示"最热"而列表还是时间序的话, 用户会以为热度排序坏了, 而真相是这次请求
+ * 没成功; 退回去至少与眼睛看到的那份列表是一致的.
+ */
+async function setReviewSort(next){
+  if(reviewSort.value === next) return
+  const previous = reviewSort.value
+  reviewSort.value = next
+  try{ await reloadReviews() }
+  catch(e){ reviewSort.value = previous; toast('排序切换失败','error') }
+}
+
+/**
+ * 点赞 / 取消点赞.
+ *
+ * 未登录时不拦着按钮、也不弹提示 —— 直接送去登录页(与这一页「+ 追番」的做法一致),
+ * 登录后的回跳由 router 的 loginRedirect 兜底, 回到这儿还能接着点.
+ *
+ * 计数与选中态**都由服务端回的那个数字覆盖**, 不在本地 +1 猜: 幂等路径(已经赞过
+ * 再点一次)在服务端的计数与"本地 +1"根本不是一回事, 猜出来的数字会一直错下去,
+ * 直到下次刷新. 服务端的 {liked, likeCount} 就是为这个回的.
+ */
+async function toggleLike(review){
+  if(!userStore.loggedIn){ router.push('/login'); return }
+  if(likeBusy.value[review.id]) return
+  const wanted = !review.likedByMe
+  likeBusy.value[review.id] = true
+  try{
+    const res = wanted ? await likeReview(review.id) : await unlikeReview(review.id)
+    const d = res.data.data || {}
+    review.likedByMe = d.liked ?? wanted
+    if(typeof d.likeCount === 'number') review.likeCount = d.likeCount
+    // 名单里少/多了一个人: 展开着的话重新拉一次, 否则收起它 ——
+    // 留着一份"没有我"的旧名单比不显示更糟
+    const box = likerBox.value[review.id]
+    if(box){ box.open ? fetchLikers(review.id) : delete likerBox.value[review.id] }
+  }catch(e){ toast('操作失败','error') }
+  finally{ delete likeBusy.value[review.id] }
+}
+
+/** 拉这条评论的点赞人名单, 填进那个盒子 */
+async function fetchLikers(reviewId){
+  /* 必须从 likerBox 里**读回来**再改, 不能拿着赋值时那个对象的引用去改.
+     存进去的是个普通对象, 而普通对象是"读的时候"才被包成响应式代理的 ——
+     直接改原始对象不会触发依赖, 表现是「点了没反应」, 而请求其实成功了. */
+  const box = likerBox.value[reviewId]
+  if(!box) return
+  box.loading = true
+  try{
+    const res = await getReviewLikers(reviewId)
+    const d = res.data.data || {}
+    box.names = d.list || []
+    box.total = d.total || 0
+  }catch(e){
+    // 名单拉不到不该把这行留成空白: 收起它, 赞数还在原地, 用户再点一次就是重试
+    box.open = false
+    toast('加载失败','error')
+  }finally{
+    box.loading = false
+  }
+}
+
+/** 展开/收起「谁赞了」. 第一次展开才去拉名单; 收起再展开不重拉 */
+async function toggleLikers(review){
+  const existing = likerBox.value[review.id]
+  if(existing){ existing.open = !existing.open; return }
+  likerBox.value[review.id] = { open: true, loading: true, total: 0, names: [] }
+  await fetchLikers(review.id)
 }
 
 onMounted(load)
@@ -517,6 +677,42 @@ onMounted(load)
 .rv-stars{ color:var(--star); font-size:13px; letter-spacing:1px; }
 .rv-time{ font-size:11px; color:var(--text-muted); margin-left:auto; }
 .rv-text{ font-size:14px; line-height:1.7; color:var(--text-secondary); }
+
+/* ── 排序开关 / 点赞 / 谁赞了 ── */
+.rv-sort{ display:flex; justify-content:flex-end; gap:6px; margin-bottom:6px; }
+.rv-sort-btn{
+  padding:4px 12px; border-radius:999px; border:1.5px solid var(--border);
+  background:transparent; color:var(--text-muted); font-size:12px; font-weight:600;
+  cursor:pointer; font-family:inherit; transition:all var(--transition);
+}
+.rv-sort-btn:hover{ color:var(--text); border-color:var(--primary-line); }
+/* 选中态是「洗色底 + 描边 + 满墨字」, 不靠色相 —— --primary 是墨色, 拿它当强调
+   文字跟 --text 没有区别, 选中态会消失(tokens.css 顶部那条规矩). */
+.rv-sort-btn.active{ background:var(--primary-soft); border-color:var(--primary-line); color:var(--text); }
+
+/* margin-left:-8px 把按钮的**字形**对齐到上面正文的左边缘: 按钮自己要有内边距
+   才点得舒服, 而那 8px 会让心形看着比正文缩进去一截. */
+.rv-actions{ display:flex; align-items:center; gap:12px; margin-top:8px; margin-left:-8px; }
+.rv-act{
+  display:inline-flex; align-items:center; gap:5px; padding:3px 8px;
+  border-radius:999px; border:1.5px solid transparent; background:transparent;
+  color:var(--text-muted); font-size:12px; font-weight:600; cursor:pointer;
+  font-family:inherit; font-variant-numeric:tabular-nums;
+  transition:color var(--transition), background var(--transition), border-color var(--transition);
+}
+.rv-act:hover{ color:var(--text); background:var(--primary-soft); }
+/* 已赞 = 满墨 + 洗色底 + 描边. 心形本身也由 regular 换成 fill(模板里那个 :weight) ——
+   两套主题下都是"底变浅/变深 + 图标变实 + 字变满墨"三重差别, 只靠其中任何一样
+   在浅色主题下都太轻. */
+.rv-act.on{ color:var(--text); background:var(--primary-soft); border-color:var(--primary-line); }
+.rv-act:disabled{ cursor:default; opacity:.55; }
+.rv-act-quiet{ font-weight:500; }
+.rv-likers{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.rv-liker{
+  padding:2px 10px; border-radius:999px; background:var(--tag-bg);
+  color:var(--text-secondary); font-size:12px;
+}
+.rv-likers-hint{ color:var(--text-muted); font-size:12px; }
 .no-rev{ text-align:center; padding:30px; color:var(--text-muted); font-size:14px; }
 .no-rev a{ color:var(--primary); font-weight:600; }
 .not-found{ text-align:center; padding:80px; color:var(--text-muted); font-size:16px; }

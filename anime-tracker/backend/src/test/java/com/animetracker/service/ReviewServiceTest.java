@@ -3,6 +3,7 @@ package com.animetracker.service;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
+import com.animetracker.repository.ReviewLikeRepository;
 import com.animetracker.repository.ReviewRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -41,12 +42,14 @@ import static org.mockito.Mockito.when;
 class ReviewServiceTest {
 
     private ReviewRepository reviewRepository;
+    private ReviewLikeRepository reviewLikeRepository;
     private ReviewService reviewService;
 
     @BeforeEach
     void setUp() {
         reviewRepository = mock(ReviewRepository.class);
-        reviewService = new ReviewService(reviewRepository, new IsolatedInsert());
+        reviewLikeRepository = mock(ReviewLikeRepository.class);
+        reviewService = new ReviewService(reviewRepository, reviewLikeRepository, new IsolatedInsert());
         when(reviewRepository.saveAndFlush(any(Review.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -132,13 +135,14 @@ class ReviewServiceTest {
      * 越界值, times(1) 会在第二次调用时判定"调用太多"而失败.
      */
     private Pageable capturePageable(int page, int limit) {
-        when(reviewRepository.findPageBySubjectIdWithUser(any(), any()))
+        when(reviewRepository.findPageBySubjectIdWithUser(any(), any(), any()))
                 .thenReturn(List.of(review(1L, 9L, "bob")));
 
-        reviewService.getSubjectReviews(1L, 200, page, limit);
+        reviewService.getSubjectReviews(1L, 200, page, limit, null);
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(reviewRepository, atLeastOnce()).findPageBySubjectIdWithUser(any(), captor.capture());
+        verify(reviewRepository, atLeastOnce())
+                .findPageBySubjectIdWithUser(any(), any(), captor.capture());
         return captor.getValue();
     }
 
@@ -178,10 +182,10 @@ class ReviewServiceTest {
     @Test
     @DisplayName("列表项带上作者名与 isOwner, 且不因为批量取作者而变样")
     void mapsAuthorFieldsAndOwnership() {
-        when(reviewRepository.findPageBySubjectIdWithUser(any(), any()))
+        when(reviewRepository.findPageBySubjectIdWithUser(any(), any(), any()))
                 .thenReturn(List.of(review(1L, 9L, "bob"), review(2L, 1L, "alice")));
 
-        List<Map<String, Object>> result = reviewService.getSubjectReviews(1L, 200, 1, 20);
+        List<Map<String, Object>> result = reviewService.getSubjectReviews(1L, 200, 1, 20, null);
 
         assertThat(result).hasSize(2);
         assertThat(result.get(0)).containsEntry("username", "bob")
@@ -193,9 +197,9 @@ class ReviewServiceTest {
     @Test
     @DisplayName("一条评论都没有时返回空列表, 不报错")
     void emptyListIsFine() {
-        when(reviewRepository.findPageBySubjectIdWithUser(any(), any())).thenReturn(List.of());
+        when(reviewRepository.findPageBySubjectIdWithUser(any(), any(), any())).thenReturn(List.of());
 
-        assertThat(reviewService.getSubjectReviews(1L, 200, 1, 20)).isEmpty();
+        assertThat(reviewService.getSubjectReviews(1L, 200, 1, 20, null)).isEmpty();
     }
 
     // ========== 评分统计 ==========

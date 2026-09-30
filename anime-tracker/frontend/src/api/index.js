@@ -113,14 +113,38 @@ export const getTrackingStatus = (subjectId) =>
 export const getUserStats = () => api.get('/track/stats')
 
 // ========== 评论 ==========
+/**
+ * 评论列表的排序方式. 与后端 `ReviewService.SORT_CREATED / SORT_HOT` 同源.
+ *
+ * 导出成常量而不是在视图里写字符串: 这两个值是**接口参数**, 拼错了不会报错 ——
+ * 后端对未知的 sort 值退化成默认序(理由见 ReviewService.getSubjectReviews),
+ * 于是「最热」按钮点了没反应, 页面上看不出任何异常.
+ */
+export const REVIEW_SORT_CREATED = 'createdAt'
+export const REVIEW_SORT_HOT = 'hot'
+
 export const saveReview = (data) => api.post('/review', data)
 export const deleteMyReview = (reviewId) => api.delete(`/review/${reviewId}`)
-export const getSubjectReviews = (subjectId, userId = 0) =>
-  api.get('/review/list', { params: { subjectId, userId } })
+export const getSubjectReviews = (subjectId, userId = 0, sort) =>
+  api.get('/review/list', { params: { subjectId, userId, sort } })
 export const getRatingStats = (subjectId) =>
   api.get('/review/stats', { params: { subjectId } })
 export const getMyReview = (subjectId) =>
   api.get('/review/my', { params: { subjectId } })
+
+/**
+ * 点赞 / 取消点赞.
+ *
+ * 是**两个**端点而不是一个 toggle: 客户端表达的是目标状态("我要它处于已赞状态"),
+ * 于是重发安全 —— 一次点击因为超时被浏览器重发两次, 结果与发一次相同. Toggle 在这
+ * 种情况下会把用户的赞翻回去, 而两次都返回 200(理由见 ReviewController.likeReview).
+ *
+ * 两个都不带 body, 因此都不经过 JSON 序列化这条路径.
+ */
+export const likeReview = (reviewId) => api.post(`/review/${reviewId}/like`)
+export const unlikeReview = (reviewId) => api.delete(`/review/${reviewId}/like`)
+/** 谁赞了这条评论. 公开接口, 未登录也能看(与评论列表本身一样) */
+export const getReviewLikers = (reviewId) => api.get(`/review/${reviewId}/likes`)
 
 // ========== 管理员 ==========
 export const getDashboard = () => api.get('/admin/dashboard')
