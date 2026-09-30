@@ -172,6 +172,21 @@
    要么不该跟却跟着跑. 即时赋值才是这里要的. */
 .chat-scroll { flex: 1; overflow-y: auto; padding: 22px 24px; }
 
+/* ── 空态引导块居中 ──
+   改前它顶着上边、底下空出一大截: 1440x900 下引导块约 350px 而滚动区约 700px,
+   剩下的全甩在下边 —— 空白不是问题, 空白**全在一侧**才是. 而首访的人看到的
+   正是这一屏.
+
+   只给空态开 flex, 不用 :has(): 有消息时 .chat-scroll 保持普通块级容器. 列方向
+   flex 的收缩规则(flex-shrink 与自动最小尺寸)在聊天记录这种高矮不一的
+   长列表上牵扯太多, 不值得为一个留白去赌.
+   用 class 而不是 :has(> .chat-intro) 的另一个好处: jsdom 能断言这个 class,
+   而算不算得清居中是它算不了的 —— 那条只能靠眼睛. */
+.chat-scroll--empty { display: flex; flex-direction: column; }
+/* margin:auto 而不是 justify-content:center —— 内容比容器高时(窄屏/矮窗口),
+   前者会把外边距收成 0、照常从顶部开始滚, 后者会把顶部顶出可视区且滚不上去. */
+.chat-scroll--empty .chat-intro { margin: auto; }
+
 .chat-msg { display: flex; gap: 10px; margin-bottom: 18px; }
 .chat-msg--user { flex-direction: row-reverse; }
 .chat-avatar {

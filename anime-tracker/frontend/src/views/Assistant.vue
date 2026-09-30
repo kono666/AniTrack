@@ -53,7 +53,13 @@
           <div>
             <h1 class="chat-title">AI 助手</h1>
             <div class="chat-subtitle">
-              <span class="model-chip">{{ info?.provider }} · {{ info?.model }}</span>
+              <!-- 只显示模型名. 改前是 `{{ info?.provider }} · {{ info?.model }}`,
+                   而 provider 的取值就是配置里的「OpenAI 兼容接口」—— 那是这一层
+                   的**机制**说明, 不是这个产品的名字, 摆在访客眼前只是一句内部术语.
+                   模型名反过来值得留: 它回答"是谁在回答我", 也顺带说明这个助手不
+                   绑死一家(任何 OpenAI 兼容接口都能接).
+                   info 没回来时不渲染, 免得只剩一个孤零零的分隔点. -->
+              <span v-if="info?.model" class="model-chip">{{ info.model }}</span>
               <span v-if="quotaText" class="quota-chip" :class="{ low: quotaLow }">{{ quotaText }}</span>
             </div>
           </div>
@@ -73,7 +79,7 @@
         </div>
       </header>
 
-      <div ref="scrollEl" class="chat-scroll">
+      <div ref="scrollEl" class="chat-scroll" :class="{ 'chat-scroll--empty': !messages.length }">
         <!-- 空白引导 -->
         <div v-if="!messages.length" class="chat-intro">
           <PhRobot :size="40" weight="light" class="intro-icon" aria-hidden="true" />

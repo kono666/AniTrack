@@ -20,7 +20,9 @@ import { getAgentInfo, getConversations, deleteConversation } from '../../api'
 import { streamChat } from '../../api/agentStream'
 
 const INFO = {
-  provider: 'Mock',
+  // provider 照实写成后端真会给的那种说法(application.yml 里配的), 而不是一个
+  // 干净的产品名 —— 下面有一条断言就是冲着"它不该出现在界面上"去的
+  provider: 'OpenAI 兼容接口',
   model: 'mock-model',
   loggedIn: false,
   personas: [
@@ -84,6 +86,27 @@ describe('Assistant page', () => {
   it('renders the quota from the server', async () => {
     const wrapper = await mountPage()
     expect(wrapper.text()).toContain('今日剩余 500 次')
+  })
+
+  // 改前这里显示的是 `{{ info?.provider }} · {{ info?.model }}`, 而 provider 的
+  // 取值就是配置里的「OpenAI 兼容接口」—— 那是接入方式的说明, 属于这一层的内部
+  // 术语, 不该摆在访客眼前. 模型名留着.
+  it('只把模型名显示给访客, 不显示内部的接入方式', async () => {
+    const wrapper = await mountPage()
+    expect(wrapper.find('.model-chip').text()).toBe('mock-model')
+    expect(wrapper.find('.chat-subtitle').text()).not.toContain('兼容接口')
+  })
+
+  // 居中靠的是 .chat-scroll--empty 上的 flex + .chat-intro 的 margin:auto,
+  // 而 jsdom 不算布局 —— 所以这里只能钉住"那个 class 什么时候在", 居没居中
+  // 得靠眼睛(它同时是这条样式的开关, 钉住它就够挡住"顺手把这个 class 删了").
+  it('只在空会话时给滚动区挂上空态 class', async () => {
+    scriptedStream([])
+    const wrapper = await mountPage()
+    expect(wrapper.find('.chat-scroll').classes()).toContain('chat-scroll--empty')
+
+    await typeAndSend(wrapper)
+    expect(wrapper.find('.chat-scroll').classes()).not.toContain('chat-scroll--empty')
   })
 
   it('marks the admin persona unavailable to a normal user', async () => {
