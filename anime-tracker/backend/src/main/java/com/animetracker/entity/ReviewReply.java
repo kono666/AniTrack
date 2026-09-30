@@ -54,10 +54,20 @@ public class ReviewReply {
 
     private LocalDateTime updatedAt;
 
+    /**
+     * 插入时两条时间戳取自**同一次** {@code now()}。
+     *
+     * <p>分两次调用是这里唯一的坑: 时钟在 Linux(CI 与线上)上是纳秒级的, 两次相邻调用
+     * 会落进**不同的微秒**, 而列是 {@code TIMESTAMP(6)} —— 于是刚发出来的回复就带着
+     * {@code updatedAt > createdAt}, 前端那个「已编辑」判据当场为真。Windows 的时钟
+     * 粒度粗到两次调用几乎总是拿到同一个值, 所以本机跑一万遍都是绿的(2026-10-01
+     * CI #104 就是这么红的, 复现方式: 在两次 now() 之间塞 5µs, 用例立刻红在同一条断言上)。
+     */
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        createdAt = now;
+        updatedAt = now;
     }
 
     @PreUpdate

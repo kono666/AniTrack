@@ -43,10 +43,13 @@ public class AgentConversation {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /** 两条时间戳取自同一次 {@code now()} —— 分两次调在纳秒级时钟上会落进不同的微秒,
+     *  插入的行看着就像"被编辑过"。完整理由见 {@link ReviewReply} 的同名方法。 */
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        createdAt = now;
+        updatedAt = now;
         if (messageCount == null) {
             messageCount = 0;
         }
