@@ -85,19 +85,82 @@ public class BangumiApiClient {
         }
     }
 
-    /** 获取剧集列表 */
-    public List<EpisodeDTO> getEpisodes(Integer subjectId) {
-        try {
-            String url = "/v0/episodes?subject_id=" + subjectId
-                    + "&type=0"  // 只取本篇
-                    + "&limit=100";
-            EpisodeListResponse resp = get(url,
-                    new ParameterizedTypeReference<EpisodeListResponse>() {});
-            return resp != null && resp.getData() != null ? resp.getData() : Collections.emptyList();
-        } catch (Exception e) {
-            log.warn("Bangumi episodes for {} fetch failed: {}", subjectId, e.getMessage());
-            return Collections.emptyList();
+    /**
+     * 剧集一页取多少.
+     *
+     * <p>它不是"服务端上限", 只是改动前那条 URL 上写死的值 —— 沿用它是为了让翻页的请求
+     * 形状与改动前一致, 而不是因为它有什么特别.
+     */
+    private static final int EPISODE_PAGE_SIZE = 100;
+
+    /**
+     * 翻页硬上限.
+     *
+     * <p>500 集的番要 5 页; 给到 50 页是"两万五千集"的余量, 正常条目永远撞不到. 它挡的
+     * 不是长番, 是 {@code total} 万一报错时把请求打到天上去.
+     */
+    private static final int EPISODE_MAX_PAGES = 50;
+
+    /**
+     * 一次剧集回源的结果.
+     *
+     * <p>{@code complete=false} 表示<b>没翻完</b> —— 某一页取失败, 或者撞上了翻页上限.
+     * 这个标志是给调用方用的, 而且是这一版新增它的唯一理由: 没翻完的那批<b>不能</b>当成
+     * 一次完整的缓存写进库. 写下去就等于把"取了一半"固化成"已经取过", 而那正是下面这个
+     * bug 的形状 —— 一旦没人能区分"完整"与"截断", 截断就会一直留着.
+     */
+    public record EpisodeFetch(List<EpisodeDTO> items, boolean complete) {}
+
+    /**
+     * 获取剧集列表(本篇).
+     *
+     * <p><b>改动前这里只取一页.</b> URL 上写着 {@code limit=100}, 没有 offset 也没有循环 ——
+     * 于是任何超过 100 集的番都只拿得到前 100 集. 而接口返回的 {@code total} 一直明明白白
+     * 写着真实集数(实测: 火影忍者疾风传 subject 2782, {@code total=500}, 拿回 100 条,
+     * sort 221..320). 前端没有截断(它就是 {@code v-for} 全画出来), 所以"只显示部分集数"
+     * 是这一处造成的.
+     *
+     * <p>按 {@code total} 翻页, 而不是"把 limit 调大到 1000": 实测 {@code limit=1000} 确实
+     * 一次给全 500 条, 但那是<b>没写进文档</b>的服务端行为, 哪天收紧了就是静默少一截 ——
+     * 和这个 bug 一模一样的失效方式, 只是从"总是少"变成"某天开始少". 按 total 翻页则不管
+     * 服务端每页给多少都收得齐.
+     *
+     * <p>offset 按<b>实际拿到的条数</b>推进({@code all.size()}), 不按请求的页大小: 万一
+     * 服务端把每页压得比请求的小, 按请求量推进会<b>跳过</b>中间那些集 —— 那是比取不全更
+     * 糟的失效, 因为收回来的是一个有洞的列表, 而且看上去是完整的.
+     */
+    public EpisodeFetch getEpisodes(Integer subjectId) {
+        List<EpisodeDTO> all = new ArrayList<>();
+        boolean complete = false;
+
+        for (int page = 0; page < EPISODE_MAX_PAGES; page++) {
+            EpisodeListResponse resp;
+            try {
+                String url = "/v0/episodes?subject_id=" + subjectId
+                        + "&type=0"                          // 只取本篇(SP/OP/ED 不算"集数")
+                        + "&limit=" + EPISODE_PAGE_SIZE
+                        + "&offset=" + all.size();
+                resp = get(url, new ParameterizedTypeReference<EpisodeListResponse>() {});
+            } catch (Exception e) {
+                // 已经拿到的照常返回, 但 complete 保持 false —— 由调用方决定要不要落库
+                log.warn("Bangumi episodes for {} 第 {} 页取失败: {}", subjectId, page, e.getMessage());
+                break;
+            }
+
+            List<EpisodeDTO> data = resp != null ? resp.getData() : null;
+            if (data == null || data.isEmpty()) {
+                complete = true;    // 翻到空页 = 走到底了
+                break;
+            }
+            all.addAll(data);
+
+            Integer total = resp.getTotal();
+            if (total != null && all.size() >= total) {
+                complete = true;    // 收齐了
+                break;
+            }
         }
+        return new EpisodeFetch(all, complete);
     }
 
     /** 获取每日放送日历 */

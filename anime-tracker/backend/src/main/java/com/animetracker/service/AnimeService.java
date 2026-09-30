@@ -613,6 +613,18 @@ public class AnimeService {
         return cached.orElse(null);
     }
 
+    /**
+     * 剧集列表(本篇).
+     *
+     * <p><b>改动前这里有第二个洞: 只要本地有一行, 就当已经取全了.</b>
+     * 那时候"取一页"和"取全"分不出来 —— 反正存的永远是前 100 条 —— 所以
+     * {@code !cached.isEmpty()} 看着没什么毛病. 一旦回源改成按 total 翻页, 这一行就成了
+     * 拦路虎: 500 集的番第一次仍然只显示那 100 条(改动前存下的), 因为缓存"命中"了.
+     *
+     * <p>所以判据换成"条数够不够 {@code anime.episodeTotal}", 而那一列只在<b>完整取回</b>
+     * 时才写. 从来没取全过的行(含改动前入库的全部老行, 那一列是 NULL)一律重取一次 ——
+     * 这也就是老数据的自愈路径: 用户不需要做任何事, 点开就修好了.
+     */
     @Transactional
     public List<Episode> getEpisodes(Integer subjectId) {
         Optional<Anime> animeOpt = animeRepository.findById(subjectId);
@@ -622,19 +634,57 @@ public class AnimeService {
         Anime anime = animeOpt.get();
 
         List<Episode> cached = episodeRepository.findByAnimeOrderByEpisodeNumAsc(anime);
-        if (!cached.isEmpty()) {
+        if (isEpisodeCacheComplete(cached, anime)) {
             return cached;
         }
 
-        List<EpisodeDTO> dtos = bangumiApiClient.getEpisodes(subjectId);
-        if (!dtos.isEmpty()) {
-            List<Episode> episodes = dtos.stream()
-                    .map(d -> toEpisodeEntity(d, anime))
-                    .collect(Collectors.toList());
-            episodeRepository.saveAll(episodes);
-            return episodes;
+        BangumiApiClient.EpisodeFetch fetch = bangumiApiClient.getEpisodes(subjectId);
+
+        if (!fetch.complete()) {
+            // 没翻完. 半批可以返回给这次看, 但**不落库**: 落下去就等于把"取了一半"
+            // 写成"取过了"(episodeTotal 一落, 下次直接命中不再回源), 那正是这次要修的
+            // bug 的形状, 只不过从"永远 100 条"变成"永远卡在第一次失败的那一页".
+            // 一条都没拿到 = 回源失败, 退回本地已有的(可能是改动前那批截断的) ——
+            // 改动前这里返回空表, 把用户本来能看见的那几集也一并弄没了.
+            return fetch.items().isEmpty() ? cached : toEpisodeEntities(fetch.items(), anime);
         }
-        return Collections.emptyList();
+
+        // 走到这里 = 完整取回. 哪怕一条都没有, 那也是"确实没有本篇剧集"这个确定的事实,
+        // 值得记下来(episodeTotal=0), 否则每次打开详情页都要再回源一次.
+        List<Episode> episodes = toEpisodeEntities(fetch.items(), anime);
+        if (episodes.isEmpty()) {
+            // 取全了却是空的, 而本地还留着老数据 —— 清掉. 留着的话 episodeTotal=0 会让
+            // 下面的命中判定永远返回那批老数据, 于是"库里"和"这次响应"从此各说各话.
+            episodeRepository.deleteAll(cached);
+        } else {
+            episodeRepository.saveAll(episodes);
+        }
+        anime.setEpisodeTotal(episodes.size());
+        animeRepository.save(anime);
+        return episodes;
+    }
+
+    /**
+     * 本地这批剧集算不算"完整".
+     *
+     * <p>只有 {@code episodeTotal} 是拿"我们真的收齐了多少条"写的才作数. 不要改用
+     * {@code anime.getTotalEpisodes()}(条目接口的声明值, 前者是"官方说有 n 集"):
+     * 实测抽 28 部知名长篇有 9 部对不上, 且方向恒为声明值更大(犬夜叉 181 vs 167,
+     * 乌龙派出所 373 vs 344). 拿声明当应到数, 犬夜叉那 167 条永远够不着 —— 每次打开
+     * 详情页都要重新下载一遍, 比改动前还糟.
+     */
+    private boolean isEpisodeCacheComplete(List<Episode> cached, Anime anime) {
+        Integer expected = anime.getEpisodeTotal();
+        if (expected == null) {
+            return false;   // 从来没完整取过 -> 取一次
+        }
+        return cached.size() >= expected;
+    }
+
+    private List<Episode> toEpisodeEntities(List<EpisodeDTO> dtos, Anime anime) {
+        return dtos.stream()
+                .map(d -> toEpisodeEntity(d, anime))
+                .collect(Collectors.toList());
     }
 
     // ==================== 筛选 / 标签 ====================

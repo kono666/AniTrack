@@ -46,6 +46,24 @@ public class Anime {
     @Column(name = "total_episodes")
     private Integer totalEpisodes;   // 总集数
 
+    // 已完整取回的剧集条数 —— 与上面那个 totalEpisodes **不是一回事**, 别合并.
+    //
+    // totalEpisodes 来自条目接口自己的声明, 是"官方说有这么多集"; episodeTotal 是
+    // "我们这边真的收齐了这么多条". 两者实测会不一致: 抽 28 部知名长篇, 有 9 部对不上,
+    // 且方向恒为 totalEpisodes 更大 (乌龙派出所 373 vs 344, 犬夜叉 181 vs 167,
+    // 食戟之灵 33 vs 24 ...). 差在哪儿不重要, 重要的是**不能拿声明去判断我们收齐没有** ——
+    // 拿 181 当"应到"的话, 犬夜叉的 167 条永远够不着, 每次打开详情页都要重新下载一遍.
+    //
+    // 语义要分清, 因为判"缓存完整"全靠它:
+    //   NULL -> 从来没完整取过 (改动前入库的老行全是 NULL, 也包含"只取过一页就存下"的行)
+    //   0    -> 取过了, 确实没有本篇剧集 (SP/OVA 只有 OP/ED 的条目)
+    //   n    -> 完整取过, 共 n 条
+    // 新建条目时不填, 保持 NULL —— 让下一个人点开详情页时补一次完整抓取.
+    //
+    // 没有给它建索引: 唯一的问题是"这一行取齐了没有", 永远按主键取单行, 与索引无关.
+    @Column(name = "episode_total")
+    private Integer episodeTotal;    // 已完整取回的剧集条数 (NULL=没取过)
+
     // 精度与刻度写死在 columnDefinition 里, 而不是用 @Column(precision/scale):
     // 这里要的是一列定点小数, 写法必须与迁移脚本完全一致 (见 db/migration/[h2|postgres]/V1__init_schema.sql).
     //
