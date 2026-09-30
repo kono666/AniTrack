@@ -323,7 +323,11 @@ async function load(){
     const tags = subject.value?.tags
     if (tags?.length > 0) {
       try {
-        const tr = await getFiltered({ tag: tags[0].name, sort: 'rating', page: 1, limit: 8 })
+        // 参数名是 genre 不是 tag: 分类浏览页把 `/filter` 的标签参数从"单个 tag"
+        // 改成了四个维度(genre/medium/source/region), 且**没留 tag 别名** ——
+        // 留一个同义参数会让"同一个筛选有两种表达"长期存在. 这里传的是原始标签名
+        // (不是分类页那套 slug 词表): 详情页的标签本来就来自库, 直接对上后端.
+        const tr = await getFiltered({ genre: tags[0].name, sort: 'rating', page: 1, limit: 8 })
         relatedAnime.value = (tr.data.data?.list || []).filter(a => a.id !== sid).slice(0, 8)
       } catch (e) { /* 相关推荐拉不到不影响正文 */ }
     }

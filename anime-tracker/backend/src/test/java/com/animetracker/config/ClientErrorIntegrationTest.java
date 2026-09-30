@@ -213,6 +213,35 @@ class ClientErrorIntegrationTest {
                 .andExpect(jsonPath("$.data.list").isEmpty());
     }
 
+    /**
+     * 四个标签组参数一起传: 仍然是 200, 返回结构仍然是 {@code {list,total,page}}.
+     *
+     * <p>这条钉的是"参数从 1 个变成 4 个"这件事没有把接口的对外形状改掉 ——
+     * 多一个必填参数、或者 service 抛出的异常顺着新参数漏出来, 都会让分类浏览页
+     * 整个白屏, 而这是这次改动里唯一跨越 HTTP 边界的地方.
+     *
+     * <p>名字用中文是为了顺手验一遍 URI 上的非 ASCII 参数能活着走到 service:
+     * 前端发出去的正是中文标签名, 而参数名写错时 Spring 会**静默当成没传**
+     * (四个参数全是 {@code required = false}), 结果从"筛过"变成"没筛" —— 所以
+     * 断言里必须有 {@code total}, 光看 200 看不出这件事.
+     */
+    @Test
+    @DisplayName("筛选接口的四个标签组参数都收得下, 返回结构没变")
+    void filterAcceptsTheFourTagGroups() throws Exception {
+        mockMvc.perform(get("/api/bangumi/filter")
+                        .param("genre", "机甲,奇幻")
+                        .param("medium", "TV")
+                        .param("source", "漫画改")
+                        .param("region", "日本")
+                        .param("sort", "date"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").isMap())
+                .andExpect(jsonPath("$.data.list").isArray())
+                .andExpect(jsonPath("$.data.total").isNumber())
+                .andExpect(jsonPath("$.data.page").value(1));
+    }
+
     // ── 评论列表的分页参数 ──────────────────────────────────────
     //
     // 这一组盯两件事. 一是 ReviewController 上那个类级 @Validated 真的挂上了 ——

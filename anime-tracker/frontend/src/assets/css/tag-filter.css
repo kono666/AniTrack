@@ -1,12 +1,101 @@
 /* ============================================================
-   �AniTrack — Tag Filter
+   AniTrack — 分类浏览页(Category Browse)
+   ============================================================
+   两栏骨架: 左栏筛选、右栏结果. 这条栅格**只属于这一页** —— 站里别处都是单列
+   (见 layout.css 的 .page-container), 所以它写在这里而不是 layout.css.
+
+   旧的 `.tag-filter` / `.tag-chip` 那一套(一排平铺的标签胶囊)已随这一页的重做
+   一起删掉: 全仓只有 Tags.vue 用过它们, 而它现在是下面这套. 要找回那套样式看
+   git 历史.
    ============================================================ */
 
-.tag-filter { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:18px; }
-.tag-chip {
-  padding:6px 14px; border-radius:20px; font-size:12px; font-weight:500;
-  cursor:pointer; transition:all var(--transition);
-  background:var(--card); color:var(--text-secondary); border:1px solid var(--border);
+.browse-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 24px;
+  align-items: start;
 }
-.tag-chip:hover { border-color:var(--primary); color:var(--primary); }
-.tag-chip.active { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }
+
+/* 筛选栏. sticky + 自己带滚动条: 六组约 50 个按钮撑不出一屏, 而"改条件时不用先
+   滚回顶部"值这条内层滚动条(嵌套滚动是老毛病, 是明说的取舍)。 */
+.filter-panel {
+  position: sticky;
+  top: 88px;
+  max-height: calc(100vh - 112px);
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.filter-group { margin-bottom: 18px; }
+.filter-group-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 8px;
+}
+.filter-group-head h2 {
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  color: var(--text-secondary); text-transform: none;
+}
+.filter-clear {
+  padding: 2px 6px;
+  font-family: inherit; font-size: 11px;
+  color: var(--text-secondary); background: none; border: none;
+  cursor: pointer; transition: color var(--transition);
+}
+.filter-clear:hover { color: var(--primary); }
+
+.filter-options { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* 选项胶囊. 观感与旧 .tag-chip 同源(圆角胶囊、--card 底、选中 --primary 实底),
+   但尺寸更紧凑 —— 侧栏 240px 宽, 旧尺寸一行放不下两个中文词.
+   这里是真的 <button>: 可聚焦、有 aria-pressed、回车/空格天然可用, 不必再手写
+   keydown. 按下反馈与聚焦环由 interactions.css 里的 button:active / button:focus-visible
+   给到. */
+.filter-option {
+  padding: 5px 12px; border-radius: 20px;
+  font-family: inherit; font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all var(--transition);
+  background: var(--card); color: var(--text-secondary); border: 1px solid var(--border);
+}
+.filter-option:hover { border-color: var(--primary); color: var(--primary); }
+.filter-option.active {
+  background: var(--primary); color: var(--primary-foreground); border-color: var(--primary);
+}
+.filter-more { border-style: dashed; }
+
+/* 「筛选」开关与遮罩: 只在窄屏存在. 桌面端整条规则都不生效(display:none 在媒体查询外) */
+.filter-toggle { display: none; }
+.filter-scrim { display: none; }
+
+@media (max-width: 768px) {
+  .browse-layout { grid-template-columns: 1fr; gap: 0; }
+
+  /* 抽屉: 与 assistant.css 的 .chat-sidebar 同一套写法(fixed + translateX),
+     断点不同是因为这里的侧栏更窄 —— 768 而不是 860. */
+  .filter-panel {
+    position: fixed; top: 64px; bottom: 0; left: 0; z-index: 900;
+    width: 260px; max-height: none;
+    padding: 16px 12px;
+    background: var(--bg);
+    transform: translateX(-100%); transition: transform var(--transition);
+  }
+  .filter-panel.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+
+  .filter-toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-bottom: 14px; padding: 7px 14px;
+    font-family: inherit; font-size: 13px; font-weight: 600;
+    color: var(--text); background: var(--card);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .filter-toggle-count {
+    min-width: 18px; padding: 1px 5px;
+    font-size: 11px; text-align: center;
+    color: var(--primary-foreground); background: var(--primary); border-radius: 9px;
+  }
+
+  .filter-scrim {
+    display: block; position: fixed; inset: 64px 0 0 0; z-index: 899;
+    background: rgba(0, 0, 0, .4);
+  }
+}

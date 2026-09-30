@@ -177,12 +177,23 @@ public class BangumiController {
     }
 
     /**
-     * 按年份 / 季度 / 状态 / 标签筛选, 分页返回.
+     * 按年份 / 季度 / 状态 / 四组标签筛选, 分页返回.
      *
      * <p>返回结构从「一个裸数组」改成了 {@code {list, total, page}} —— 与
      * {@code /api/bangumi/search} 完全一致, 前端 Search.vue 读的就是这个形状
      * (批次 6 的筛选页分页会直接复用它). 改之前这里一次返回全部匹配行,
      * 无参数时即整张表.
+     *
+     * <p><b>四个标签参数都是"逗号分隔的标签名", 组内 OR、组间 AND.</b>
+     * 参数名从单个的 {@code tag} 换成了 {@code genre / medium / source / region},
+     * 且**不留 {@code tag} 别名** —— 留一个同义参数会让"同一个筛选有两种表达"长期
+     * 存在, 而唯一的前端调用方只有一处(详情页的相关推荐), 改名是一行.
+     *
+     * <p><b>为什么是逗号而不是重复参数({@code ?genre=a&genre=b}).</b> 走线的是
+     * 标签名, 一个选项常常展开成好几个名字(「机甲」→ 机战/萝卜/机甲/机器人),
+     * 重复参数会让 URL 长到没人愿意读; 而当前库里 40,247 个标签**一个都不含逗号**
+     * (2026-09-30 只读实测), 分隔符与名字不会撞车. 这个前提与撞车时的行为写在
+     * {@link com.animetracker.service.AnimeService.FilterQuery#fromCsv}.
      *
      * <p>page / limit 的注解与 search 那边同一套: 少了类级 {@code @Validated}
      * 它们会被静默忽略(见类注释), 越界的 page 则是 (page-1)*limit 溢出/负起点
@@ -194,7 +205,10 @@ public class BangumiController {
             @RequestParam(required = false) String year,
             @RequestParam(required = false) String season,
             @RequestParam(required = false) String status,
-            @RequestParam(required = false) String tag,
+            @RequestParam(required = false) String genre,
+            @RequestParam(required = false) String medium,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String region,
             @RequestParam(defaultValue = "rank") String sort,
             @RequestParam(defaultValue = "1")
             @Min(value = 1, message = "页码从 1 开始") Integer page,
@@ -202,8 +216,9 @@ public class BangumiController {
             @Min(value = 1, message = "每页条数不能小于 1")
             @Max(value = 50, message = "每页条数不能超过 50") Integer limit) {
 
-        Map<String, Object> result =
-                animeService.getFilteredPage(year, season, status, tag, sort, page, limit);
+        Map<String, Object> result = animeService.getFilteredPage(
+                AnimeService.FilterQuery.fromCsv(year, season, status, genre, medium, source, region),
+                sort, page, limit);
         List<Anime> list = (List<Anime>) result.get("list");
         int total = ((Number) result.getOrDefault("total", 0)).intValue();
 

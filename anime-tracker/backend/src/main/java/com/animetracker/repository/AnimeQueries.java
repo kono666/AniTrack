@@ -260,6 +260,66 @@ final class AnimeQueries {
 
     static final String COUNT_TAGGED = COUNT_ANIME + FILTER_WHERE + " AND " + TAG_MATCHES;
 
+    // ==================== 筛选: 四组标签(分类浏览页) ====================
+
+    /**
+     * 四组标签「每组任意命中一个」, 四组之间是「与」—— 分类浏览页的语义.
+     *
+     * <p><b>组内是「或」不需要在这里做任何事.</b> {@link #TAG_MATCHES} 本来就是
+     * {@code IN} 半连接, 语义就是"挂着这几个里的任意一个"; 这一条只是把它摆了四份,
+     * 再用 {@code AND} 串起来. 所以「组内或、组间与」这句话在这里字面成立, 不需要
+     * 任何 {@code GROUP BY} / {@code HAVING}.
+     *
+     * <p><b>为什么不复用 {@link #TAG_MATCHES}.</b> 那一条表达的是"一组", 现在有四个
+     * 调用方在用({@code /by-tag}、助手的 {@code filter_anime} 工具、以及旧签名的
+     * {@code getFiltered} 两条)。让它们也走这一条, 等于每次按标签浏览都凭空多背三条
+     * 恒不匹配的子查询, 换不到任何东西。两条并存是有意的不对称, 不是漏了合并。
+     *
+     * <p><b>每条前面为什么有一个 {@code :xxxActive = FALSE OR}.</b> 这是这一条与
+     * {@link #TAG_MATCHES} 唯一的结构性差别, 也是它唯一值得解释的地方。四个维度里
+     * 用户可能只选了一两个, 而**未选中的那一组在 SQL 里必须"恒真"**, 不能是"恒假"
+     * —— 恒假会让没选地区的人也只看得到有地区标签的番。
+     *
+     * <p><b>恒真由布尔参数负责, 不由哨兵负责。</b>未选中的组, 调用方传的是一个恒不匹配的
+     * 哨兵 id(见 {@code AnimeService#NO_TAG_IDS}), 那个哨兵恰好等于"恒假"—— 与这里要的
+     * "恒真"正相反。把两者对齐的是 {@code :xxxActive}: {@code OR} 左边是绑定参数, 为真时
+     * 短路, 右边那条子查询根本不被求值。
+     *
+     * <p>所以哨兵不是"恒真"的实现手段, 而是**第二道**: 空集合在 JPQL 里是个没有合法写法的
+     * 边界。字面 {@code IN ()} 在 H2 上是语法错误({@code 42001}, 手工验过), Hibernate 6.6
+     * 恰好把空集合参数渲染成 {@code 1=0} 绕开了它 —— 但那是它的实现选择, 不是语言保证。
+     * 传哨兵就不必指望这一点。
+     *
+     * <p><b>为什么不写成一条 {@code GROUP BY + HAVING COUNT(DISTINCT CASE ...)}.</b>
+     * 那种写法一条子查询就够, 但那个 {@code CASE} 要放进 {@code COUNT(DISTINCT ...)}
+     * 里 —— H2 与 PostgreSQL 的 SQL 都认, JPQL 的语法却没有这一条, 靠 Hibernate 放行。
+     * 这个文件上面那段长注释记的正是上一次"看着等价的改写"换来 138 倍的真实代价,
+     * 不拿一个语法边缘的写法去赌第二次。
+     *
+     * <p>与 {@link #TAG_MATCHES} 同理, 这里也是"参数是 tag <em>id</em> 而不是标签名"。
+     */
+    static final String TAG_GROUP_MATCHES =
+            "(:genreActive = FALSE OR a.id IN "
+                    + "(SELECT at1.animeId FROM AnimeTag at1 WHERE at1.tag.id IN :genreIds))"
+                    + " AND (:mediumActive = FALSE OR a.id IN "
+                    + "(SELECT at2.animeId FROM AnimeTag at2 WHERE at2.tag.id IN :mediumIds))"
+                    + " AND (:sourceActive = FALSE OR a.id IN "
+                    + "(SELECT at3.animeId FROM AnimeTag at3 WHERE at3.tag.id IN :sourceIds))"
+                    + " AND (:regionActive = FALSE OR a.id IN "
+                    + "(SELECT at4.animeId FROM AnimeTag at4 WHERE at4.tag.id IN :regionIds))";
+
+    static final String TAGGED_GROUP_RANK =
+            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_GROUP_MATCHES + ORDER_RANK_ASC_NULL_LAST;
+
+    static final String TAGGED_GROUP_DATE =
+            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_GROUP_MATCHES + ORDER_DATE_DESC_NULL_LAST;
+
+    static final String TAGGED_GROUP_RATING =
+            SELECT_ANIME + FILTER_WHERE + " AND " + TAG_GROUP_MATCHES + ORDER_WEIGHTED_DESC;
+
+    /** 计数. 与上面三条共用同一份 {@link #FILTER_WHERE} 与 {@link #TAG_GROUP_MATCHES} */
+    static final String COUNT_TAGGED_GROUP = COUNT_ANIME + FILTER_WHERE + " AND " + TAG_GROUP_MATCHES;
+
     /**
      * 年份下拉框的取值: date 的前四位.
      *

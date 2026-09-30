@@ -25,6 +25,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -773,6 +774,64 @@ class QueryCountIntegrationTest {
 
         assertThat(sql).containsIgnoringCase("case when")
                 .containsIgnoringCase("sort_rank");
+    }
+
+    /**
+     * 分类浏览页那条四组语句的形状: <b>四条</b> {@code IN} 半连接, 且<b>每条各带一个</b>
+     * 短路开关, 没有 {@code EXISTS}、没有顶层 {@code join anime_tag}.
+     *
+     * <p>判据沿用 {@link #tagBrowseSqlUsesInSubquery} 那一套(那条写法在这个库上是全表
+     * 扫描 + 逐行主键回探, 满库时慢 138 倍, 而两种写法返回的行一模一样, 只有 SQL 文本
+     * 分得出来), 多出来的是这一条独有的两件事:
+     *
+     * <p><b>为什么数"四条".</b> 少一条就是"某一组被静默忽略" —— 用户勾了地区却拿到
+     * 全站, 返回值照样 200, 页面上看不出任何异常.
+     *
+     * <p><b>为什么数"四个 false".</b> 每一条子句前面挂着一个 {@code :xxxActive = FALSE OR},
+     * 未选中的组靠它短路成恒真. 少一个, 那一组就退化成"恒不匹配"; 而如果有人图省事
+     * 把整个四组表达式用外层一个 {@code :activeCount = 0 OR} 包起来, 那条短路只对
+     * "一组都没选"生效、对"选了一部分"毫无作用 —— 那正是最常见的用法. 逐条数出现次数,
+     * 就是让那种"看着等价"的改写在这里变红.
+     *
+     * <p>断言在**去掉全部空白、转小写**的 SQL 上做: 运算符两侧有没有空格由 Hibernate
+     * 的渲染器决定, 那是它的实现细节, 不该让这条用例跟着它一起变.
+     */
+    @Test
+    @DisplayName("四组标签的 SQL: 四条 IN 半连接各带一个短路开关, 没有 EXISTS")
+    void tagGroupSqlUsesFourGuardedInSubqueries() {
+        seedSeasonedAnime(1, "9q63-07");
+        long genre = tagIdOf("qct-group-genre");
+        long region = tagIdOf("qct-group-region");
+
+        animeRepository.findFilteredByTagGroupsDate(null, null, null,
+                true, List.of(genre),
+                false, List.of(-1L),
+                false, List.of(-1L),
+                true, List.of(region),
+                PageRequest.of(0, 5));
+        String sql = squash(lastSqlNormalized());
+
+        assertThat(occurrences(sql, "idin(select")).as("四条子查询, 一组一条")
+                .isEqualTo(4);
+        assertThat(occurrences(sql, "false")).as("每条子句一个短路开关, 不能合并成一个")
+                .isEqualTo(4);
+        assertThat(sql).as("EXISTS 那条写法是 124 秒")
+                .doesNotContain("exists")
+                .as("顶层 join 关联表是当初被换掉的那种写法")
+                .doesNotContain("joinanime_tag");
+    }
+
+    /** 去掉全部空白并转小写 —— 拿它来做与渲染空格无关的形状断言 */
+    private static String squash(String sql) {
+        return sql.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    private static int occurrences(String haystack, String needle) {
+        int count = 0;
+        for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
+            count++;
+        }
+        return count;
     }
 
     /**

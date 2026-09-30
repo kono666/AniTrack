@@ -293,4 +293,130 @@ class AnimeFilterIntegrationTest {
         // 叠加年份: 这批行都在今年, 查去年就一条都没有
         assertThat(taggedAmong(mine, "百合", String.valueOf(LocalDate.now().getYear() - 1))).isEmpty();
     }
+
+    // ========== 四组标签(分类浏览页) ==========
+
+    /**
+     * 调真实的四组筛选, 结果收窄到自己建的那几行 —— 手法与 {@link #filteredAmong} 一致.
+     *
+     * <p>年份/状态一律传 null: 这一组用例要验的是标签之间的关系, 混进时间条件只会
+     * 让失败的用例多一种可能的解释.
+     */
+    private List<Integer> groupedAmong(Set<Integer> mine, List<String> genre,
+                                       List<String> medium, List<String> source,
+                                       List<String> region) {
+        return animeService.getFiltered(
+                        new AnimeService.FilterQuery(null, null, null, genre, medium, source, region), null)
+                .stream()
+                .map(Anime::getId)
+                .filter(mine::contains)
+                .collect(Collectors.toList());
+    }
+
+    private List<Integer> groupedAmong(Set<Integer> mine, List<String> genre) {
+        return groupedAmong(mine, genre, null, null, null);
+    }
+
+    /**
+     * 组内是「或」、组间是「与」—— 分类浏览页唯一的核心语义.
+     *
+     * <p>三条自建行是刻意摆成这样的一组:
+     * <ul>
+     *   <li>只挂题材的 —— 验"组内或"时它要在, 验"组间与"时它必须不在;</li>
+     *   <li>只挂地区的 —— 同上, 方向相反;</li>
+     *   <li>两个都挂的 —— 任何一次筛选里它都该在.</li>
+     * </ul>
+     * 有了这三条, "组内或"退化成"组间与"(或反过来)都会让其中一条断言变红;
+     * 只建"两个都挂"的那一条则两种坏法都验不出来.
+     *
+     * <p>标签名用真实名字(机甲 → 也会试 Mecha)而不是造的字符串: 走的是与线上
+     * 完全一样的那条"中文名 + 英文写法"的解析路径.
+     */
+    @Test
+    @DisplayName("四组标签: 组内是「或」、组间是「与」")
+    void groupsAreOrredWithinAndAndedAcross() {
+        String date = LocalDate.now().minusWeeks(1).toString();
+        seedTagged(90000171, "分组用例两者都挂", date, 12, 1, "机甲", "日本");
+        seedTagged(90000172, "分组用例只挂题材", date, 12, 2, "机甲");
+        seedTagged(90000173, "分组用例只挂地区", date, 12, 3, "日本");
+        Set<Integer> mine = ids(90000171, 90000172, 90000173);
+
+        // 组内或: 奇幻 与 机甲 是同一个组里的两个选项, 谁挂着都算命中
+        assertThat(groupedAmong(mine, List.of("奇幻", "机甲")))
+                .containsExactlyInAnyOrder(90000171, 90000172);
+        // 组间与: 题材与地区各选一个, 两边都要挂着才算
+        assertThat(groupedAmong(mine, List.of("机甲"), null, null, List.of("日本")))
+                .containsExactly(90000171);
+        // 只选一组时退化成单组行为, 另一组不该被"顺手"当成筛过了
+        assertThat(groupedAmong(mine, null, null, null, List.of("日本")))
+                .containsExactlyInAnyOrder(90000171, 90000173);
+    }
+
+    /**
+     * 某组给了名字、但库里一个都没解析出来时, 结果是**空**, 不是"这一组不筛".
+     *
+     * <p>这是这个分支能犯的最坏的一种错, 所以由一条端到端断言钉死: 退化成"不筛"
+     * 的话, 用户点了一个词表里写错的名字, 拿回的是整个库 —— 而不是"没有匹配".
+     * 分组之后这条更容易踩到, 因为前端的一个选项展开成好几个标签名, 只要其中一个
+     * 拼错, 整组就静默失效.
+     *
+     * <p>断言的是**全局** total(不经过 {@code mine} 收窄): 空结果的语义本身就是
+     * "一条都没有", 收窄反而会让断言恒真.
+     */
+    @Test
+    @DisplayName("某一组的名字一个都解析不出来时结果是空, 不是「这一组不筛」")
+    void anUnresolvableNameInAnyGroupYieldsNothing() {
+        assertThat(animeService.getFiltered(new AnimeService.FilterQuery(
+                null, null, null, List.of("这个名字库里一定没有"), null, null, null), null))
+                .isEmpty();
+        // 同一句话在四组里的每一组都要成立 —— 每一组走的是同一条解析路径,
+        // 但"某一组漏了判空"恰好是抄四份时最容易漏掉的那一份
+        assertThat(animeService.getFiltered(new AnimeService.FilterQuery(
+                null, null, null, List.of("机甲"), null, null, List.of("这个名字库里一定没有")), null))
+                .isEmpty();
+    }
+
+    /**
+     * <b>没选的那一组必须"恒真", 不能"恒不匹配".</b>
+     *
+     * <p>这是这一整块里最容易写错、错了又最难发现的一处。未选中的组在 SQL 里要发一条
+     * 子查询(空 {@code IN} 在 H2 上是语法错误, 所以只能发哨兵), 而哨兵恰好等于
+     * "这一组谁都不匹配" —— 少了 {@code :xxxActive = FALSE OR} 那个短路, "只筛了地区"
+     * 就会变成"还要同时挂着题材", 把六分之一的结果静默吃掉, 接口照样返回 200.
+     *
+     * <p>所以这里的两条自建行都**刻意不带题材标签**: 一个是只挂地区, 一个什么标签
+     * 都不挂。筛选条件只有地区时, 它们都得在 —— 前者证明未选中的题材组没有反过来
+     * 把行筛掉, 后者顺手钉住"任何一组生效时, 一个标签都没有的番本来就该出局"
+     * (那是已接受的数据空缺, 不是 bug).
+     */
+    @Test
+    @DisplayName("只选一组时, 未选中的那几组必须恒真 —— 没有该组标签的行照样留下")
+    void unselectedGroupsMatchEverything() {
+        String date = LocalDate.now().minusWeeks(1).toString();
+        seedTagged(90000181, "只挂地区没挂题材", date, 12, 1, "日本");
+        seed(90000182, "一个标签都没有", date, 12, 2);
+        Set<Integer> mine = ids(90000181, 90000182);
+
+        assertThat(groupedAmong(mine, null, null, null, List.of("日本"))).containsExactly(90000181);
+    }
+
+    /**
+     * 四组一个都不选 = 什么都不筛 —— 这一步走的是**不带标签的那条老路径**.
+     *
+     * <p>它是一个纯粹的捷径(见 {@code getFilteredPage(FilterQuery,...)}), 但捷径也有
+     * 可观察的差别: 一个标签都没有的番在这条路上是**在**的, 而在任何"选了至少一组"
+     * 的请求里都会被四条子查询筛掉。少了这条断言, 把捷径改成永远走四组语句不会有
+     * 任何测试变红, 而那正好是分类浏览页的首屏.
+     */
+    @Test
+    @DisplayName("四组一个都不选时等同于不筛标签: 连一个标签都没有的番也在")
+    void noGroupSelectedMeansNoTagFilter() {
+        String date = LocalDate.now().minusWeeks(1).toString();
+        seedTagged(90000191, "不选用例挂了标签", date, 12, 1, "机甲");
+        seed(90000192, "不选用例一个标签都没有", date, 12, 2);
+        Set<Integer> mine = ids(90000191, 90000192);
+
+        assertThat(groupedAmong(mine, null, null, null, null))
+                .containsExactlyInAnyOrder(90000191, 90000192);
+    }
 }

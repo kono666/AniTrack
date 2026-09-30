@@ -692,6 +692,103 @@ public class AnimeService {
     // ==================== 筛选 / 标签 ====================
 
     /**
+     * "某一组标签没有选" 用的哨兵 id.
+     *
+     * <p>{@code tag.id} 是自增主键, 不可能等于 -1, 所以它在 {@code IN} 里恒不匹配.
+     * 用它而不是空集合, 是因为空 {@code IN} 列表在 H2 上是语法错误(见
+     * {@link com.animetracker.repository.AnimeQueries#TAG_MATCHES} 末段); 而一旦有了
+     * 它, 四组的那四条子查询就永远都有参数, 语句形状不必再按"这一次选了哪几组"分叉.
+     *
+     * <p><b>它表达的是"这一组谁都不匹配", 不是"这一组不筛".</b> 后者由与它成对的
+     * {@code xxxActive} 布尔参数表达。两个一起用法才是完整的: {@code active=false}
+     * 让子句整体短路成恒真, 哨兵只负责让那条 SQL 合法。只传哨兵、不传 false, 会让
+     * "没选地区"变成"没有任何地区标签的番全部出局" —— 静默少掉六分之一的结果,
+     * 而且报 200.
+     */
+    private static final List<Long> NO_TAG_IDS = List.of(-1L);
+
+    /**
+     * 分类浏览页的筛选条件: 四个标签组 + 年份 + 状态.
+     *
+     * <p><b>为什么打包成一个 record 而不是继续加形参.</b> 摊平成四个参数之后,
+     * {@link #getFilteredPage(FilterQuery, String, int, int)} 会有十一个形参, 而其中
+     * 那八个(四个 id 列表 + 四个布尔)两两之间没有任何类型上的区别 —— 写反顺序编译器
+     * 一声不吭, 运行起来只是"筛选结果不对". 打包之后调用处是具名的, 顺序不再是契约
+     * 的一部分.
+     *
+     * <p><b>为什么放在这里而不是 {@code dto} 包.</b> 它不从 HTTP 边界上直接来
+     * (controller 收的是四个逗号分隔的字符串, 拆分与校验都在下面), 也不往任何响应体里
+     * 去. 它只是本类两个重载之间的搬运工, 位置与
+     * {@code AnimeBackfillService.BackfillResult}、{@code BangumiApiClient.EpisodeFetch}
+     * 一致.
+     *
+     * <p>四个 {@code List} 的取值: <b>null 或空列表都表示"这一组没选"</b>(这一组恒真),
+     * 非空表示"挂着其中任意一个标签"(组内或). 四组之间是**与** —— 合起来就是主流平台
+     * 那套"组内 OR、组间 AND". {@code year}/{@code season}/{@code status} 语义与
+     * 单组那条完全一样, 直接透传给同一份 {@code FILTER_WHERE}.
+     */
+    public record FilterQuery(String year, String season, String status,
+                              List<String> genre, List<String> medium,
+                              List<String> source, List<String> region) {
+
+        /**
+         * 把线路上四个逗号分隔的参数拆成标签名列表 —— **拆分规则只写在这一次**.
+         *
+         * <p><b>走线的是标签名、逗号分隔, 所以分隔符可能和名字本身撞车.</b> 当前库里
+         * 40,247 个标签**一个都不含逗号**(2026-09-30 只读实测), 这是这个格式成立的
+         * 前提. 撞车时的行为是"把它按字面拆成两个名字", 不做转义 —— 那会静默少筛,
+         * 而不是报错. 真出现带逗号的标签, 这里要换成重复参数({@code ?genre=a&genre=b}),
+         * 而不是在这里加一层转义规则: 两边转义规则不一致, 比干脆没有转义更难查.
+         */
+        public static FilterQuery fromCsv(String year, String season, String status,
+                                          String genre, String medium,
+                                          String source, String region) {
+            return new FilterQuery(emptyToNull(year), emptyToNull(season), emptyToNull(status),
+                    splitCsv(genre), splitCsv(medium), splitCsv(source), splitCsv(region));
+        }
+    }
+
+    /**
+     * 逗号分隔的标签名 → 保序去重的列表; 没有有效项时返回 {@code null} 表示"这一组没选".
+     *
+     * <p>去重是必要的而不是顺手: 一个选项展开成多个标签名(「机甲」→ 机战/萝卜/机甲/机器人),
+     * 用户再点上相邻的另一个选项时, 两串展开结果很容易重叠, 而重复的 id 传给 {@code IN}
+     * 只会让参数个数虚高.
+     */
+    private static List<String> splitCsv(String csv) {
+        if (csv == null || csv.isEmpty()) {
+            return null;
+        }
+        Set<String> names = new LinkedHashSet<>();
+        for (String raw : csv.split(",")) {
+            String name = raw.trim();
+            if (!name.isEmpty()) {
+                names.add(name);
+            }
+        }
+        return names.isEmpty() ? null : List.copyOf(names);
+    }
+
+    /** 单个标签名 → 只含它的列表; 空串与 null 是同一个意思("没选"), 都返回 null */
+    private static List<String> singleOrNull(String tag) {
+        return tag == null || tag.isEmpty() ? null : List.of(tag);
+    }
+
+    /**
+     * 未选中的组传哨兵 (-1, 见 {@link #NO_TAG_IDS}), 不传空列表.
+     *
+     * <p>恒真是靠 {@code TAG_GROUP_MATCHES} 里那个布尔守卫做到的, 不是靠这里 —— 详见那条
+     * 常量的注释。这里只负责让"没选"有一个**能走的**参数: 空集合在 JPQL 里没有合法写法,
+     * 而 Hibernate 6.6 把空集合渲染成 {@code 1=0} 只是它的实现选择, 不是语言保证。
+     *
+     * <p>顺带也钉住了语句形状: 四条子查询永远有参数, 于是同样的条件不会因为某一组空着就
+     * 变成另一种形状。
+     */
+    private static List<Long> orSentinel(List<Long> ids) {
+        return ids == null ? NO_TAG_IDS : ids;
+    }
+
+    /**
      * 筛选页的下拉框取值: 年份列表 + 状态列表.
      *
      * <p>改动前这里为了让 date 去重, 把**整张表按日期排序读回来**, 再在 Java 里
@@ -731,7 +828,7 @@ public class AnimeService {
      * {@code unpaged()} 还是一页.
      */
     public List<Anime> getFiltered(String year, String season, String status, String tag, String sort) {
-        List<Long> tagIds = tagIdsOf(tag);
+        List<Long> tagIds = tagIdsOf(singleOrNull(tag));
         // 给了标签名但库里一个都没有: 不筛标签会变成"整个库都算命中", 那是这个分支
         // 能犯的最坏的一种错 —— 所以由空集合明确地表达"没有匹配".
         if (tagIds != null && tagIds.isEmpty()) {
@@ -765,7 +862,7 @@ public class AnimeService {
         String yearPattern = SearchPatterns.prefix(year);
         String seasonKey = emptyToNull(season);
         String statusKey = emptyToNull(status);
-        List<Long> tagIds = tagIdsOf(tag);
+        List<Long> tagIds = tagIdsOf(singleOrNull(tag));
         if (tagIds != null && tagIds.isEmpty()) {
             return pageResult(Collections.emptyList(), 0, safePage);
         }
@@ -785,6 +882,143 @@ public class AnimeService {
                 fetchFiltered(yearPattern, seasonKey, statusKey, tagIds, sort,
                         PageRequest.of(safePage - 1, safeLimit)),
                 total, safePage);
+    }
+
+    /**
+     * 四组标签版的分页筛选 —— **分类浏览页({@code /tags})走这一条**.
+     *
+     * <p><b>它与上面那条单组签名并存, 不是替换.</b> 单组那条还有两个真实调用方
+     * ({@code /by-tag} 与助手的 {@code filter_anime} 工具), 它们的语义里根本没有
+     * "组"这回事; 让它们也走四组形状, 等于每次凭空多背三条恒不匹配的子查询.
+     * 两条入口并存是刻意的不对称, 不是漏了合并(理由也写在
+     * {@code AnimeQueries.TAG_GROUP_MATCHES} 上).
+     *
+     * <p><b>某一组给了名字、但一个都没解析出来时, 结果是空.</b> 与单组那条同一条理由:
+     * 退化成"这一组不筛"会变成"整个库都算命中", 那是这个分支能犯的最坏的一种错.
+     * 这一条在四组下更容易踩到 —— 前端的一个选项展开成好几个标签名, 只要其中一个
+     * 名字在库里不存在, 用户看到的就不是"筛少了"而是"条件没生效".
+     *
+     * <p><b>四组都没选时直接转发给单组那条, 不发四组语句.</b> 这是一处**纯粹的性能
+     * 捷径, 不是语义分支**: 四个 {@code active=false} 的四组语句与不带标签语句的结果
+     * 集完全一样, 只是白算四条恒不匹配的子查询. 分类浏览页的首屏正好是"一个条件都
+     * 没选", 那是这一页最常见的请求, 让它走已经量过的老路径. 删掉这几行不会改变
+     * 任何对外行为, 只会让首屏慢一点.
+     */
+    public Map<String, Object> getFilteredPage(FilterQuery query, String sort, int page, int limit) {
+        int safePage = Math.max(page, 1);
+        int safeLimit = Math.max(limit, 1);
+
+        TagGroupIds groups = resolveGroups(query);
+        if (groups.anyUnresolved()) {
+            return pageResult(Collections.emptyList(), 0, safePage);
+        }
+        if (groups.noneSelected()) {
+            return getFilteredPage(query.year(), query.season(), query.status(), null, sort, page, limit);
+        }
+
+        String yearPattern = SearchPatterns.prefix(query.year());
+        String seasonKey = emptyToNull(query.season());
+        String statusKey = emptyToNull(query.status());
+
+        // count 先算: 越界页也要报真实 total —— 与单组那条同一个理由.
+        long matched = animeRepository.countFilteredByTagGroups(yearPattern, seasonKey, statusKey,
+                groups.genre() != null, orSentinel(groups.genre()),
+                groups.medium() != null, orSentinel(groups.medium()),
+                groups.source() != null, orSentinel(groups.source()),
+                groups.region() != null, orSentinel(groups.region()));
+        int total = (int) Math.min(matched, Integer.MAX_VALUE);
+
+        long offset = (long) (safePage - 1) * safeLimit;
+        if (offset >= total || offset > MAX_SQL_OFFSET) {
+            return pageResult(Collections.emptyList(), total, safePage);
+        }
+        return pageResult(
+                fetchFilteredByTagGroups(yearPattern, seasonKey, statusKey,
+                        groups.genre(), groups.medium(), groups.source(), groups.region(), sort,
+                        PageRequest.of(safePage - 1, safeLimit)),
+                total, safePage);
+    }
+
+    /**
+     * 四组标签版的**完整**结果(**不截断**).
+     *
+     * <p>与它上面那条单组签名一样, 它现在也只有集成测试在用, 理由也一样:
+     * {@code AnimeFilterIntegrationTest} 要断言的是"整份结果里只挑出我建的那几行"
+     * (这个 JVM 里预加载器会真的往同一张表插数据), 而分页一截断, 排序靠后的自建行
+     * 就落在页外, 断言会变成看运气.
+     */
+    public List<Anime> getFiltered(FilterQuery query, String sort) {
+        TagGroupIds groups = resolveGroups(query);
+        if (groups.anyUnresolved()) {
+            return Collections.emptyList();
+        }
+        if (groups.noneSelected()) {
+            return getFiltered(query.year(), query.season(), query.status(), null, sort);
+        }
+        return fetchFilteredByTagGroups(SearchPatterns.prefix(query.year()),
+                emptyToNull(query.season()), emptyToNull(query.status()),
+                groups.genre(), groups.medium(), groups.source(), groups.region(), sort, Pageable.unpaged());
+    }
+
+    /** 四个标签组解析成 id 之后的样子. 只在上面两条筛选入口之间搬运, 不往外走. */
+    private record TagGroupIds(List<Long> genre, List<Long> medium,
+                               List<Long> source, List<Long> region) {
+
+        /** 某一组"选了名字却一个都没解析出来" —— 整个结果必然为空, 与"没选"是相反的两件事 */
+        boolean anyUnresolved() {
+            return unresolved(genre) || unresolved(medium) || unresolved(source) || unresolved(region);
+        }
+
+        /** 四组一个都没选 —— 一条标签子句都不需要, 可以走不带标签的那条老路径 */
+        boolean noneSelected() {
+            return genre == null && medium == null && source == null && region == null;
+        }
+
+        private static boolean unresolved(List<Long> ids) {
+            return ids != null && ids.isEmpty();
+        }
+    }
+
+    private TagGroupIds resolveGroups(FilterQuery query) {
+        return new TagGroupIds(tagIdsOf(query.genre()), tagIdsOf(query.medium()),
+                tagIdsOf(query.source()), tagIdsOf(query.region()));
+    }
+
+    /**
+     * 四组格式的取页: 三个分支 = 三种排序.
+     *
+     * <p>与 {@link #fetchFiltered} 的分支数不同(那边是六条 = 有没有标签 × 三种排序),
+     * 因为这里没有"有没有标签"这一维: 未选中的组由 {@code xxxActive} 短路, 语句本身
+     * 永远带着四条完整的子句.
+     */
+    private List<Anime> fetchFilteredByTagGroups(String yearPattern, String season, String status,
+                                                 List<Long> genreIds, List<Long> mediumIds,
+                                                 List<Long> sourceIds, List<Long> regionIds,
+                                                 String sort, Pageable pageable) {
+        double priorVotes = rankingProperties.getPriorVotes();
+        double priorScore = rankingProperties.getPriorScore();
+        boolean genreActive = genreIds != null;
+        boolean mediumActive = mediumIds != null;
+        boolean sourceActive = sourceIds != null;
+        boolean regionActive = regionIds != null;
+        List<Long> genres = orSentinel(genreIds);
+        List<Long> mediums = orSentinel(mediumIds);
+        List<Long> sources = orSentinel(sourceIds);
+        List<Long> regions = orSentinel(regionIds);
+        if (SORT_DATE.equals(sort)) {
+            return animeRepository.findFilteredByTagGroupsDate(yearPattern, season, status,
+                    genreActive, genres, mediumActive, mediums,
+                    sourceActive, sources, regionActive, regions, pageable);
+        }
+        if (SORT_RATING.equals(sort)) {
+            return animeRepository.findFilteredByTagGroupsRating(yearPattern, season, status,
+                    genreActive, genres, mediumActive, mediums,
+                    sourceActive, sources, regionActive, regions,
+                    priorVotes, priorScore, pageable);
+        }
+        return animeRepository.findFilteredByTagGroupsRank(yearPattern, season, status,
+                genreActive, genres, mediumActive, mediums,
+                sourceActive, sources, regionActive, regions, pageable);
     }
 
     /**
@@ -825,23 +1059,35 @@ public class AnimeService {
     }
 
     /**
-     * 标签名 → tag id.
+     * 一组标签名 → tag id.
      *
      * <p>传进来的名字会先做中→英翻译再一起查({@link TagTranslationUtil#reverseTranslateAll}):
      * 那几个名字本来就是同一个概念的几种写法("百合" / "Yuri"), 叫法是哪个都该命中.
      *
+     * <p><b>一组里的多个名字是"并集", 所以它们合成一次查询、一个 {@code IN}.</b>
+     * 逐个名字查一次再在 Java 里取并集, 语义一样, 但组内 OR 会退化成 N 次往返 ——
+     * 而分类浏览页的一组可以有几十个名字.
+     *
+     * @param tags 一个组里的标签名; {@code null} 或空表示"这一组没选"
      * @return {@code null} 表示"没有标签这个条件"; **空集合**表示"给了标签名, 但库里
      *         一个都没解析出来" —— 这两件事的后续处理正好相反(前者完全不筛标签,
      *         后者必然空结果), 所以用 null 与空集合区分, 而不是都返回空集合.
      */
-    private List<Long> tagIdsOf(String tag) {
-        if (tag == null || tag.isEmpty()) {
+    private List<Long> tagIdsOf(Collection<String> tags) {
+        if (tags == null || tags.isEmpty()) {
             return null;
         }
         Set<String> names = new LinkedHashSet<>();
-        names.add(tag);
-        names.addAll(TagTranslationUtil.reverseTranslateAll(tag));
-        return tagRepository.findByNameIn(names).stream().map(Tag::getId).collect(Collectors.toList());
+        for (String tag : tags) {
+            if (tag != null && !tag.isEmpty()) {
+                names.add(tag);
+                names.addAll(TagTranslationUtil.reverseTranslateAll(tag));
+            }
+        }
+        // 传进来的全是空串 —— 与"没选"是同一件事, 不能掉进下面返回空集合那条路
+        // (那会让调用方判成"必然空结果").
+        return names.isEmpty() ? null
+                : tagRepository.findByNameIn(names).stream().map(Tag::getId).collect(Collectors.toList());
     }
 
     /** 空串与 null 在这里是同一件事("不限"), 与改动前那些 {@code isEmpty()} 判据一致 */

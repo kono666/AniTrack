@@ -7,7 +7,6 @@ button:active:not(:disabled),
 a:active:not(:disabled),
 .ep-item:active,
 .anime-card:active,
-.tag-chip:active,
 .tab:active {
   transform: scale(0.97);
   transition: transform 80ms ease;
@@ -26,7 +25,6 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 .ep-item:focus-visible,
-.tag-chip:focus-visible,
 .tab:focus-visible,
 .anime-card:focus-visible,
 .hs-card:focus-visible,

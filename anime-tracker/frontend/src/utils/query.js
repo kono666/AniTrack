@@ -29,3 +29,20 @@ export function pageParam(raw) {
   const n = Number.parseInt(strParam(raw), 10)
   return Number.isInteger(n) && n > 0 ? n : 1
 }
+
+/**
+ * 逗号分隔的多选参数 → 数组. `?genre=mecha,fantasy` → `['mecha', 'fantasy']`.
+ *
+ * 分类浏览页的四个标签组走的是这一种写法, 而不是 `?genre=a&genre=b`: URL 更短、
+ * 更好读, 读写两侧都只是 split / join. 上面 strParam 的注释里那段"数组形态是
+ * 陷阱"在这里反过来用 —— 数组若真的出现, 说明这条 URL 不是本页写出来的,
+ * 当作"没有这个参数"处理, 比按其中一种写法解析出半条筛选要诚实.
+ *
+ * 去重是必要的: 手改的 URL 里同一个 slug 出现两次, 会让请求里的标签名重复
+ * (后端会去重, 但 URL 与选择状态两边对不上才是真麻烦).
+ */
+export function arrParam(raw) {
+  const value = strParam(raw)
+  if (!value) return []
+  return [...new Set(value.split(',').filter(Boolean))]
+}

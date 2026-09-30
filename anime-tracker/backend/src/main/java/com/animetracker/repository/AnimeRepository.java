@@ -140,6 +140,75 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
                             @Param("status") String status,
                             @Param("tagIds") Collection<Long> tagIds);
 
+    // ==================== 筛选: 四组标签(分类浏览页) ====================
+    //
+    // 与上面那四条的区别有两处: 标签从"一组"变成"四组"(四组之间是「与」), 以及每组
+    // 多了一个 `xxxActive` 布尔。两者都是必须的:
+    //
+    // - 四个 id 列表**每个都必须非空** —— "这一组没选"由调用方传哨兵 id 表达, 不是
+    //   空集合(空 IN 在 H2 上是语法错误);
+    // - 但哨兵恰好等于"这一组恒不匹配", 而"没选"要的是"这一组恒真", 所以由
+    //   `xxxActive` 把这两件事分开。传 false 时那条子句整体短路。
+    //
+    // 完整理由见 AnimeQueries.TAG_GROUP_MATCHES。
+
+    @Query(AnimeQueries.TAGGED_GROUP_RANK)
+    List<Anime> findFilteredByTagGroupsRank(@Param("yearPattern") String yearPattern,
+                                            @Param("season") String season,
+                                            @Param("status") String status,
+                                            @Param("genreActive") boolean genreActive,
+                                            @Param("genreIds") Collection<Long> genreIds,
+                                            @Param("mediumActive") boolean mediumActive,
+                                            @Param("mediumIds") Collection<Long> mediumIds,
+                                            @Param("sourceActive") boolean sourceActive,
+                                            @Param("sourceIds") Collection<Long> sourceIds,
+                                            @Param("regionActive") boolean regionActive,
+                                            @Param("regionIds") Collection<Long> regionIds,
+                                            Pageable pageable);
+
+    @Query(AnimeQueries.TAGGED_GROUP_DATE)
+    List<Anime> findFilteredByTagGroupsDate(@Param("yearPattern") String yearPattern,
+                                            @Param("season") String season,
+                                            @Param("status") String status,
+                                            @Param("genreActive") boolean genreActive,
+                                            @Param("genreIds") Collection<Long> genreIds,
+                                            @Param("mediumActive") boolean mediumActive,
+                                            @Param("mediumIds") Collection<Long> mediumIds,
+                                            @Param("sourceActive") boolean sourceActive,
+                                            @Param("sourceIds") Collection<Long> sourceIds,
+                                            @Param("regionActive") boolean regionActive,
+                                            @Param("regionIds") Collection<Long> regionIds,
+                                            Pageable pageable);
+
+    @Query(AnimeQueries.TAGGED_GROUP_RATING)
+    List<Anime> findFilteredByTagGroupsRating(@Param("yearPattern") String yearPattern,
+                                              @Param("season") String season,
+                                              @Param("status") String status,
+                                              @Param("genreActive") boolean genreActive,
+                                              @Param("genreIds") Collection<Long> genreIds,
+                                              @Param("mediumActive") boolean mediumActive,
+                                              @Param("mediumIds") Collection<Long> mediumIds,
+                                              @Param("sourceActive") boolean sourceActive,
+                                              @Param("sourceIds") Collection<Long> sourceIds,
+                                              @Param("regionActive") boolean regionActive,
+                                              @Param("regionIds") Collection<Long> regionIds,
+                                              @Param("priorVotes") double priorVotes,
+                                              @Param("priorScore") double priorScore,
+                                              Pageable pageable);
+
+    @Query(AnimeQueries.COUNT_TAGGED_GROUP)
+    long countFilteredByTagGroups(@Param("yearPattern") String yearPattern,
+                                  @Param("season") String season,
+                                  @Param("status") String status,
+                                  @Param("genreActive") boolean genreActive,
+                                  @Param("genreIds") Collection<Long> genreIds,
+                                  @Param("mediumActive") boolean mediumActive,
+                                  @Param("mediumIds") Collection<Long> mediumIds,
+                                  @Param("sourceActive") boolean sourceActive,
+                                  @Param("sourceIds") Collection<Long> sourceIds,
+                                  @Param("regionActive") boolean regionActive,
+                                  @Param("regionIds") Collection<Long> regionIds);
+
     // ==================== 关键词搜索 ====================
 
     /**
