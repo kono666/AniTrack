@@ -146,6 +146,38 @@ export const unlikeReview = (reviewId) => api.delete(`/review/${reviewId}/like`)
 /** 谁赞了这条评论. 公开接口, 未登录也能看(与评论列表本身一样) */
 export const getReviewLikers = (reviewId) => api.get(`/review/${reviewId}/likes`)
 
+// ========== 回复 ==========
+//
+// 路径分成两组前缀, 与后端一一对应: 「某条评论下的回复」用 /review/{id}/replies,
+// 「针对某一条回复」用 /reply/{id} —— 回复的 id 已经唯一确定了它, 再带一个评论 id
+// 只是多一个必须与库对上的参数(理由见 ReviewReplyController 的类注释).
+
+/** 某条评论下的回复. 公开接口, 未登录也能看 */
+export const getReplies = (reviewId) => api.get(`/review/${reviewId}/replies`)
+export const addReply = (reviewId, content) =>
+  api.post(`/review/${reviewId}/replies`, { content })
+/**
+ * 改自己的回复. 只有作者能改 —— 评论作者**不能**改别人的回复(与删除权限刻意不同:
+ * 删是"我的地盘我做主", 改是替别人说话).
+ */
+export const editReply = (replyId, content) =>
+  api.put(`/reply/${replyId}`, { content })
+export const deleteReply = (replyId) => api.delete(`/reply/${replyId}`)
+
+/** 回复的赞, 与评论的赞是同一套: 两个端点、各自幂等(理由见上面 likeReview) */
+export const likeReply = (replyId) => api.post(`/reply/${replyId}/like`)
+export const unlikeReply = (replyId) => api.delete(`/reply/${replyId}/like`)
+/** 谁赞了这条回复. 公开接口 */
+export const getReplyLikers = (replyId) => api.get(`/reply/${replyId}/likes`)
+
+/**
+ * 「谁回复了我」: 我写的短评下面、别人发的回复. 需要登录.
+ *
+ * 返回 {list}, 没有 total —— 这一块不分页(封顶 30 条, 见 ReviewReplyService),
+ * 而"一共多少条"要另发一条 COUNT, 没有任何地方会显示它.
+ */
+export const getReceivedReplies = () => api.get('/user/received-replies')
+
 // ========== 管理员 ==========
 export const getDashboard = () => api.get('/admin/dashboard')
 

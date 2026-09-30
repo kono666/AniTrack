@@ -93,6 +93,23 @@ public class Review {
             columnDefinition = "BIGINT NOT NULL DEFAULT 0")
     private long likeCount;
 
+    /**
+     * 回复数, 由 {@code review_reply} 的行数冗余而来(V8)。三个约束与 {@link #likeCount}
+     * **逐条相同**, 理由也一样(见上面那段的完整说明), 这里只说它与赞数的两处差别:
+     *
+     * <p>一是写入路径是 {@code ReviewRepository.increment/decrementReplyCount}, 与赞数
+     * 那两条是并列的四条 JPQL, 不存在第二条路径。
+     *
+     * <p>二是这个数是**删出来的**, 而赞数是点出来的: 删一条回复要减一, 而删一条评论会
+     * 连带删掉它下面的全部回复 —— 后者减的是"这条评论的回复数", 而那条评论本身正在被
+     * 删除, 于是那个计数已经没有读者了。所以删评论的路径**不需要**去动任何 reply_count,
+     * 库级的 CASCADE 把子行带走就够了。这一点容易反着想错(去"先算出有几条回复再减"),
+     * 那会多出几条毫无意义的查询。
+     */
+    @Column(name = "reply_count", insertable = false, updatable = false,
+            columnDefinition = "BIGINT NOT NULL DEFAULT 0")
+    private long replyCount;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

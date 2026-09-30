@@ -130,6 +130,27 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     Long readLikeCount(@Param("id") Long id);
 
     /**
+     * 回复数 +1 / -1, 与上面那两条形状逐字相同(V8).
+     *
+     * <p>分开两条注释没有意义 —— 自增在数据库里做(防丢失更新)、{@code AND r.replyCount > 0}
+     * 防负数、{@code Review.replyCount} 上有 {@code insertable/updatable=false} 所以这是
+     * 那一列唯一的写入路径, 三条理由与赞数完全一样, 见上面。
+     *
+     * <p>注意这里**只有回复的增删会动它**: 删一条短评会连带删掉它下面的回复, 但那条短评
+     * 本身正在被删除, 它的 reply_count 已经没有读者了 —— 所以删评论的路径不需要(也不该)
+     * 去减任何计数。这一点见 {@code Review.replyCount} 的注释。
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE Review r SET r.replyCount = r.replyCount + 1 WHERE r.id = :id")
+    void incrementReplyCount(@Param("id") Long id);
+
+    @Transactional
+    @Modifying
+    @Query("UPDATE Review r SET r.replyCount = r.replyCount - 1 WHERE r.id = :id AND r.replyCount > 0")
+    int decrementReplyCount(@Param("id") Long id);
+
+    /**
      * 全部评论 + 作者(管理端).
      *
      * <p>同样是为了避免逐条加载作者. 管理端的分页留到 4.6 —— 这里的量级远小于

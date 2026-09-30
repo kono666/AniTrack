@@ -115,6 +115,45 @@
     <EmptyState v-else type="tracking" message="还没有追番记录">
       <router-link to="/" style="color:var(--primary);">去发现动漫</router-link>
     </EmptyState>
+
+    <!-- 收到的回复. 刻意放在追番列表**下面**: 这一页的主任务是追番管理,
+         提醒是附带的, 排在它前面会把列表推下去.
+         也不做成红点或弹层 —— 用户选的就是最简版(见 ReviewReplyService.
+         getReceivedReplies), 站内没有通知通道, 只有"列出来"这一件事. -->
+    <section v-if="!error" class="p-replies">
+      <h2 class="pr-title">收到的回复</h2>
+      <!-- 失败态优先于空态: 拉不到时说"还没有人回复你"是把"没拉到"说成了
+           "你没有", 与这一页追番列表那条是同一件事 -->
+      <div v-if="repliesError" class="pr-hint pr-hint-err">{{ repliesError }}</div>
+      <div v-else-if="!receivedReplies.length" class="pr-hint">还没有人回复你</div>
+      <div v-else class="pr-list">
+        <!-- 点进那部番的详情页. 不做"直接滚到那条评论": 详情页没有按评论定位的
+             锚点, 而回复列表本来就是整页展开的, 找得到 -->
+        <div
+          v-for="r in receivedReplies"
+          :key="r.id"
+          class="pr-item"
+          @click="$router.push(`/anime/${r.subjectId}`)"
+        >
+          <div class="pr-avatar">{{ (r.username || '?')[0] }}</div>
+          <div class="pr-body">
+            <div class="pr-top">
+              <span class="pr-name">{{ r.username }}</span>
+              <span class="pr-time">{{ fmtDate(r.createdAt) }}</span>
+            </div>
+            <!-- 摘要可能为空: 评论可以只打分不写字(服务端把空正文回成 null,
+                 空串会让"有内容但看不见"这件事分不出来) -->
+            <div class="pr-quote">{{ r.reviewContent || '（无文字）' }}</div>
+            <div class="pr-text">{{ r.content }}</div>
+          </div>
+        </div>
+      </div>
+      <!-- 服务端封顶 30 条且不分页, 到顶时说清楚是"只显示最近的一批",
+           免得用户以为更早的回复丢了 -->
+      <div v-if="receivedReplies.length >= RECEIVED_LIMIT" class="pr-hint">
+        只显示最近 {{ RECEIVED_LIMIT }} 条
+      </div>
+    </section>
   </div>
 
   <div v-else class="page-container">
@@ -126,7 +165,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
-import { getTrackingList, getOverallStats, saveTracking } from '../api'
+import { getTrackingList, getOverallStats, saveTracking, getReceivedReplies } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
@@ -144,6 +183,13 @@ const trackings = ref([])
 const stats = ref(null)
 const filter = ref('all')
 const sortBy = ref('date')
+const receivedReplies = ref([])
+const repliesError = ref('')
+
+/** 「收到的回复」的服务端封顶(ReviewReplyService.MAX_RECEIVED_SHOWN).
+ *  在这里再写一遍而不是从接口读: 到了这个数才显示"只显示最近 N 条",
+ *  而这个判断要在渲染时就有答案 */
+const RECEIVED_LIMIT = 30
 
 const statusLabel = { want_to_watch: '想看', watching: '在看', watched: '看过', on_hold: '搁置', dropped: '抛弃' }
 const statusOptions = [
@@ -178,6 +224,12 @@ const filtered = computed(() => {
   }
   return list
 })
+
+/** 回复那一条的日期. 与详情页的 fmt 同一个口径(只到日), 但不共用 ——
+ *  那个是 AnimeDetail 的组件内函数, 复制一份比为一个 8 行的工具建一个模块便宜 */
+function fmtDate(d) {
+  return d ? new Date(d).toLocaleDateString('zh-CN') : ''
+}
 
 function pct(item) {
   if (!item.totalEpisodes) return 0
@@ -225,13 +277,24 @@ async function loadProfile() {
   if (!userStore.loggedIn) { router.push('/login'); return }
   loading.value = true
   error.value = ''
+  repliesError.value = ''
   try {
-    const [listRes, statsRes] = await Promise.all([getTrackingList(), getOverallStats()])
+    const [listRes, statsRes, repliesRes] = await Promise.all([
+      getTrackingList(),
+      getOverallStats(),
+      /* 收到的回复是这一页的**附带**内容, 所以它自己把失败咽掉(回 null 而不是抛) ——
+         否则一个提醒区块拉不到, 整页会落到「加载追番记录失败」, 而追番记录其实
+         好好的. 这句谎话比少一个区块严重得多.
+         并发发出去而不是串在后面 await: 它是独立的一路, 没有理由让主内容等它. */
+      getReceivedReplies().catch(() => null),
+    ])
     trackings.value = (listRes.data.data || []).map(t => ({
       ...t,
       animeYear: t.animeDate ? t.animeDate.substring(0, 4) : null,
     }))
     stats.value = statsRes.data.data || {}
+    if (repliesRes) receivedReplies.value = repliesRes.data.data?.list || []
+    else repliesError.value = '回复暂时拉不到'
   } catch (e) {
     error.value = loadErrorMessage(e, '加载追番记录')
     trackings.value = []
@@ -310,8 +373,43 @@ async function loadProfile() {
 .pca-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pca-select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text); font-size: 11px; cursor: pointer; font-family: inherit; }
 
+/* ── 收到的回复 ── */
+/* 与 .p-list 同宽同边距, 于是它与上面的追番列表左右对齐 —— 两块的左边缘
+   如果差几个像素, 看起来像两页拼起来的 */
+.p-replies { max-width: 1000px; margin: 32px auto 0; padding: 0 32px; }
+.pr-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+.pr-hint { font-size: 13px; color: var(--text-muted); padding: 12px 0; }
+/* 失败那一句要跟"还没有"区分开: 同色同字号的话, 一次网络抖动看起来就像
+   "这个站没人理我" */
+.pr-hint-err { color: var(--danger); }
+.pr-list { display: flex; flex-direction: column; gap: 8px; }
+.pr-item {
+  display: flex; gap: 12px; padding: 12px 14px; cursor: pointer;
+  background: var(--card); border: 1px solid var(--card-border);
+  border-radius: var(--radius); transition: all var(--transition);
+}
+.pr-item:hover { border-color: var(--primary-line); background: var(--card-hover); }
+.pr-avatar {
+  width: 32px; height: 32px; border-radius: 50%; background: var(--primary);
+  color: var(--primary-foreground); display: flex; align-items: center;
+  justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;
+}
+.pr-body { flex: 1; min-width: 0; }
+.pr-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.pr-name { font-weight: 700; font-size: 13px; color: var(--text); }
+.pr-time { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+/* 我那条评论的摘要: 用左侧竖线 + 斜体压成"引文", 与下面的回复正文一眼分得开 ——
+   两块都是正文的话, 读起来不知道哪句是谁说的 */
+.pr-quote {
+  font-size: 12px; color: var(--text-muted); padding-left: 8px;
+  border-left: 2px solid var(--border); margin-bottom: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pr-text { font-size: 13px; line-height: 1.6; color: var(--text-secondary); word-break: break-word; }
+
 @media (max-width: 768px) {
   .p-header { padding: 0 16px; gap: 16px; }
+  .p-replies { padding: 0 16px; }
   .p-avatar { width: 72px; height: 72px; }
   .p-info { padding-top: 36px; }
   .p-name { font-size: 20px; }

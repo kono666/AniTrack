@@ -192,6 +192,16 @@
                   @click="toggleLikers(r)">
                   {{ likerBox[r.id]?.open ? '收起' : '谁赞了' }}
                 </button>
+                <!-- 回复按钮. 两件事由它一个人管: 「展开/收起这批回复」与「我要回复」——
+                     拆成两个按钮的话, 一条还没有回复的评论下会并排出现「0 条回复」和
+                     「回复」, 而它们其实是同一个动作.
+                     计数为 0 时不显示 "0", 只留图标: 满屏的 "0" 是噪音.
+                     注意它**不能**带 rv-act-quiet —— 那个类是「谁赞了」在测试里的抓手. -->
+                <button class="rv-act rv-act-reply" :class="{ open: replyBox[r.id]?.open }"
+                  @click="toggleReplies(r)">
+                  <PhArrowBendUpLeft :size="14" />
+                  <span v-if="r.replyCount > 0">{{ r.replyCount }}</span>
+                </button>
               </div>
               <div v-if="likerBox[r.id]?.open" class="rv-likers">
                 <span v-if="likerBox[r.id].loading" class="rv-likers-hint">加载中…</span>
@@ -204,6 +214,82 @@
                     等共 {{ likerBox[r.id].total }} 人
                   </span>
                 </template>
+              </div>
+
+              <!-- 回复区. 与评论列表一样**就地展开**, 不造弹层 —— 仓库里没有 Modal
+                   组件, 为一个功能造一套体系不划算.
+
+                   访客也能展开: 回复列表本身是公开的(接口与评论列表同一条规矩),
+                   只有输入框换成一句登录提示. 藏起来的话, 访客不知道这站有回复.
+
+                   一律懒加载: 打开才发请求. 每条评论都在挂载时拉一遍的话,
+                   一页 20 条评论就是 20 个请求, 而其中绝大多数没人会展开. -->
+              <div v-if="replyBox[r.id]?.open" class="rp-area">
+                <div v-if="replyBox[r.id].loading" class="rp-hint">加载中…</div>
+                <div v-else-if="!replyBox[r.id].list.length" class="rp-hint">还没有回复</div>
+                <div v-else class="rp-list">
+                  <div v-for="p in replyBox[r.id].list" :key="p.id" class="rp-item">
+                    <div class="rp-avatar">{{ (p.username||'?')[0] }}</div>
+                    <div class="rp-body">
+                      <div class="rp-top">
+                        <span class="rp-username">{{ p.username }}</span>
+                        <span v-if="isEdited(p)" class="rp-edited">已编辑</span>
+                        <span class="rp-time">{{ fmt(p.createdAt) }}</span>
+                      </div>
+
+                      <!-- 编辑态: 整体换成输入框, 而不是在正文上做 contenteditable ——
+                           后者要自己管光标、粘贴, 而且改完没法"取消" -->
+                      <template v-if="replyEdit[p.id] !== undefined">
+                        <textarea v-model="replyEdit[p.id]" rows="2" class="rp-input"></textarea>
+                        <div class="rp-edit-actions">
+                          <button class="rp-send" @click="saveReplyEdit(r, p)">保存</button>
+                          <button class="rp-cancel" @click="cancelReplyEdit(p)">取消</button>
+                        </div>
+                      </template>
+
+                      <template v-else>
+                        <div class="rp-text">{{ p.content }}</div>
+                        <div class="rp-actions">
+                          <button class="rp-act" :class="{ on: p.likedByMe }"
+                            :disabled="Boolean(replyLikeBusy[p.id])"
+                            :aria-pressed="p.likedByMe ? 'true' : 'false'" @click="toggleReplyLike(p)">
+                            <PhHeart :size="13" :weight="p.likedByMe ? 'fill' : 'regular'" />
+                            <span>{{ p.likeCount || 0 }}</span>
+                          </button>
+                          <button v-if="(p.likeCount || 0) > 0" class="rp-act rp-act-quiet"
+                            @click="toggleReplyLikers(p)">
+                            {{ replyLikerBox[p.id]?.open ? '收起' : '谁赞了' }}
+                          </button>
+                          <!-- 「编辑」只有作者有(替别人改话说不通); 「删除」还有评论作者
+                               与管理员. 判据在服务端(ReviewReplyService.canDelete), 这里
+                               只是别把点不通的按钮摆出来. -->
+                          <button v-if="p.isOwner" class="rp-act rp-act-quiet"
+                            @click="startReplyEdit(p)">编辑</button>
+                          <button v-if="canDeleteReply(r, p)" class="rp-act rp-act-quiet"
+                            @click="removeReply(r, p)">删除</button>
+                        </div>
+                        <div v-if="replyLikerBox[p.id]?.open" class="rp-likers">
+                          <span v-if="replyLikerBox[p.id].loading" class="rp-hint">加载中…</span>
+                          <span v-else-if="!replyLikerBox[p.id].names.length" class="rp-hint">暂无</span>
+                          <template v-else>
+                            <span v-for="u in replyLikerBox[p.id].names" :key="u.userId" class="rp-liker">{{ u.username }}</span>
+                            <span v-if="replyLikerBox[p.id].total > replyLikerBox[p.id].names.length" class="rp-hint">
+                              等共 {{ replyLikerBox[p.id].total }} 人
+                            </span>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="userStore.loggedIn" class="rp-composer">
+                  <textarea v-model="replyDraft[r.id]" rows="2" placeholder="回复..." class="rp-input"></textarea>
+                  <button class="rp-send" :disabled="Boolean(replyBusy[r.id])" @click="sendReply(r)">回复</button>
+                </div>
+                <div v-else class="rp-hint">
+                  <router-link to="/login">登录</router-link>后参与讨论
+                </div>
               </div>
             </div>
           </div>
@@ -236,6 +322,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import PhStar from '@icons/PhStar.vue.mjs'
 import PhHeart from '@icons/PhHeart.vue.mjs'
+import PhArrowBendUpLeft from '@icons/PhArrowBendUpLeft.vue.mjs'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import {
@@ -244,6 +331,8 @@ import {
   getTrackingStatus, saveTracking, deleteTracking,
   getWatchedEpisodes, toggleEpisode, getAnimeHeat, getFiltered,
   likeReview, unlikeReview, getReviewLikers,
+  getReplies, addReply, editReply, deleteReply,
+  likeReply, unlikeReply, getReplyLikers,
   REVIEW_SORT_CREATED, REVIEW_SORT_HOT
 } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
@@ -310,6 +399,31 @@ const likerBox = ref({})
    后到的旧响应会把计数写回一个过期的值, 于是数字卡在那儿 —— 界面上没有任何异常,
    再刷新一次才对. 顺带也省掉"点 N 下打 N 个请求". */
 const likeBusy = ref({})
+
+/* ── 回复区的本地状态 ──
+   全部按 id 存, 与 likerBox 同一个形状. 分成五个 ref 而不是一个大对象: 它们各自的
+   失效时机不同(草稿要留着, 列表快照必须清), 混在一起就没法只清一半. */
+
+/** 每条评论的回复区: { open, loading, list }. 打开才拉(懒加载) */
+const replyBox = ref({})
+/** 回复框里的草稿, 按**评论** id 存 —— 草稿属于"我要回这条评论", 不属于某条回复 */
+const replyDraft = ref({})
+/** 正在编辑的回复: replyId -> 草稿正文. 键存在与否就是"这条在编辑态" */
+const replyEdit = ref({})
+/** 正在发回复的那些**评论** id. 与 likeBusy 是同一条理由, 但这里更要紧:
+ *  点赞是幂等的, 而发回复**不是** —— 少这道闸, 连点几下就会真的多出几条一样的回复.
+ *
+ *  这道忙态喂给两处: 下面的 `if` 与模板里那个 `:disabled`, 于是连点被挡了两遍,
+ *  而且**各自都挡得住**. 反向验证量到的正是这个形状: 只删 `if` 是绿的, 只删
+ *  `:disabled` 也是绿的, 两个都删才会红(那一跑实测到 2 次调用)。
+ *
+ *  它们不是同一件事写两遍: `:disabled` 要等 Vue 把属性渲染下去(下一个 tick 才落地),
+ *  同一拍里的第二次点击会打在一个**还没 disabled** 的按钮上 —— 那时候接住它的就是
+ *  下面这句 if, 而它读的是同步就写好的 ref, 没有那个窗口。*/
+const replyBusy = ref({})
+/** 回复的赞: 忙态与「谁赞了」盒子, 与评论那两个同构, 只是键换成了回复 id */
+const replyLikeBusy = ref({})
+const replyLikerBox = ref({})
 
 const watchedEpisodes = ref([])
 const heat = ref(null)
@@ -471,6 +585,15 @@ async function deleteMyReview(){
 function applyReviews(list){
   reviews.value = list || []
   likerBox.value = {}
+  // 回复那两份快照同理: 「已展开的列表」与「谁赞了」存的都是那批数据的旧样子,
+  // 换了列表还留着, 展开后看到的是上一批回复 —— 而它们挂在别人的评论下面.
+  //
+  // 草稿(replyDraft)**不清**: 那是用户敲进去的字, 只按评论 id 存, 同一条评论换了
+  // 个位置也还是同一条. 编辑态(replyEdit)则要清 —— 那些草稿按回复 id 存, 而回复
+  // 列表已经没了, 留着就是一串看不见、也删不掉的残留.
+  replyBox.value = {}
+  replyLikerBox.value = {}
+  replyEdit.value = {}
 }
 
 /** 重新拉评论列表(保持当前排序)与评分统计. 发/删评论之后走这里 */
@@ -554,6 +677,160 @@ async function toggleLikers(review){
   if(existing){ existing.open = !existing.open; return }
   likerBox.value[review.id] = { open: true, loading: true, total: 0, names: [] }
   await fetchLikers(review.id)
+}
+
+/* ══════════ 回复 ══════════ */
+
+/**
+ * 展开/收起一条评论下的回复. 未登录**也放行** —— 回复列表是公开的(与评论列表
+ * 同一条规矩), 拦在这里的话访客看着「3」却点不开. 写入口在下面几处各自拦.
+ */
+async function toggleReplies(review){
+  const existing = replyBox.value[review.id]
+  if(existing){ existing.open = !existing.open; return }
+  replyBox.value[review.id] = { open: true, loading: true, list: [] }
+  await fetchReplies(review.id)
+}
+
+async function fetchReplies(reviewId){
+  /* 与 fetchLikers 同一条规矩: 从 ref 里**读回来**再改, 不能拿赋值时的原始引用 ——
+     普通对象要经过 reactive 代理才会触发依赖收集 */
+  const box = replyBox.value[reviewId]
+  if(!box) return
+  box.loading = true
+  try{
+    const res = await getReplies(reviewId)
+    box.list = res.data.data || []
+  }catch(e){
+    // 整个盒子删掉 = 收起来: 不留下一个永远转圈的「加载中…」. 计数还在按钮上,
+    // 再点一次就是重试
+    delete replyBox.value[reviewId]
+    toast('回复加载失败','error')
+  }finally{
+    box.loading = false
+  }
+}
+
+/** 发一条回复 */
+async function sendReply(review){
+  if(!userStore.loggedIn){ router.push('/login'); return }
+  if(replyBusy.value[review.id]) return
+  const content = (replyDraft.value[review.id] || '').trim()
+  // 空回复不必往返一次: 后端 @NotBlank 会回 400, 而"回复失败"读不出是哪里不对
+  if(!content){ toast('回复内容不能为空','warning'); return }
+  replyBusy.value[review.id] = true
+  try{
+    const res = await addReply(review.id, content)
+    const box = replyBox.value[review.id]
+    if(box) box.list.push(res.data.data)
+    delete replyDraft.value[review.id]
+    // 计数本地 +1 —— 这里**可以**加, 与点赞的计数刻意不同: 点赞是幂等的(再点一次
+    // 服务端什么都不做), 本地 +1 会一路错到下次刷新; 而发回复不是幂等的, 服务端
+    // 确实新建了一行, 所以 +1 是这次写入的结果, 不是猜的.
+    review.replyCount = (review.replyCount || 0) + 1
+    toast('已回复','success')
+  }catch(e){ toast('回复失败','error') }
+  finally{ delete replyBusy.value[review.id] }
+}
+
+/** 进入编辑态. 打开发起时的正文, 不是空框 —— 空框看起来像"要重新写一遍" */
+function startReplyEdit(reply){
+  if(!userStore.loggedIn){ router.push('/login'); return }
+  replyEdit.value[reply.id] = reply.content || ''
+}
+
+/** 退出编辑态. 草稿一起丢掉: 留着它, 下次点「编辑」看到的是上次没保存的旧字 */
+function cancelReplyEdit(reply){
+  delete replyEdit.value[reply.id]
+}
+
+async function saveReplyEdit(review, reply){
+  const content = (replyEdit.value[reply.id] || '').trim()
+  if(!content){ toast('回复内容不能为空','warning'); return }
+  try{
+    const res = await editReply(reply.id, content)
+    // 用服务端回的整条替换掉那一行(它带着新的 updatedAt 与 likedByMe)——
+    // 只改本地的 content 会让「已编辑」标记永远不出现
+    const box = replyBox.value[review.id]
+    if(box){
+      const i = box.list.findIndex(x => x.id === reply.id)
+      if(i >= 0) box.list[i] = res.data.data
+    }
+    cancelReplyEdit(reply)
+    toast('已更新','success')
+  }catch(e){ toast('修改失败','error') }
+}
+
+async function removeReply(review, reply){
+  if(!userStore.loggedIn){ router.push('/login'); return }
+  if(!confirm('删除这条回复？')) return
+  try{
+    await deleteReply(reply.id)
+    const box = replyBox.value[review.id]
+    if(box) box.list = box.list.filter(x => x.id !== reply.id)
+    // 同 sendReply: 删除不是幂等的(第二次会 404), 所以这里减的同一次真删掉的那行
+    review.replyCount = Math.max(0, (review.replyCount || 0) - 1)
+    toast('已删除','info')
+  }catch(e){ toast('删除失败','error') }
+}
+
+/** 这条回复改过没有. 服务端不塞布尔, 由两个时间戳比出来(见 ReviewReplyService) ——
+ *  判据是严格晚于, 而插入时两者是同一次 now(), 所以刚发的回复不会被标成「已编辑」 */
+function isEdited(reply){
+  if(!reply.updatedAt || !reply.createdAt) return false
+  return new Date(reply.updatedAt) > new Date(reply.createdAt)
+}
+
+/** 「删除」按钮摆不摆. 与后端 ReviewReplyService.canDelete 的三支一一对齐 ——
+ *  服务端才是判据, 这里只是别把点了会 403 的按钮递给用户 */
+function canDeleteReply(review, reply){
+  const me = userStore.user
+  if(!me) return false
+  return Boolean(reply.isOwner || review.isOwner || me.role === 'ADMIN')
+}
+
+/** 赞/取消赞一条回复. 形状与理由与 toggleLike 逐条相同 */
+async function toggleReplyLike(reply){
+  if(!userStore.loggedIn){ router.push('/login'); return }
+  if(replyLikeBusy.value[reply.id]) return
+  const wanted = !reply.likedByMe
+  replyLikeBusy.value[reply.id] = true
+  try{
+    const res = wanted ? await likeReply(reply.id) : await unlikeReply(reply.id)
+    const d = res.data.data || {}
+    reply.likedByMe = d.liked ?? wanted
+    if(typeof d.likeCount === 'number') reply.likeCount = d.likeCount
+    const box = replyLikerBox.value[reply.id]
+    if(box){ box.open ? fetchReplyLikers(reply.id) : delete replyLikerBox.value[reply.id] }
+  }catch(e){ toast('操作失败','error') }
+  finally{ delete replyLikeBusy.value[reply.id] }
+}
+
+/** 拉一条回复的点赞人名单. 与 fetchLikers 同构 —— 两处都留着而不是抽一个通用函数:
+ *  它们唯一的差别就是中间那一句请求, 而抽出来要传一个闭包进来, 读的时候反而多跳一层 */
+async function fetchReplyLikers(replyId){
+  const box = replyLikerBox.value[replyId]
+  if(!box) return
+  box.loading = true
+  try{
+    const res = await getReplyLikers(replyId)
+    const d = res.data.data || {}
+    box.names = d.list || []
+    box.total = d.total || 0
+  }catch(e){
+    box.open = false
+    toast('加载失败','error')
+  }finally{
+    box.loading = false
+  }
+}
+
+/** 展开/收起一条回复的「谁赞了」 */
+async function toggleReplyLikers(reply){
+  const existing = replyLikerBox.value[reply.id]
+  if(existing){ existing.open = !existing.open; return }
+  replyLikerBox.value[reply.id] = { open: true, loading: true, total: 0, names: [] }
+  await fetchReplyLikers(reply.id)
 }
 
 onMounted(load)
@@ -704,7 +981,10 @@ onMounted(load)
 /* 已赞 = 满墨 + 洗色底 + 描边. 心形本身也由 regular 换成 fill(模板里那个 :weight) ——
    两套主题下都是"底变浅/变深 + 图标变实 + 字变满墨"三重差别, 只靠其中任何一样
    在浅色主题下都太轻. */
-.rv-act.on{ color:var(--text); background:var(--primary-soft); border-color:var(--primary-line); }
+.rv-act.on,
+/* 回复区展开着的时候那个按钮也点亮 —— 光靠下面多出来一块, 分不清是"这条评论
+   有回复"还是"我看过它了" */
+.rv-act.open{ color:var(--text); background:var(--primary-soft); border-color:var(--primary-line); }
 .rv-act:disabled{ cursor:default; opacity:.55; }
 .rv-act-quiet{ font-weight:500; }
 .rv-likers{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
@@ -713,6 +993,77 @@ onMounted(load)
   color:var(--text-secondary); font-size:12px;
 }
 .rv-likers-hint{ color:var(--text-muted); font-size:12px; }
+
+/* ── 回复区 ──
+   左边那 4px 的竖线是唯一的层级线索: 回复列表与它上面那条评论共用同一个左边缘,
+   没有这根线的话, 一屏里两三条评论各带几条回复就分不清谁是谁楼里的.
+   用 --border 而不是更重的色 —— 它是结构, 不是内容. */
+.rp-area{ margin-top:12px; padding-left:12px; border-left:2px solid var(--border); }
+.rp-hint{ color:var(--text-muted); font-size:12px; padding:4px 0; }
+.rp-hint a{ color:var(--primary); font-weight:600; }
+.rp-list{ display:flex; flex-direction:column; gap:12px; }
+.rp-item{ display:flex; gap:8px; }
+/* 比评论的头像小一圈: 回复是评论的下一层, 一样大就分不出主次 */
+.rp-avatar{
+  width:26px; height:26px; border-radius:50%; background:var(--tag-bg);
+  color:var(--text-secondary); display:flex; align-items:center; justify-content:center;
+  font-weight:700; font-size:12px; flex-shrink:0;
+}
+.rp-body{ flex:1; min-width:0; }
+.rp-top{ display:flex; align-items:center; gap:8px; margin-bottom:2px; }
+.rp-username{ font-weight:600; font-size:12px; color:var(--text); }
+/* 「已编辑」做成一个极轻的标签而不是跟时间挤在一起: 它要一眼看得见(说明这行被
+   改过), 又不该抢走时间的顺位 */
+.rp-edited{
+  padding:1px 6px; border-radius:4px; background:var(--tag-bg);
+  color:var(--text-muted); font-size:10px;
+}
+.rp-time{ font-size:11px; color:var(--text-muted); margin-left:auto; }
+/* 回复正文比评论小一号(13 对 14): 同一条评论下面可能挂着十几条回复,
+   与评论正文同字号的话整块会糊成一片 */
+.rp-text{ font-size:13px; line-height:1.65; color:var(--text-secondary); word-break:break-word; }
+.rp-actions{ display:flex; align-items:center; gap:10px; margin-top:4px; margin-left:-6px; }
+.rp-act{
+  display:inline-flex; align-items:center; gap:4px; padding:2px 6px;
+  border-radius:999px; border:1.5px solid transparent; background:transparent;
+  color:var(--text-muted); font-size:11px; font-weight:600; cursor:pointer;
+  font-family:inherit; font-variant-numeric:tabular-nums;
+  transition:color var(--transition), background var(--transition), border-color var(--transition);
+}
+.rp-act:hover{ color:var(--text); background:var(--primary-soft); }
+.rp-act.on{ color:var(--text); background:var(--primary-soft); border-color:var(--primary-line); }
+.rp-act:disabled{ cursor:default; opacity:.55; }
+.rp-act-quiet{ font-weight:500; }
+.rp-likers{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.rp-liker{
+  padding:1px 8px; border-radius:999px; background:var(--tag-bg);
+  color:var(--text-secondary); font-size:11px;
+}
+
+.rp-composer{ display:flex; flex-direction:column; align-items:flex-end; gap:6px; margin-top:12px; }
+/* width:100% 是必需的: 父级是 align-items:flex-end(为了让右下角那个按钮贴右),
+   在这个轴上子元素默认按内容宽度收缩, 而 textarea 的内容宽度约等于 0 */
+.rp-input{
+  width:100%; padding:8px 10px; border:1.5px solid var(--input-border);
+  border-radius:8px; background:var(--input-bg); color:var(--text);
+  font-size:13px; resize:vertical; font-family:inherit;
+}
+.rp-input:focus{ border-color:var(--primary); outline:none; }
+.rp-send{
+  padding:5px 14px; border-radius:8px; border:none; background:var(--primary);
+  color:var(--primary-foreground); font-size:12px; font-weight:700;
+  cursor:pointer; font-family:inherit; transition:opacity var(--transition);
+}
+.rp-send:disabled{ opacity:.55; cursor:default; }
+.rp-cancel{
+  padding:5px 14px; border-radius:8px; border:1.5px solid var(--border);
+  background:transparent; color:var(--text-muted); font-size:12px; font-weight:600;
+  cursor:pointer; font-family:inherit;
+}
+.rp-cancel:hover{ color:var(--text); border-color:var(--primary-line); }
+/* 编辑态那一行也是右下角两按钮, 与回复框同一套排法 */
+.rp-edit-actions{ display:flex; justify-content:flex-end; gap:6px; margin-top:6px; }
+
 .no-rev{ text-align:center; padding:30px; color:var(--text-muted); font-size:14px; }
 .no-rev a{ color:var(--primary); font-weight:600; }
 .not-found{ text-align:center; padding:80px; color:var(--text-muted); font-size:16px; }

@@ -32,6 +32,12 @@
             <span v-if="typeof r.likeCount === 'number'" class="review-likes">
               <PhHeart :size="12" weight="fill" />{{ r.likeCount }}
             </span>
+            <!-- 回复数与赞数同理, 也是给"这条该不该处理"当参考: 一条下面挂着二十条
+                 回复的评论, 删掉带走的是一整串对话(回复靠 ON DELETE CASCADE 跟着走).
+                 同样地, 缺字段时整项不渲染, 不替后端编一个 0 -->
+            <span v-if="typeof r.replyCount === 'number'" class="review-likes">
+              <PhArrowBendUpLeft :size="12" />{{ r.replyCount }}
+            </span>
           </div>
           <div class="review-text">{{ r.content || '（无文字）' }}</div>
         </div>
@@ -45,6 +51,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import PhHeart from '@icons/PhHeart.vue.mjs'
+import PhArrowBendUpLeft from '@icons/PhArrowBendUpLeft.vue.mjs'
 import { getAdminReviews, adminDeleteReview } from '../../api'
 import { useToast } from '../../composables/useToast'
 import { loadErrorMessage } from '../../utils/loadError'

@@ -3,6 +3,7 @@ package com.animetracker.service;
 import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.User;
+import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.AnimeTagRepository;
 import com.animetracker.repository.UserRepository;
@@ -35,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 「这个接口发了几条 SQL」——按真实执行计数, 而不是看代码里写了几个 for 循环.
@@ -111,6 +113,8 @@ class QueryCountIntegrationTest {
     private StatsService statsService;
     @Autowired
     private ReviewService reviewService;
+    @Autowired
+    private ReviewReplyService reviewReplyService;
     @Autowired
     private AdminService adminService;
     @Autowired
@@ -496,6 +500,149 @@ class QueryCountIntegrationTest {
         assertThat(all).hasSize(6);
         assertThat(all.get(0)).containsKeys("username", "userId", "subjectId");
         assertThat(statementsFor(() -> adminService.getAllReviews())).isEqualTo(1);
+    }
+
+    // ========== 回复列表 ==========
+    //
+    // 这一组的预算比评论列表**多一条**, 而且是有意的: getReplies 先问一句
+    // 「这条评论还在吗」, 不在就 404。没有这一步, 「评论已经被删掉」与「这条评论
+    // 还没人回复」在响应里长得一模一样(都是一个空列表) —— 前端手里那条评论是上一秒
+    // 从列表里拿到的, 它会一直显示一个空回复区, 不报错、也不消失。
+    // 代价就是每展开一次多一次主键查询, 所以下面的数字是 2 与 3, 不是 1 与 2。
+
+    /** 一条短评 + 挂在它下面的 n 条回复(每条来自一个不同的人), 返回短评 id */
+    private long seedReplies(int n) {
+        seedReviews(1);
+        long reviewId = jdbc.queryForObject(
+                "SELECT id FROM review WHERE subject_id = ?", Long.class, SUBJECT_BASE);
+        long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
+        for (int i = 0; i < n; i++) {
+            User author = userRepository.save(User.builder()
+                    .username("p" + UUID.randomUUID().toString().substring(0, 12))
+                    .password("x")
+                    .role("USER")
+                    .status("ACTIVE")
+                    .build());
+            jdbc.update("INSERT INTO review_reply (review_id, user_id, content, created_at) "
+                            + "VALUES (?, ?, ?, ?)",
+                    reviewId, author.getId(), "r" + i,
+                    new java.sql.Timestamp(base + i * 60_000L));
+        }
+        return reviewId;
+    }
+
+    /**
+     * 未登录看回复: **2 条** —— 存在性检查 + 一条 JOIN FETCH 的列表, 与回复条数无关。
+     *
+     * <p>把 1 条与 5 条摆在一起断言, 理由与追番列表那条一样: 要防的回归是"有人在循环里
+     * 又补一次查询", 那种改动会让次数变成 2+N, 而不是 3。只测一个数据量的话, 恰好
+     * 等于某个数字也能过。
+     */
+    @ParameterizedTest(name = "{0} 条回复")
+    @ValueSource(ints = {1, 5})
+    @DisplayName("回复列表: 匿名 2 次查询(存在性检查 + 列表), 与条数无关")
+    void replyListCostsTwoQueriesForAGuest(int n) {
+        long reviewId = seedReplies(n);
+
+        long statements = statementsFor(() -> reviewReplyService.getReplies(0L, reviewId));
+
+        assertThat(statements).as("回复 %d 条", n).isEqualTo(2);
+    }
+
+    /**
+     * 登录之后多出来的**恰好一条**: 批量问"这一串回复里我赞过哪些"。
+     *
+     * <p>数字钉死在 3 而不是"至少 3": 逐条查会是 2+N, 而这是最容易被下一个人
+     * "顺手改成更好懂的写法"的地方 —— 返回值一个字节都不差, 只有次数看得出来。
+     */
+    @Test
+    @DisplayName("回复列表: 登录态 3 次(存在性 + 列表 + 批量查我赞过哪些), 不是每条一次")
+    void replyListCostsThreeQueriesForALoggedInUser() {
+        long reviewId = seedReplies(10);
+
+        long statements = statementsFor(() -> reviewReplyService.getReplies(user.getId(), reviewId));
+
+        assertThat(statements).describedAs("存在性 1 + 列表 1 + likedByMe 批量 1").isEqualTo(3);
+    }
+
+    /**
+     * 一条回复都没有时, 登录态**也只有 2 条** —— 那个空的 id 集合不会进 JPQL 的 {@code IN}。
+     *
+     * <p>与 {@link #reviewListOfASubjectWithNoReviewsIsStillOneQuery} 守的是同一处边界
+     * (空集合在 JPQL 里没有合法写法, Hibernate 6 恰好把它渲染成 {@code 1=0}, 但那是它的
+     * 实现选择)。守卫的价值是那条语句根本不发, 与它长什么样无关。
+     */
+    @Test
+    @DisplayName("一条回复都没有: 登录态下也只有 2 次, 空集合不会进 IN")
+    void replyListOfAReviewWithNoRepliesIsStillTwoQueries() {
+        long reviewId = seedReplies(0);
+
+        long statements = statementsFor(() -> reviewReplyService.getReplies(user.getId(), reviewId));
+
+        assertThat(statements).isEqualTo(2);
+    }
+
+    /**
+     * 回复按时间**正序**(先发生的在前)—— 与评论列表的倒序是两套读法, 刻意不同。
+     *
+     * <p>评论列表倒序是因为"最新的那条最值得先看"; 而回复合起来读是一段对话,
+     * 倒序会让人从下往上读。两个序不能靠"碰巧"区分开, 所以数据是正着灌的,
+     * 一旦有人把某一边的 ORDER BY 抄到另一边, 这条就会红。
+     */
+    @Test
+    @DisplayName("回复列表: 按时间正序, 是与评论列表相反的读法")
+    void replyListIsOldestFirst() {
+        long reviewId = seedReplies(5);
+
+        List<String> contents = reviewReplyService.getReplies(0L, reviewId).stream()
+                .map(m -> (String) m.get("content"))
+                .toList();
+
+        assertThat(contents).containsExactly("r0", "r1", "r2", "r3", "r4");
+    }
+
+    /**
+     * 回复列表的 SQL 里, {@code created_at} 的 NULL 是显式分组的, 顺序不随库变。
+     *
+     * <p>与 {@link #hotOrderSqlIsPushedDownWithNullSafeOrdering} 同一条理由, 而且同样是
+     * <b>只有 SQL 文本守得住</b>: {@code created_at} 可空, 而 {@code ORDER BY x ASC} 时
+     * NULL 排哪, H2 与 PostgreSQL 正好相反 —— 但本地只有 H2, 语义用例在两个库上都会是绿的。
+     * 这条约束眼下没有分页在它后面(一条评论下的回复封顶 200 条, 不走 OFFSET), 所以失守的
+     * 后果不是漏行, 而是<b>同一份数据在开发档与线上读出来的楼不一样</b> —— 依然是个
+     * 不报错、只在换库那天现形的 bug。
+     */
+    @Test
+    @DisplayName("回复列表的 SQL: 缺时间的行显式分组, 顺序不随库变")
+    void replyListSqlIsDialectIndependentAboutNulls() {
+        long reviewId = seedReplies(3);
+
+        reviewReplyService.getReplies(0L, reviewId);
+        String sql = lastSqlNormalized();
+
+        assertThat(sql).containsIgnoringCase("order by")
+                .as("缺时间的行要显式分组, 否则 ASC 下 NULL 排哪随库变")
+                .containsIgnoringCase("case when")
+                .as("第二键要换成常量, 让 'ORDER BY 里没有 NULL' 字面成立")
+                .containsIgnoringCase("coalesce");
+    }
+
+    /**
+     * 评论不存在时: 抛 404, 而且**只发一条语句** —— 存在性检查短路了后面那条列表查询。
+     *
+     * <p>这条钉的是那个检查的**位置**: 它必须在最前面。往后挪一位(先查列表、再判断)
+     * 结果一样是 404, 但每次访问一条已被删掉的评论都会白发一条 JOIN FETCH。
+     */
+    @Test
+    @DisplayName("评论不存在: 404 且只发一条语句(检查在列表之前)")
+    void repliesOfAMissingReviewCostOneQuery() {
+        long missingReview = SUBJECT_BASE + 999_999L;
+        Statistics stats = statsCleared();
+
+        assertThatThrownBy(() -> reviewReplyService.getReplies(0L, missingReview))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("评论不存在");
+
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(1);
     }
 
     // ========== 评分统计 ==========

@@ -50,14 +50,6 @@ public class SecurityConfig {
                 "/api/bangumi/**",
                 "/api/review/list",
                 "/api/review/stats",
-                // 「谁赞了这条评论」也要免登录 —— 评论列表本身是公开的, 这一块是它的
-                // 附属信息; 漏了这条的表现是"未登录访客看得见评论, 一点'谁赞了'就 401",
-                // 而那不是权限设计, 是漏配.
-                //
-                // 这里必须用 *, 不能写成两条固定路径: 短评 id 是逐个不同的.
-                // 通配符在这一层是生效的(与上面 /actuator/health/** 同理) ——
-                // 没有通配符时字符串匹配是"路径完全相等", 这正是上面 health 写成两条的原因.
-                "/api/review/*/likes",
                 "/api/stats/anime-heat",
                 // 探活端点必须免登录: 请求它的是 Docker HEALTHCHECK、CI 冒烟脚本、
                 // nginx 的反代探针, 它们手里不可能有 JWT.
@@ -101,6 +93,26 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 公开接口
                         .requestMatchers(publicPaths.toArray(new String[0])).permitAll()
+                        // 评论的三个附属视图免登录: 「谁赞了这条评论」「这条评论下的回复」
+                        // 「谁赞了这条回复」。评论列表本身是公开的, 这些都是它的附属信息;
+                        // 漏掉的表现是"未登录访客看得见评论, 一点就 401" —— 那不是权限设计,
+                        // 是漏配。
+                        //
+                        // 这几条必须限定 GET, 不能写成上面 publicPaths 那种不带方法的路径串:
+                        // requestMatchers(String...) 匹配的是**路径, 不看方法**,
+                        // 而 /api/review/{reviewId}/replies 上同时挂着 POST(发回复)——
+                        // 一条不带方法的通配会把"写"也一起放行: 匿名 POST 于是穿过过滤器链
+                        // 进到 service, 在 user.getId() 上 NPE 成 500, 而不是 401。
+                        // 这是实测踩到过的(哨兵是 ReviewReplyIntegrationTest 里那条
+                        // 「匿名发回复 401」), 不是设想。所以宁可多写一个 HttpMethod.GET,
+                        // 也不要把"今天这个路径上恰好没有写方法"当成一条不变量。
+                        //
+                        // 通配符在这一层是生效的(与上面 /actuator/health/** 同理) ——
+                        // 没有通配符时字符串匹配是"路径完全相等", 这正是 health 写成两条的原因。
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/review/*/likes",
+                                "/api/review/*/replies",
+                                "/api/reply/*/likes").permitAll()
                         // AI 对话对访客开放: 未登录时工具注册表只会放出公开工具, 不存在越权路径.
                         // 开放是因为「不用注册就能试」对作品展示很重要, 由限流负责成本兜底.
                         .requestMatchers(HttpMethod.POST,

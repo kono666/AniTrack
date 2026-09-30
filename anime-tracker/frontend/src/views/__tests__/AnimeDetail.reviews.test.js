@@ -21,6 +21,14 @@ vi.mock('../../api', () => ({
   likeReview: vi.fn(),
   unlikeReview: vi.fn(),
   getReviewLikers: vi.fn(),
+  // 回复那一组同理, 一个都不能漏(整体替换模块)
+  getReplies: vi.fn(),
+  addReply: vi.fn(),
+  editReply: vi.fn(),
+  deleteReply: vi.fn(),
+  likeReply: vi.fn(),
+  unlikeReply: vi.fn(),
+  getReplyLikers: vi.fn(),
   REVIEW_SORT_CREATED: 'createdAt',
   REVIEW_SORT_HOT: 'hot',
 }))

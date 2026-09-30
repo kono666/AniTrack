@@ -145,6 +145,9 @@ public class ReviewService {
             map.put("isOwner", r.getUser().getId().equals(userId));
             map.put("likeCount", r.getLikeCount());
             map.put("likedByMe", likedIds.contains(r.getId()));
+            // 回复数直接读 review 表上那一列(V8), 不额外发查询 —— 它就是为"列表里每条
+            // 评论要显示 N 条回复"这件事存在的(现场 COUNT 会毁掉分页, 见 V8 脚本).
+            map.put("replyCount", r.getReplyCount());
             result.add(map);
         }
         return result;

@@ -6,6 +6,7 @@ import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.*;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
+import com.animetracker.service.ReviewReplyService;
 import com.animetracker.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -19,10 +20,13 @@ public class UserController {
 
     private final UserService userService;
     private final AuthRateLimiter authRateLimiter;
+    private final ReviewReplyService reviewReplyService;
 
-    public UserController(UserService userService, AuthRateLimiter authRateLimiter) {
+    public UserController(UserService userService, AuthRateLimiter authRateLimiter,
+                          ReviewReplyService reviewReplyService) {
         this.userService = userService;
         this.authRateLimiter = authRateLimiter;
+        this.reviewReplyService = reviewReplyService;
     }
 
     /**
@@ -95,6 +99,29 @@ public class UserController {
         data.put("status", user.getStatus());
         data.put("createdAt", user.getCreatedAt());
         return ApiResponse.success(data);
+    }
+
+    /**
+     * 「谁回复了我」: 我写的短评下面、别人发的回复(V8).
+     *
+     * <p><b>为什么落在 UserController 而不是 ReviewReplyController</b>: 分法按的是
+     * **路径前缀的所有权** —— 全仓每个控制器各占一个前缀({@code /api/review}、
+     * {@code /api/track}、…), 这个端点是 {@code /api/user/...}, 归这里。数据本身当然
+     * 由 {@link ReviewReplyService} 出, 这个类只负责"它挂在哪个地址上"。
+     *
+     * <p>它**不在** SecurityConfig 的公开清单里, 这是有意的: 这一块答的是"回给我的",
+     * 必须知道"我"是谁. 匿名访问在过滤器链上就是 401, 走不到这个方法 —— 下面这个
+     * 判空是兜底(与 {@link #getUserInfo} 同一个理由), 不是主要防线。
+     *
+     * <p>没有 total、没有分页控件、没有已读状态 —— 用户拍板的就是这一档最简版,
+     * 封顶条数见 {@code ReviewReplyService.MAX_RECEIVED_SHOWN}。
+     */
+    @GetMapping("/received-replies")
+    public ApiResponse<Map<String, Object>> getReceivedReplies(@CurrentUser User user) {
+        if (user == null) {
+            throw BusinessException.unauthorized("未登录");
+        }
+        return ApiResponse.success(reviewReplyService.getReceivedReplies(user));
     }
 
     /** 获取当前登录用户信息 */

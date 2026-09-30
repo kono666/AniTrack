@@ -112,9 +112,14 @@ class ReviewLikeIntegrationTest {
                         .content("{\"subjectId\":" + subjectId + ",\"rating\":8,\"content\":\"" + content + "\"}"))
                 .andExpect(status().isOk());
         // 直接问库要 id: 列表接口按时间倒序, 同一个 subject 下多条时要挑出自己那条,
-        // 而 created_at 的先后在同一个用例里未必分得开(同一微秒内落两条是常有的事)
+        // 而 created_at 的先后在同一个用例里未必分得开(同一微秒内落两条是常有的事).
+        //
+        // 用 MAX(id) 而不是 ORDER BY id DESC LIMIT 1: queryForObject 碰上两行会抛
+        // IncorrectResultSizeDataAccessException, 而报错的是**后面**那一句, 与真正
+        // 多写了一行的用例隔着十万八千里. 现在每个用例各占一个 subject id, 这个区别
+        // 还看不出来 —— 它是给下一个在同一个 subject 下写两条的人留的.
         return jdbc.queryForObject(
-                "SELECT id FROM review WHERE subject_id = ? ORDER BY id DESC", Long.class, subjectId);
+                "SELECT MAX(id) FROM review WHERE subject_id = ?", Long.class, subjectId);
     }
 
     /** 库里那一条的冗余计数 —— 与接口返回的数字对账用 */
