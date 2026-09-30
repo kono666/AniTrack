@@ -6,11 +6,12 @@ vi.mock('../../api', () => ({
   getRanking: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   getCalendar: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   getTags: vi.fn(() => Promise.resolve({ data: { data: [] } })),
-  getByTag: vi.fn(() => Promise.resolve({ data: { data: [] } })),
+  // 分类浏览改走 /filter(它返回 {list,total,page}, 有真实 total 才谈得上翻页)
+  getFiltered: vi.fn(() => Promise.resolve({ data: { data: { list: [], total: 0 } } })),
 }))
 
 import Home from '../Home.vue'
-import { getRanking, getCalendar, getTags, getByTag } from '../../api'
+import { getRanking, getCalendar, getTags, getFiltered } from '../../api'
 import { resetHomeCache } from '../../utils/homeCache'
 
 /**
@@ -127,7 +128,7 @@ describe('首页卡片的键盘操作', () => {
     getRanking.mockResolvedValue({ data: { data: [HS_ITEM] } })
     getCalendar.mockResolvedValue(calendarForToday([TODAY_ITEM]))
     getTags.mockResolvedValue({ data: { data: [{ name: '治愈', count: 3 }] } })
-    getByTag.mockResolvedValue({ data: { data: [] } })
+    getFiltered.mockResolvedValue({ data: { data: { list: [], total: 0 } } })
 
     await router.push('/')
     await router.isReady()
@@ -178,7 +179,7 @@ describe('首页卡片的键盘操作', () => {
     await chips[1].trigger('keydown.enter')
     await flushPromises()
     // 回车要真的等于点了一下, 而不只是把焦点停在那儿
-    expect(getByTag).toHaveBeenCalledWith('治愈')
+    expect(getFiltered).toHaveBeenCalledWith(expect.objectContaining({ tag: '治愈', page: 1 }))
   })
 
   it('按空格不会把页面往下滚(默认行为被拦掉了)', async () => {

@@ -124,6 +124,24 @@ public class AnimeService {
         return t;
     });
 
+    /**
+     * 日历入库的后台线程.
+     *
+     * <p>单独一个池而不是与 {@link #latestRefreshExecutor} 共用: 那个池的注释写着
+     * "池里只有它一个用户", 而它每个任务要睡四次 500ms —— 共用的话, 日历这批写会排在
+     * 一次回源后面(或者反过来), 两件互不相干的事互相拖.
+     *
+     * <p>同样是 daemon: 入库是"写进去了更好、没写进去这次请求也已经服务完了"的事.
+     */
+    private final ExecutorService calendarCacheExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "calendar-cache");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** 同一时刻只允许一批日历入库在跑 —— 缓存过期的那一瞬间可能有多个请求同时未命中 */
+    private final AtomicBoolean calendarCacheInFlight = new AtomicBoolean();
+
     /** 同一时刻只允许一次回源在跑. 否则缓存一过期, 并发的请求会各排一次队 */
     private final AtomicBoolean latestRefreshInFlight = new AtomicBoolean();
 
@@ -175,6 +193,9 @@ public class AnimeService {
         // 用 shutdownNow 而不是 shutdown: 这个任务大多数时间在 sleep, 优雅关闭等于
         // 什么都不做. 中断掉它, sleep 会立刻抛出, 任务在几毫秒内结束.
         latestRefreshExecutor.shutdownNow();
+        // 日历那批不一样: 它不睡, 但一次要写一百多行. 给一次机会让它把当前这一行走完,
+        // 然后立刻返回 —— 没写完的部分下次请求会重新拉一遍(缓存过期时重来), 不会丢数据.
+        calendarCacheExecutor.shutdown();
     }
 
     /** {@code sort=date} 的口径标记. 与 Agent 工具 {@code filter_anime} 对外给的枚举值是同一批字符串 */
@@ -497,23 +518,69 @@ public class AnimeService {
      * {@code allEntries=true} 清空. 接上 Caffeine 之后这句话才成立, 而 2 小时这个数字
      * 现在归 {@code anitrack.cache.calendar.ttl} 管(见 config/CacheProperties),
      * 不写在注释里 —— 写在注释里的数字会与配置漂移.
+     *
+     * <p><b>入库为什么挪到了后台.</b> 上面这句"异步缓存日历中的动漫"改前是**假话** ——
+     * 那个双层 for 就写在请求线程上. 实测代价: 缓存未命中时这个接口要 6.7 秒, 命中时
+     * 6 毫秒. 6.7 秒里约 1 秒是 {@code api.bgm.tv} 的往返(112 个条目、89 KB), 其余是
+     * 112 次 upsert —— 每个条目一次 findById 加一次 save, 而 {@code upsertCalendarItem}
+     * 上那个 {@code @Transactional} 是**失效的**(同类内 {@code this.} 自调用不走 Spring
+     * 代理), 所以每个条目各自提交一次.
+     *
+     * <p>而这 112 条番剧是**入库**用的, 这次响应用的是刚从网络拿回来的那份 {@code days},
+     * 一条都不来自库里 —— 也就是说用户等的这 5 秒, 等的是一件跟他的响应无关的事.
+     * 与 {@code getLatest} 把回源挪后台是同一个判断, 这里照它的写法做.
+     *
+     * <p>没有顺手把这 112 次提交并成一次: 并成一次就没有"某一条坏掉只丢它自己"了,
+     * 而下面那个 per-item 的 {@code catch} 正是靠这一点成立的. 提交变少是省后台线程的
+     * 时间, 不是省用户的 —— 该省的是前者之外的那个东西.
      */
     @Cacheable(value = "calendar", key = "'today'")
     public List<CalendarDay> getCalendar() {
         List<CalendarDay> days = bangumiApiClient.getCalendar();
-        // 异步缓存日历中的动漫
         if (!days.isEmpty()) {
-            for (CalendarDay day : days) {
-                if (day.getItems() != null) {
-                    for (CalendarItem item : day.getItems()) {
-                        try {
-                            upsertCalendarItem(item);
-                        } catch (Exception ignored) {}
-                    }
-                }
-            }
+            scheduleCalendarCache(days);
         }
         return days;
+    }
+
+    /**
+     * 把日历里的番剧排进后台入库.
+     *
+     * <p>{@code inFlight} 挡的是"缓存过期那一瞬间的并发请求各排一次队": {@code @Cacheable}
+     * 只保证**命中之后**不再走这里, 而对同时未命中的那几个请求是没有互斥的.
+     */
+    private void scheduleCalendarCache(List<CalendarDay> days) {
+        if (!calendarCacheInFlight.compareAndSet(false, true)) {
+            return;
+        }
+        calendarCacheExecutor.execute(() -> {
+            try {
+                cacheCalendarItems(days);
+            } catch (Exception e) {
+                log.warn("日历入库失败: {}", e.getMessage());
+            } finally {
+                calendarCacheInFlight.set(false);
+            }
+        });
+    }
+
+    /**
+     * 在 {@code calendar-cache} 线程上跑: 逐个 upsert.
+     *
+     * <p>单个条目失败只丢它自己(与改动前一致) —— 日历里混进一条脏数据不该让后面
+     * 一百多条都进不去.
+     */
+    private void cacheCalendarItems(List<CalendarDay> days) {
+        for (CalendarDay day : days) {
+            if (day.getItems() == null) {
+                continue;
+            }
+            for (CalendarItem item : day.getItems()) {
+                try {
+                    upsertCalendarItem(item);
+                } catch (Exception ignored) {}
+            }
+        }
     }
 
     // ==================== 详情 / 剧集 ====================

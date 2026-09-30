@@ -155,14 +155,18 @@
               <span style="font-size:10px;opacity:.7;">({{ tag.count }})</span>
             </span>
           </div>
-          <div v-if="tagResults.length > 0">
+          <div v-if="tagError" class="tag-error">
+            {{ tagError }}
+            <button class="tag-retry" @click="loadTagPage">重试</button>
+          </div>
+          <div v-else-if="tagItems.length > 0">
             <div class="anime-grid">
-              <AnimeCard v-for="(item, idx) in pagedTagResults" :key="item.id" :anime="item" v-reveal="{ delay: idx * 40 }" />
+              <AnimeCard v-for="(item, idx) in tagItems" :key="item.id" :anime="item" v-reveal="{ delay: idx * 40 }" />
             </div>
             <Pagination
               :current-page="tagPage"
               :total-pages="tagTotalPages"
-              @change="tagPage = $event"
+              @change="changeTagPage"
             />
           </div>
           <EmptyState v-else-if="selectedTag" type="tag" message="该分类暂无数据" />
@@ -175,8 +179,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { PhStar } from '@phosphor-icons/vue'
-import { getRanking, getCalendar, getTags, getByTag } from '../api'
+import PhStar from '@icons/PhStar.vue.mjs'
+import { getRanking, getCalendar, getTags, getFiltered } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
@@ -201,8 +205,16 @@ const todayAnime = ref([])
 const tags = ref([])
 const selectedTag = ref('')
 const error = ref('')
-const tagResults = ref([])
+/* 分类浏览是**服务端分页**: tagItems 是当前这一页, tagTotal 是这个分类的总条数.
+   改前这里是"一次把服务端给的全都拿回来, 自己 slice 24 条一页" —— 而服务端那条
+   /by-tag 封顶 50 条(BY_TAG_LIMIT), 于是任何分类都只有 3 页, 第 3 页还只有 2 张.
+   改用 /filter: 它返回 {list, total, page}, total 是 SQL count 出来的真实值,
+   切页也在 SQL 里. 排序口径不变 —— /by-tag 与 /filter?sort=date 走的是同一条
+   仓储方法、同一套 ORDER_DATE_DESC_NULL_LAST(见 AnimeRepository 的注释). */
+const tagItems = ref([])
+const tagTotal = ref(0)
 const tagPage = ref(1)
+const tagError = ref('')
 const pageSize = 24
 
 // 今日放送默认只铺前 8 部, 其余收在「全部 N 部」后面(改前是直接丢掉)
@@ -216,11 +228,7 @@ const visibleToday = computed(() =>
  *  补键盘支持时要写 12 遍, 这正是该收成一个函数的时候 */
 function open(id) { $router.push(`/anime/${id}`) }
 
-const tagTotalPages = computed(() => Math.max(1, Math.ceil(tagResults.value.length / pageSize)))
-const pagedTagResults = computed(() => {
-  const start = (tagPage.value - 1) * pageSize
-  return tagResults.value.slice(start, start + pageSize)
-})
+const tagTotalPages = computed(() => Math.max(1, Math.ceil(tagTotal.value / pageSize)))
 
 const todayLabel = computed(() => {
   const d = new Date()
@@ -228,21 +236,50 @@ const todayLabel = computed(() => {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`
 })
 
+/**
+ * 取当前分类的当前这一页.
+ *
+ * 「全部」(tag 为空串)走的是同一条接口 —— 不给 tag 参数就是不按标签筛, sort=date
+ * 与改前那个 getRanking('date', 200) 是同一个序(两处共用 ORDER_DATE_DESC_NULL_LAST),
+ * 区别只是改前封顶 200 条、现在有真实 total.
+ */
+async function loadTagPage() {
+  tagError.value = ''
+  try {
+    const res = await getFiltered({
+      tag: selectedTag.value || undefined,
+      sort: 'date',
+      page: tagPage.value,
+      limit: pageSize,
+    })
+    const body = res.data.data || {}
+    tagItems.value = body.list || []
+    tagTotal.value = body.total || 0
+  } catch (e) {
+    // 改前这里只有 console.error: 页面会停在"这个分类没有数据"那个空态上,
+    // 把一次加载失败说成了一句事实
+    tagError.value = loadErrorMessage(e, '加载分类')
+    tagItems.value = []
+    tagTotal.value = 0
+  }
+}
+
 async function selectTag(tag) {
   selectedTag.value = tag
   tagPage.value = 1
-  if (tag) {
-    try {
-      const res = await getByTag(tag)
-      tagResults.value = res.data.data || []
-    } catch (e) { console.error(e) }
-  } else {
-    // "全部": 加载排行数据
-    try {
-      const res = await getRanking('date', 200)
-      tagResults.value = res.data.data || []
-    } catch (e) { console.error(e) }
-  }
+  await loadTagPage()
+}
+
+/**
+ * 翻页.
+ *
+ * 这里刻意**不用 watch(tagPage)**: selectTag 也要把页码复位成 1, 而 watch 分不清
+ * "复位导致的"和"用户点的" —— 从第 3 页换分类时两条路都会触发, 于是发两次请求.
+ * 让每个改写 tagPage 的地方自己决定要不要取数, 这个歧义就不存在了.
+ */
+function changeTagPage(page) {
+  tagPage.value = page
+  loadTagPage()
 }
 
 onMounted(loadHome)
@@ -324,6 +361,27 @@ async function loadHome() {
   color: var(--text-secondary); transition: color var(--transition);
 }
 .today-toggle:hover { color: var(--text); }
+
+/* 分类那一块自己的错误态. 不复用整页那个 EmptyState type="error":
+   整页失败时首页的其他分区还是好的, 用整页的样式会把"只是这一块没加载出来"
+   说成"这一页坏了" */
+.tag-error {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 18px;
+  font-size: 13px; color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.tag-retry {
+  margin-left: auto;
+  padding: 5px 14px;
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  color: var(--text); background: var(--card);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer; transition: border-color var(--transition), color var(--transition);
+}
+.tag-retry:hover { border-color: var(--primary); color: var(--primary); }
 
 /* ── Today's Schedule ── */
 .today-grid {

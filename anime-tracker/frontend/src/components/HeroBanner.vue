@@ -75,7 +75,9 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { PhStar, PhCaretLeft, PhCaretRight } from '@phosphor-icons/vue'
+import PhStar from '@icons/PhStar.vue.mjs'
+import PhCaretLeft from '@icons/PhCaretLeft.vue.mjs'
+import PhCaretRight from '@icons/PhCaretRight.vue.mjs'
 import { useRouter } from 'vue-router'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 

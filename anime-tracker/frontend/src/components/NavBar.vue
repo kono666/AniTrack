@@ -94,11 +94,17 @@ import { useUserStore } from '../stores/user'
    会把一个 16px 的图形切成两层灰, 是"图标语言不统一"最明显的一处。
    小尺寸用粗一档、大尺寸用细一档, 和 c71 定空态图标时(40px 用 light)是同一条规则。
    （原先这里还有个 PhSparkle 给 AI 助手用 —— 火花是 AI 产品的陈词滥调, 已换掉。）*/
-import {
-  PhCompass, PhMagnifyingGlass, PhGear,
-  PhUserCircle, PhSunHorizon, PhMoonStars, PhCaretDown,
-  PhUser, PhSignOut, PhRobot, PhFilmSlate
-} from '@phosphor-icons/vue'
+import PhCompass from '@icons/PhCompass.vue.mjs'
+import PhMagnifyingGlass from '@icons/PhMagnifyingGlass.vue.mjs'
+import PhGear from '@icons/PhGear.vue.mjs'
+import PhUserCircle from '@icons/PhUserCircle.vue.mjs'
+import PhSunHorizon from '@icons/PhSunHorizon.vue.mjs'
+import PhMoonStars from '@icons/PhMoonStars.vue.mjs'
+import PhCaretDown from '@icons/PhCaretDown.vue.mjs'
+import PhUser from '@icons/PhUser.vue.mjs'
+import PhSignOut from '@icons/PhSignOut.vue.mjs'
+import PhRobot from '@icons/PhRobot.vue.mjs'
+import PhFilmSlate from '@icons/PhFilmSlate.vue.mjs'
 
 const router = useRouter()
 const userStore = useUserStore()

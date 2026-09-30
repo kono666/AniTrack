@@ -1,9 +1,25 @@
-import {
-  PhMagnifyingGlass, PhBookOpen, PhFilmStrip, PhTrophy, PhClock, PhCalendarBlank,
-  PhTag, PhFaders, PhBookmarks, PhChatCircle, PhStar, PhChartLineUp, PhBooks,
-  PhPlusCircle, PhMinusCircle, PhCheckCircle, PhChartBar, PhPencilSimple,
-  PhUsers, PhFire, PhClipboardText, PhWrench,
-} from '@phosphor-icons/vue'
+import PhMagnifyingGlass from '@icons/PhMagnifyingGlass.vue.mjs'
+import PhBookOpen from '@icons/PhBookOpen.vue.mjs'
+import PhFilmStrip from '@icons/PhFilmStrip.vue.mjs'
+import PhTrophy from '@icons/PhTrophy.vue.mjs'
+import PhClock from '@icons/PhClock.vue.mjs'
+import PhCalendarBlank from '@icons/PhCalendarBlank.vue.mjs'
+import PhTag from '@icons/PhTag.vue.mjs'
+import PhFaders from '@icons/PhFaders.vue.mjs'
+import PhBookmarks from '@icons/PhBookmarks.vue.mjs'
+import PhChatCircle from '@icons/PhChatCircle.vue.mjs'
+import PhStar from '@icons/PhStar.vue.mjs'
+import PhChartLineUp from '@icons/PhChartLineUp.vue.mjs'
+import PhBooks from '@icons/PhBooks.vue.mjs'
+import PhPlusCircle from '@icons/PhPlusCircle.vue.mjs'
+import PhMinusCircle from '@icons/PhMinusCircle.vue.mjs'
+import PhCheckCircle from '@icons/PhCheckCircle.vue.mjs'
+import PhChartBar from '@icons/PhChartBar.vue.mjs'
+import PhPencilSimple from '@icons/PhPencilSimple.vue.mjs'
+import PhUsers from '@icons/PhUsers.vue.mjs'
+import PhFire from '@icons/PhFire.vue.mjs'
+import PhClipboardText from '@icons/PhClipboardText.vue.mjs'
+import PhWrench from '@icons/PhWrench.vue.mjs'
 
 /**
  * 工具名 -> 给人看的标签 + 图标.

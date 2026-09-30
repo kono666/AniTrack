@@ -136,9 +136,12 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import {
-  PhPlus, PhTrash, PhList, PhPaperPlaneTilt, PhStop, PhRobot,
-} from '@phosphor-icons/vue'
+import PhPlus from '@icons/PhPlus.vue.mjs'
+import PhTrash from '@icons/PhTrash.vue.mjs'
+import PhList from '@icons/PhList.vue.mjs'
+import PhPaperPlaneTilt from '@icons/PhPaperPlaneTilt.vue.mjs'
+import PhStop from '@icons/PhStop.vue.mjs'
+import PhRobot from '@icons/PhRobot.vue.mjs'
 import ChatMessage from '../components/ChatMessage.vue'
 import { useUserStore } from '../stores/user'
 import {

@@ -21,7 +21,10 @@
 </template>
 
 <script setup>
-import { PhCheckCircle, PhXCircle, PhInfo, PhWarning } from '@phosphor-icons/vue'
+import PhCheckCircle from '@icons/PhCheckCircle.vue.mjs'
+import PhXCircle from '@icons/PhXCircle.vue.mjs'
+import PhInfo from '@icons/PhInfo.vue.mjs'
+import PhWarning from '@icons/PhWarning.vue.mjs'
 import { useToast } from '../composables/useToast'
 
 /**

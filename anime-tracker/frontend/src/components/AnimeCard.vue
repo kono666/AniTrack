@@ -69,7 +69,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { PhStar } from '@phosphor-icons/vue'
+import PhStar from '@icons/PhStar.vue.mjs'
 import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
 
 const props = defineProps({ anime: Object })

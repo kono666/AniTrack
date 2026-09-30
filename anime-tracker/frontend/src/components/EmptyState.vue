@@ -12,10 +12,15 @@
 </template>
 
 <script setup>
-import {
-  PhTray, PhWarning, PhMagnifyingGlass, PhTag,
-  PhFilmStrip, PhBookmarks, PhChatCircle, PhUsers, PhCompass,
-} from '@phosphor-icons/vue'
+import PhTray from '@icons/PhTray.vue.mjs'
+import PhWarning from '@icons/PhWarning.vue.mjs'
+import PhMagnifyingGlass from '@icons/PhMagnifyingGlass.vue.mjs'
+import PhTag from '@icons/PhTag.vue.mjs'
+import PhFilmStrip from '@icons/PhFilmStrip.vue.mjs'
+import PhBookmarks from '@icons/PhBookmarks.vue.mjs'
+import PhChatCircle from '@icons/PhChatCircle.vue.mjs'
+import PhUsers from '@icons/PhUsers.vue.mjs'
+import PhCompass from '@icons/PhCompass.vue.mjs'
 
 /* 空态图标表. 改前这里是个 `icon: String`(默认是那个"空邮箱" emoji), 由 15 个调用点各传一个
    emoji —— 而那 15 次里有 7 次传的是同一个警告图标. 也就是说这个 prop 几乎不

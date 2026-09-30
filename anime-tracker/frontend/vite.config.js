@@ -1,5 +1,26 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+
+/**
+ * 单个图标的落点.
+ *
+ * 为什么需要它: `@phosphor-icons/vue` 的 `package.json` 里 `exports` 只声明了
+ * `.` 和 `./compact` 两个入口, 所以 `@phosphor-icons/vue/dist/icons/PhStar.vue.mjs`
+ * 这种子路径会被**明确拒绝**(ERR_PACKAGE_PATH_NOT_EXPORTED —— 实测报这个).
+ * 别名在包解析之前生效, 于是绕开了那道门; 指到的正是那个桶内部自己用的路径
+ * (它的第一行就是 `import ... from "./icons/PhAcorn.vue.mjs"`).
+ *
+ * 为什么要绕: 那个桶里有 3024 个图标模块, 每个把 6 种字重全内联进去. 生产构建会
+ * tree-shake 掉没用的(实测 vendor-icons 202 KB), 但**开发模式不 tree-shake** ——
+ * Vite 预打包出来的是一个 7.2 MB 的文件, 加上内联的 sourcemap, 浏览器实际要收
+ * 20.8 MB. 改成按需引入之后, 开发下要传的就是用到的这二十几个模块.
+ *
+ * 这是**开发体验**的改动, 不是线上体积的改动: 生产那一侧本来就是 202 KB.
+ */
+const iconsDir = fileURLToPath(
+  new URL('./node_modules/@phosphor-icons/vue/dist/icons', import.meta.url)
+)
 
 // 从模块 id 里取出**包名**.
 //
@@ -22,6 +43,11 @@ export default defineConfig({
     globals: true,
   },
   plugins: [vue()],
+  resolve: {
+    alias: {
+      '@icons': iconsDir,
+    },
+  },
   build: {
     // 生产构建**不发** sourcemap.
     //

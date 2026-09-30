@@ -174,7 +174,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { PhStar } from '@phosphor-icons/vue'
+import PhStar from '@icons/PhStar.vue.mjs'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import {

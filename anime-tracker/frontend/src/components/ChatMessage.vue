@@ -63,7 +63,10 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { PhWrench, PhCaretDown, PhUser, PhRobot } from '@phosphor-icons/vue'
+import PhWrench from '@icons/PhWrench.vue.mjs'
+import PhCaretDown from '@icons/PhCaretDown.vue.mjs'
+import PhUser from '@icons/PhUser.vue.mjs'
+import PhRobot from '@icons/PhRobot.vue.mjs'
 import AnimeChip from './AnimeChip.vue'
 import { toolMeta } from '../utils/agentTools'
 

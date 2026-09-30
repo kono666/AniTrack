@@ -25,7 +25,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { PhStar } from '@phosphor-icons/vue'
+import PhStar from '@icons/PhStar.vue.mjs'
 
 const props = defineProps({
   anime: { type: Object, required: true },
