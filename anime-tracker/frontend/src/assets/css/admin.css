@@ -1,6 +1,111 @@
 /* ============================================================
-   �AniTrack — Admin Table & Chart Cards
+   AniTrack — Admin Shell & Table
    ============================================================ */
+
+/* ── 后台外壳 ──
+   侧栏 + 内容区两栏. 改前三条后台路由各自包一层 AdminLayout, 那段外壳是普通页面
+   的样子(走 .page-container, 1280px 封顶 + 顶部一条 tab 条), 而不是一个后台.
+
+   ⚠️ 这几条**必须**留在这个文件里, 不能写进 AdminLayout.vue 的 <style scoped>:
+   scoped 不在任何 @layer 里, 层叠层里的规则一定输给它. 下面 .admin-table-wrap
+   曾经就是因为这个被抄成两份(见那条注释). */
+.admin-shell { display: flex; align-items: stretch; min-height: 100vh; }
+
+.admin-sidebar {
+  width: 232px;
+  flex-shrink: 0;
+  /* sticky + height:100vh = 侧栏自己不动, 页面用**窗口**滚动.
+     刻意不做成 height:100vh + overflow:hidden 的内层滚动容器: 那样窗口滚动在
+     后台就失效了, 路由里 meta.scrollOnQueryChange 那条例外会变成永远读不到的死配置. */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 12px;
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 14px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+}
+.admin-brand svg { color: var(--primary); }
+
+.admin-nav-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  padding: 6px 10px;
+}
+
+.admin-nav { display: flex; flex-direction: column; gap: 2px; }
+
+/* 与 navbar.css 的 .nav-link 同形, 但整行铺满、左对齐 —— 侧栏里每一条是一个
+   目的地, 不是一排并列的标签. 两个角色的按钮(主题/退出)共用这一条, 所以
+   元素类型不写死, <a> 与 <button> 都要能套. */
+.admin-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.admin-nav-link:hover { color: var(--text); background: var(--card-hover); }
+/* 选中态靠**洗色底**表达, 不靠换文字色 —— --primary 是墨色, 深色主题下与 --text
+   几乎同色, 拿它当文字色的话选中和没选中看不出区别(与 .nav-link--active 同因). */
+.admin-nav-link.active { color: var(--text); background: var(--primary-soft); }
+
+.admin-sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+.admin-nav-danger:hover { color: var(--danger); background: var(--danger-soft); }
+
+.admin-main {
+  flex: 1;
+  padding: 24px;
+  /* ⚠️ min-width:0 不是美化. flex 项的 min-width 默认是 auto, 它的最小值来自
+     **内容**, 而内容里那张 .admin-table 写着 min-width:720px —— 不写 0 的话整条
+     shell 的 min-content 会被撑到 232+720, 窄屏变成整页横向滚动, 而
+     .admin-table-wrap 的 overflow-x:auto 永远滚不起来.
+     (与 NavBar 里 .nav-search-input 那条 min-width:0 + width:0 同一个坑.) */
+  min-width: 0;
+}
+
+/* 页面标题那一行: 窄屏的抽屉开关 + h1. 挂在 .page-header(来自 layout.css,
+   flex + space-between)里, 单子元素时自然靠左. */
+.admin-page-heading { display: flex; align-items: center; gap: 12px; }
+
+.admin-sidebar-toggle {
+  display: none;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  cursor: pointer;
+}
+.admin-scrim { display: none; }
 
 /* ── Admin Table ──
 
@@ -8,10 +113,8 @@
    多出来的列被**切掉**了, 而且没有任何滚动条, 所以「操作」那一列(解锁/禁用/
    设为管理员)在手机上直接是看不到也点不到的. 现在横向可滚.
 
-   注意这条规则有对手: users.vue 的 scoped 里也写了一份 .admin-table-wrap.
-   这个文件是 @import 进 @layer components 的, 而 scoped 样式不在任何 layer 里,
-   层叠层里的规则无论怎么写都输给不在层里的 —— 所以两处必须一起改, 只改这里
-   等于没改(批次 6 之前就是这样: 修了也白修). */
+   这条曾经有个对手: users.vue 的 <style scoped> 里也写了一份(而且那份不在 layer
+   里, 实际生效的是它, 改这里等于没改). 那份已经删掉, 这里现在是**唯一**的归属. */
 .admin-table-wrap { background:var(--card); border-radius:var(--radius); overflow-x:auto; border:1px solid var(--card-border); }
 /* 撑开最小宽度, 让横向滚动真的会出现 —— 没有它, table 的 width:100% 会一路
    压到 7 列挤成一团, overflow 设了也永远滚不起来 */
@@ -21,6 +124,31 @@
 .admin-table tr:last-child td { border-bottom:none; }
 .admin-table tr:hover td { background:var(--card-hover); }
 
-/* ── Chart Cards ── */
-.chart-card { background:var(--card); border-radius:var(--radius); padding:20px; border:1px solid var(--card-border); }
-.chart-title { margin-bottom:12px; }
+/* ── 响应式: 窄屏侧栏变抽屉 ──
+   照抄 assistant.css 里已经验过的那套(.chat-sidebar: fixed + translateX(-100%)
+   + .open). 两处不同:
+     · top:0 —— 后台没有导航栏要让(那边是 64px);
+     · 多一层 .admin-scrim, 那边靠点击别处关. */
+@media (max-width: 900px) {
+  .admin-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 900;
+    height: auto;
+    background: var(--bg);
+    transform: translateX(-100%);
+    transition: transform var(--transition);
+  }
+  .admin-sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+  .admin-sidebar-toggle { display: inline-flex; }
+  .admin-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 899;
+    background: rgba(0, 0, 0, .45);
+  }
+  .admin-main { padding: 16px; }
+}

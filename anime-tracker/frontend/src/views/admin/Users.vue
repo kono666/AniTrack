@@ -1,87 +1,82 @@
 <template>
-  <AdminLayout>
-    <LoadingSpinner v-if="loading" />
+  <!-- 外壳(左栏 + 标题行)升到了路由那一层的 AdminLayout.vue, 这一页只剩内容 -->
 
-    <!-- 加载失败. 改前一失败就是空表格, 和「这个站还没有用户」长得一模一样 ——
-         管理端看到空表第一反应是数据没了, 而不是接口挂了 -->
-    <EmptyState
-      v-else-if="error"
-      type="error"
-      :message="error"
-      action-label="重试"
-      @action="loadUsers"
-    />
+  <LoadingSpinner v-if="loading" />
 
-    <div v-else>
-      <div class="admin-table-wrap">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>用户名</th>
-              <th>邮箱</th>
-              <th>角色</th>
-              <th>状态</th>
-              <th>注册时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="u in users" :key="u.id">
-              <td>{{ u.id }}</td>
-              <td class="username-cell">{{ u.username }}</td>
-              <td class="email-cell">{{ u.email || '-' }}</td>
-              <td>
-                <span class="role-badge" :class="u.role === 'ADMIN' ? 'role-admin' : 'role-user'">
-                  {{ u.role === 'ADMIN' ? '管理员' : '用户' }}
-                </span>
-              </td>
-              <td>
-                <span class="status-badge" :class="u.status === 'ACTIVE' ? 'status-active' : 'status-disabled'">
-                  {{ u.status === 'ACTIVE' ? '正常' : '已禁用' }}
-                </span>
-                <span v-if="u.locked" class="status-badge status-locked">已锁定</span>
-              </td>
-              <td class="time-cell">{{ formatTime(u.createdAt) }}</td>
-              <td>
-                <button
-                  v-if="u.locked"
-                  class="action-btn btn-warn"
-                  @click="handleUnlock(u)"
-                >解锁</button>
-                <button
-                  v-if="u.role !== 'ADMIN'"
-                  class="action-btn btn-danger"
-                  @click="handleToggleStatus(u)"
-                >{{ u.status === 'ACTIVE' ? '禁用' : '启用' }}</button>
-                <button
-                  v-if="u.role !== 'ADMIN'"
-                  class="action-btn btn-purple"
-                  @click="handleSetAdmin(u)"
-                >设为管理员</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <EmptyState v-if="users.length === 0" type="user" message="暂无用户" />
-      </div>
+  <!-- 加载失败. 改前一失败就是空表格, 和「这个站还没有用户」长得一模一样 ——
+       管理端看到空表第一反应是数据没了, 而不是接口挂了 -->
+  <EmptyState
+    v-else-if="error"
+    type="error"
+    :message="error"
+    action-label="重试"
+    @action="loadUsers"
+  />
+
+  <div v-else>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>用户名</th>
+            <th>邮箱</th>
+            <th>角色</th>
+            <th>状态</th>
+            <th>注册时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="u in users" :key="u.id">
+            <td>{{ u.id }}</td>
+            <td class="username-cell">{{ u.username }}</td>
+            <td class="email-cell">{{ u.email || '-' }}</td>
+            <td>
+              <span class="role-badge" :class="u.role === 'ADMIN' ? 'role-admin' : 'role-user'">
+                {{ u.role === 'ADMIN' ? '管理员' : '用户' }}
+              </span>
+            </td>
+            <td>
+              <span class="status-badge" :class="u.status === 'ACTIVE' ? 'status-active' : 'status-disabled'">
+                {{ u.status === 'ACTIVE' ? '正常' : '已禁用' }}
+              </span>
+              <span v-if="u.locked" class="status-badge status-locked">已锁定</span>
+            </td>
+            <td class="time-cell">{{ formatTime(u.createdAt) }}</td>
+            <td>
+              <button
+                v-if="u.locked"
+                class="action-btn btn-warn"
+                @click="handleUnlock(u)"
+              >解锁</button>
+              <button
+                v-if="u.role !== 'ADMIN'"
+                class="action-btn btn-danger"
+                @click="handleToggleStatus(u)"
+              >{{ u.status === 'ACTIVE' ? '禁用' : '启用' }}</button>
+              <button
+                v-if="u.role !== 'ADMIN'"
+                class="action-btn btn-purple"
+                @click="handleSetAdmin(u)"
+              >设为管理员</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <EmptyState v-if="users.length === 0" type="user" message="暂无用户" />
     </div>
-  </AdminLayout>
+  </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { useUserStore } from '../../stores/user'
 import { getAdminUsers, toggleUserStatus, setUserRole, unlockUser } from '../../api'
 import { useToast } from '../../composables/useToast'
 import { loadErrorMessage } from '../../utils/loadError'
-import AdminLayout from '../../components/AdminLayout.vue'
 import LoadingSpinner from '../../components/LoadingSpinner.vue'
 import EmptyState from '../../components/EmptyState.vue'
 
-const router = useRouter()
-const userStore = useUserStore()
 const { show: toast } = useToast()
 const users = ref([])
 const loading = ref(true)
@@ -133,24 +128,17 @@ async function handleUnlock(u) {
   } catch (e) { toast(e.response?.data?.message || '操作失败', 'error') }
 }
 
-onMounted(async () => {
-  if (!userStore.loggedIn || userStore.user?.role !== 'ADMIN') { router.push('/'); return }
-  await loadUsers()
-})
+// 改前这里还有一句「不是管理员就 router.push('/')」, 三个后台页面各抄一遍.
+// 现在收在 AdminLayout 里, 而且那边用 `<router-view v-if="authorized">` 挡着 ——
+// 未授权时这个组件根本不会挂载, 所以那句判断在这里已经无处可放.
+onMounted(loadUsers)
 </script>
 
 <style scoped>
-/* 这份是**实际生效**的那份, 不是 assets/css/admin.css 里那份.
-   原因见 admin.css 的注释: 那份在 @layer components 里, scoped 不在层里,
-   层叠层的规则一定输. 所以窄屏横向滚动这件事必须在这里改, 那边只是保持同步. */
-/* 这里原本写的是 --card-bg. 那是个只在 :root 里定义过的别名, 于是浅色主题下
-   它冻在深色值上 —— 整张表是 #171514 的深底配 --text 的 #211e1e, 1.1:1,
-   用户名/邮箱/注册时间全看不见. 改用 --card(admin.css 里那份一直是这么写的,
-   两处现在一致了). 见 tokens.css 顶部那段. */
-.admin-table-wrap {
-  background: var(--card); border-radius: 12px; overflow-x: auto;
-  box-shadow: var(--shadow);
-}
+/* 这里原本有一份 .admin-table-wrap. 它存在的原因不是"这一页要长得不一样",
+   而是 scoped 不在任何 @layer 里、永远压过层内的规则 —— 于是 admin.css 里那份
+   改了等于没改, 真正生效的一直是这里, 两处必须一起动. 现在那份重复已删掉,
+   admin.css 是唯一的归属(外壳搬过去之后, 这张表的两条规则也不该再分家). */
 .username-cell { font-size: 14px; font-weight: 500; color: var(--text); }
 .email-cell { font-size: 13px; color: var(--text-secondary); }
 .time-cell { font-size: 12px; color: var(--text-muted); }

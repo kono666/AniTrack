@@ -1,54 +1,47 @@
 <template>
-  <AdminLayout>
-    <LoadingSpinner v-if="loading" />
+  <!-- 外壳(左栏 + 标题行)升到了路由那一层的 AdminLayout.vue, 这一页只剩内容 -->
 
-    <!-- 加载失败. 清单里点名的是 Dashboard 和 Users 两页, 这里是同一个毛病的
-         第三处(同一个目录、同一行 catch console.error、同一个结局): 失败时
-         reviews 保持空数组, 页面上显示的是「暂无评论」—— 把接口挂了说成
-         「本来就没有评论」 -->
-    <EmptyState
-      v-else-if="error"
-      type="error"
-      :message="error"
-      action-label="重试"
-      @action="loadReviews"
-    />
+  <LoadingSpinner v-if="loading" />
 
-    <div v-else>
-      <div class="reviews-wrap">
-        <div v-if="reviews.length > 0">
-          <div v-for="r in reviews" :key="r.id" class="review-row">
-            <div style="flex:1;">
-              <div class="review-head">
-                <span class="review-user">{{ r.username }}</span>
-                <span class="review-stars">{{ '★'.repeat(r.rating) }}{{ '☆'.repeat(10 - r.rating) }}</span>
-                <span class="review-time">{{ formatTime(r.createdAt) }}</span>
-              </div>
-              <div class="review-subject">番剧ID: #{{ r.subjectId }}</div>
-              <div class="review-text">{{ r.content || '（无文字）' }}</div>
-            </div>
-            <button class="delete-btn" @click="handleDelete(r)">删除</button>
+  <!-- 加载失败. 清单里点名的是 Dashboard 和 Users 两页, 这里是同一个毛病的
+       第三处(同一个目录、同一行 catch console.error、同一个结局): 失败时
+       reviews 保持空数组, 页面上显示的是「暂无评论」—— 把接口挂了说成
+       「本来就没有评论」 -->
+  <EmptyState
+    v-else-if="error"
+    type="error"
+    :message="error"
+    action-label="重试"
+    @action="loadReviews"
+  />
+
+  <div v-else class="reviews-wrap">
+    <div v-if="reviews.length > 0">
+      <div v-for="r in reviews" :key="r.id" class="review-row">
+        <div style="flex:1;">
+          <div class="review-head">
+            <span class="review-user">{{ r.username }}</span>
+            <span class="review-stars">{{ '★'.repeat(r.rating) }}{{ '☆'.repeat(10 - r.rating) }}</span>
+            <span class="review-time">{{ formatTime(r.createdAt) }}</span>
           </div>
+          <div class="review-subject">番剧ID: #{{ r.subjectId }}</div>
+          <div class="review-text">{{ r.content || '（无文字）' }}</div>
         </div>
-        <EmptyState v-else type="comment" message="暂无评论" />
+        <button class="delete-btn" @click="handleDelete(r)">删除</button>
       </div>
     </div>
-  </AdminLayout>
+    <EmptyState v-else type="comment" message="暂无评论" />
+  </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { useUserStore } from '../../stores/user'
 import { getAdminReviews, adminDeleteReview } from '../../api'
 import { useToast } from '../../composables/useToast'
 import { loadErrorMessage } from '../../utils/loadError'
-import AdminLayout from '../../components/AdminLayout.vue'
 import LoadingSpinner from '../../components/LoadingSpinner.vue'
 import EmptyState from '../../components/EmptyState.vue'
 
-const router = useRouter()
-const userStore = useUserStore()
 const { show: toast } = useToast()
 const reviews = ref([])
 const loading = ref(true)
@@ -80,10 +73,9 @@ async function handleDelete(r) {
   } catch (e) { toast(e.response?.data?.message || '删除失败', 'error') }
 }
 
-onMounted(async () => {
-  if (!userStore.loggedIn || userStore.user?.role !== 'ADMIN') { router.push('/'); return }
-  await loadReviews()
-})
+// 改前这里还有一句「不是管理员就 router.push('/')」. 现在收在 AdminLayout 里,
+// 那边用 `<router-view v-if="authorized">` 挡着, 未授权时这个组件不会挂载.
+onMounted(loadReviews)
 </script>
 
 <style scoped>

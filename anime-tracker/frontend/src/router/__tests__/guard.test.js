@@ -75,3 +75,49 @@ describe('路由守卫', () => {
     expect(router.currentRoute.value.name).toBe('AdminUsers')
   })
 })
+
+/**
+ * 后台路由的形状: 一条父路由 + 三个子路由.
+ *
+ * 上面两条守卫用例只覆盖了 /admin/users 一个地址, 而这次重构真正改的是
+ * **形状** —— 三条平级路由收成一条父路由带三个子路由. 形状错了的典型症状不是
+ * 这里红, 而是运行时某一处才炸: router-link 的 to="{ name: 'AdminUsers' }"
+ * 找不到名字、或者 /admin 直接变成父路由那条没有 outlet 的空壳.
+ *
+ * 所以这里把三件"想当然会成立"的事各钉一条:
+ *   · 三个地址分别落在三个子路由名字上;
+ *   · 页面名在子路由上 (meta 是合并的, 后面的记录赢);
+ *   · 父路由的 requiresAdmin 被子路由继承 —— 上面「普通用户访问管理端 -> 回首页」
+ *     依赖的正是它, 而它成立的前提是 meta 合并的顺序.
+ */
+describe('后台路由的形状', () => {
+  it('三个地址各自落在三个子路由名字上', () => {
+    expect(router.resolve('/admin').name).toBe('AdminDashboard')
+    expect(router.resolve('/admin/users').name).toBe('AdminUsers')
+    expect(router.resolve('/admin/reviews').name).toBe('AdminReviews')
+  })
+
+  it('页面名挂在子路由上, 权限仍来自父路由', () => {
+    const resolved = router.resolve('/admin/users')
+
+    // 子路由的 title 覆盖父的路由(父路由刻意不写 title)
+    expect(resolved.meta.title).toBe('用户管理')
+    // 父路由的 requiresAdmin 必须被子继承 —— 少了它, 后台就是敞开的大门
+    expect(resolved.meta.requiresAdmin).toBe(true)
+    expect(resolved.meta.requiresAuth).toBe(true)
+    // 父 + 子两层. 变成 1 说明子路由被拍平了, 3 以上说明嵌套错了层级
+    expect(resolved.matched).toHaveLength(2)
+  })
+
+  it('三个子页共用同一个外壳组件, 各自挂各自的页面', () => {
+    // 「外壳归谁管」这一条在路由表上就看得出来: 两条后台路径的第 0 层必须是
+    // **同一个**组件(懒加载的 import 函数是模块级的常量, 同一个就是同一个),
+    // 第 1 层必须是两个不同的. 反过来(第 0 层不同)就是改回了三条平级路由 ——
+    // 那正是这次重构要修的东西, 而它在运行时只表现为"每次导航重播一次动画"
+    const users = router.resolve('/admin/users')
+    const reviews = router.resolve('/admin/reviews')
+
+    expect(users.matched[0].components.default).toBe(reviews.matched[0].components.default)
+    expect(users.matched[1].components.default).not.toBe(reviews.matched[1].components.default)
+  })
+})

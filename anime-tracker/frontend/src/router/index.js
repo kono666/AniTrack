@@ -38,23 +38,48 @@ const routes = [
   },
 
   // ── 需要管理员权限的路由 ──────────────────────────
+  //
+  // 改前这是三条**互相平级**的路由, 各自在模板里包一层 AdminLayout. 后果是:
+  // 外壳跟着每一页的 bundle 走、"外壳归谁管"没有答案, 而三个页面各自把
+  // 「不是管理员就踢走」那句判断抄了一遍.
+  //
+  // 现在收成一条父路由 + 三个子路由. 三件不能想当然的事:
+  //
+  // 一、**父路由上不要写 redirect**. 下面 `path: ''` 那个子路由的地址就是 /admin,
+  //   写 redirect 等于让它指自己(症状是"点管理后台没反应").
+  // 二、**name 留在子路由上**. router/__tests__/guard.test.js 断言的正是
+  //   AdminUsers / AdminDashboard 这两个名字, 它是这次重构的守卫.
+  // 三、**meta 是合并的, 后面的记录赢** —— 子路由的 title 覆盖父的, 父的
+  //   requiresAdmin 被子继承(所以守卫那句一个字不用改). 实测过 vue-router 5.3.1:
+  //   /admin 落在 AdminDashboard 上, 三个 name 与三份 title 都正确, matched 长度 2.
   {
     path: '/admin',
-    name: 'AdminDashboard',
-    component: () => import('../views/admin/Dashboard.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, title: '后台概览' },
-  },
-  {
-    path: '/admin/users',
-    name: 'AdminUsers',
-    component: () => import('../views/admin/Users.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, title: '用户管理' },
-  },
-  {
-    path: '/admin/reviews',
-    name: 'AdminReviews',
-    component: () => import('../views/admin/Reviews.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, title: '评论管理' },
+    component: () => import('../components/AdminLayout.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+    children: [
+      {
+        path: '',
+        name: 'AdminDashboard',
+        component: () => import('../views/admin/Dashboard.vue'),
+        meta: { title: '后台概览' },
+      },
+      {
+        path: 'users',
+        name: 'AdminUsers',
+        component: () => import('../views/admin/Users.vue'),
+        // 与 /tags 同一个理由: 这一页的搜索/筛选/排序/翻页全写在 query 上,
+        // 而点一下筛选并不是"到了另一个地方" —— 回顶会把用户从翻页条那里
+        // 扔回页面最上面. 判据挂 meta 上而不是写成全局的"同 path 就不滚":
+        // 搜索页的翻页与"在 /search 上再搜一次"正靠回顶让用户看到新结果的开头.
+        meta: { title: '用户管理', scrollOnQueryChange: false },
+      },
+      {
+        path: 'reviews',
+        name: 'AdminReviews',
+        component: () => import('../views/admin/Reviews.vue'),
+        meta: { title: '评论管理' },
+      },
+    ],
   },
 
   // ── 兜底: 必须放在最后 ────────────────────────────

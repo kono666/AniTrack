@@ -100,6 +100,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
+import { useTheme } from '../composables/useTheme'
 /* 字重统一成两档: 身份标记(品牌标、用户头像)用 fill, 其余功能性图标一律 bold。
    模板里这 12 处图标改前混着 fill / bold / duotone 三种 —— duotone 在小尺寸下
    会把一个 16px 的图形切成两层灰, 是"图标语言不统一"最明显的一处。
@@ -137,36 +138,11 @@ function toggleMenu() { menuOpen.value = !menuOpen.value }
 function closeMenu() { menuOpen.value = false }
 
 // Theme
-// body 上的 light 类**不在这里加** —— 那是首屏之后才发生的事, 存浅色主题时会闪一下.
-// 首屏那一次由 index.html 里的内联脚本负责; 这里只读初始值, 给按钮状态用.
-// 读的时候包 try: 隐私模式/禁用存储下 localStorage 会直接抛, 不该让整个导航栏挂掉
-// (与 index.html 那段内联脚本保持一致).
 //
-// 「没存过」和「存了 dark」是**两件事**, 改前把它们当成一件事了(默认深色):
-// localStorage 里没有记录时应该跟系统走, 而不是替用户选深色。
-const metaThemeColor = () => document.querySelector('meta[name="theme-color"]')
-const THEME_COLORS = { light: '#fcf1f0', dark: '#0d0c0b' }  // 与 tokens.css 的 --bg 一致
-
-function storedTheme() {
-  try { return localStorage.getItem('theme') } catch (e) { return null }
-}
-function initialLight() {
-  const stored = storedTheme()
-  if (stored) return stored === 'light'
-  return window.matchMedia('(prefers-color-scheme: light)').matches
-}
-const light = ref(initialLight())
-function toggleLight() {
-  light.value = !light.value
-  document.body.classList.toggle('light', light.value)
-  // 地址栏颜色得跟着 body 走, 而它只认 meta, 拿不到 CSS 变量 —— 所以这里必须
-  // 再写一遍色值(与 index.html 那段内联脚本是同一份, 改一处要改两处).
-  const meta = metaThemeColor()
-  if (meta) meta.setAttribute('content', light.value ? THEME_COLORS.light : THEME_COLORS.dark)
-  // 写也包 try: 存储被禁用时 getItem 会抛, setItem 一样会 —— 改前这一行是裸的,
-  // 隐私模式下点一下主题按钮就会抛出去
-  try { localStorage.setItem('theme', light.value ? 'light' : 'dark') } catch (e) { /* 存储不可用 */ }
-}
+// 这段逻辑改前就长在这里, 现在搬进了 composables/useTheme.js —— 因为后台的侧栏
+// 也要有一个同样的开关(它不渲染导航栏, 拿不到这个下拉), 而「初始值怎么定」
+// 再抄第四份就是它开始漂的起点. 那个文件里有完整的来龙去脉.
+const { light, toggle: toggleLight } = useTheme()
 
 // Scroll shrink
 const scrolled = ref(false)

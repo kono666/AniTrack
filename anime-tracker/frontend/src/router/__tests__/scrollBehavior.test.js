@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { scrollBehavior } from '../../router'
+import router, { scrollBehavior } from '../../router'
 
 /**
  * 后退/前进时的滚动恢复.
@@ -156,5 +156,29 @@ describe('scrollBehavior: 同 path 只换 query', () => {
     // 但 to.fullPath !== from.fullPath 为 false, 整个条件仍然不成立),
     // 真正被打红的是上面那条「搜索页同 path 的 query 变化仍然回顶」.
     expect(scrollBehavior({}, {}, null)).toEqual({ top: 0 })
+  })
+
+  it('用户管理页同 path 只换 query(翻页 / 筛选 / 排序) 也不回顶', () => {
+    // 与分类页同一个理由, 只是判据挂在 /admin/users 上: 这一页的搜索、角色、
+    // 状态、排序、每页条数、翻页**全写在 query 里**, 而"点下一页"不是"到了
+    // 另一个地方" —— 回顶会把用户从他刚点的那个按钮扔回页面最上面, 而翻页条
+    // 在几十行表格的下面
+    const users = fullPath => ({
+      path: '/admin/users',
+      fullPath,
+      meta: { scrollOnQueryChange: false },
+    })
+
+    expect(scrollBehavior(users('/admin/users?page=2'), users('/admin/users'), null)).toBe(false)
+  })
+
+  it('路由表里 /admin/users 确实带着这个标记', () => {
+    // 上一条验的是 scrollBehavior 认这个标记; 这一条验的是**路由真的挂上了它**.
+    // 少了这一条, 谁把 meta 里的 scrollOnQueryChange 删掉, 上面那条照样绿,
+    // 而线上照旧回顶 —— 那正是这次加这条规则要修的东西
+    expect(router.resolve('/admin/users').meta.scrollOnQueryChange).toBe(false)
+    // 对照: 另外两条后台路由没有这个标记, 不该被例外波及
+    expect(router.resolve('/admin').meta.scrollOnQueryChange).toBeUndefined()
+    expect(router.resolve('/admin/reviews').meta.scrollOnQueryChange).toBeUndefined()
   })
 })
