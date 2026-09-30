@@ -33,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import com.animetracker.util.AnimeAliases;
+import com.animetracker.util.PageResults;
 import com.animetracker.util.AnimeFields;
 import com.animetracker.util.SearchPatterns;
 import com.animetracker.util.TagTranslationUtil;
@@ -205,16 +206,6 @@ public class AnimeService {
     private static final String SORT_RATING = "rating";
 
     /**
-     * SQL 层能接受的最大起点.
-     *
-     * <p>切片下推之后, 起点最终交给 {@code Query.setFirstResult(int)} —— 是个 int.
-     * 而 {@code (page-1)*limit} 可以在 int 里溢出成负数(见 {@link #buildSearchResult}
-     * 里那段注释记着的老 bug). 溢出之后库收到的是"从负数开始取一页", 两个库的表现
-     * 既不统一, 也不报错. 所以在自己的 long 算式里先把它接住, 超了就返回空页.
-     */
-    private static final long MAX_SQL_OFFSET = Integer.MAX_VALUE;
-
-    /**
      * 排行榜那条查询的一页.
      *
      * <p>抽成一个方法而不是在调用处各写一遍仓库方法, 是因为它有**两个**调用点 ——
@@ -331,7 +322,7 @@ public class AnimeService {
      *
      * <p>切片下推之后, {@link #buildSearchResult} 那套"越界夹取"就无从谈起了 ——
      * 它夹的是内存列表的下标, 而这里手上只有一页. 所以越界改由 offset 守卫承担:
-     * 起点超过 {@link #MAX_SQL_OFFSET}(或超过总行数)时库返回空页, 语义与改前一致
+     * 起点超过 {@link PageResults#MAX_SQL_OFFSET}(或超过总行数)时库返回空页, 语义与改前一致
      * (第 5 页在只有 40 行时就是空的), 只是不再需要先读回全部行才知道这件事.
      *
      * <p>{@code total} 报的是<b>全表行数</b>, 与改前一致: 改前那版走
@@ -344,11 +335,11 @@ public class AnimeService {
         int total = (int) Math.min(animeRepository.count(), Integer.MAX_VALUE);
 
         long offset = (long) (safePage - 1) * safeLimit;
-        if (offset >= total || offset > MAX_SQL_OFFSET) {
+        if (offset >= total || offset > PageResults.MAX_SQL_OFFSET) {
             // 越界与溢出合成一条出口: 两者的结果都是"这一页没有行", 而 total 照报.
-            return pageResult(Collections.emptyList(), total, safePage);
+            return PageResults.of(Collections.emptyList(), total, safePage);
         }
-        return pageResult(
+        return PageResults.of(
                 animeRepository.findRankedByWeightedScore(
                         rankingProperties.getPriorVotes(), rankingProperties.getPriorScore(),
                         PageRequest.of(safePage - 1, safeLimit)),
@@ -852,7 +843,7 @@ public class AnimeService {
      *
      * <p>越界的页码: 起点超出总行数(或超出 SQL 能表达的 int 范围)时返回空页、
      * {@code total} 照报真实值 —— 与改动前 {@link #buildSearchResult} 的越界夹取
-     * 是同一个对外行为, 只是改由 {@link #MAX_SQL_OFFSET} 守卫承担.
+     * 是同一个对外行为, 只是改由 {@link PageResults#MAX_SQL_OFFSET} 守卫承担.
      */
     public Map<String, Object> getFilteredPage(String year, String season, String status,
                                                String tag, String sort, int page, int limit) {
@@ -864,7 +855,7 @@ public class AnimeService {
         String statusKey = emptyToNull(status);
         List<Long> tagIds = tagIdsOf(singleOrNull(tag));
         if (tagIds != null && tagIds.isEmpty()) {
-            return pageResult(Collections.emptyList(), 0, safePage);
+            return PageResults.of(Collections.emptyList(), 0, safePage);
         }
 
         // count 先算: 越界页也要报真实 total, 否则前端按 total 算出来的翻页控件会
@@ -875,10 +866,10 @@ public class AnimeService {
         int total = (int) Math.min(matched, Integer.MAX_VALUE);
 
         long offset = (long) (safePage - 1) * safeLimit;
-        if (offset >= total || offset > MAX_SQL_OFFSET) {
-            return pageResult(Collections.emptyList(), total, safePage);
+        if (offset >= total || offset > PageResults.MAX_SQL_OFFSET) {
+            return PageResults.of(Collections.emptyList(), total, safePage);
         }
-        return pageResult(
+        return PageResults.of(
                 fetchFiltered(yearPattern, seasonKey, statusKey, tagIds, sort,
                         PageRequest.of(safePage - 1, safeLimit)),
                 total, safePage);
@@ -910,7 +901,7 @@ public class AnimeService {
 
         TagGroupIds groups = resolveGroups(query);
         if (groups.anyUnresolved()) {
-            return pageResult(Collections.emptyList(), 0, safePage);
+            return PageResults.of(Collections.emptyList(), 0, safePage);
         }
         if (groups.noneSelected()) {
             return getFilteredPage(query.year(), query.season(), query.status(), null, sort, page, limit);
@@ -929,10 +920,10 @@ public class AnimeService {
         int total = (int) Math.min(matched, Integer.MAX_VALUE);
 
         long offset = (long) (safePage - 1) * safeLimit;
-        if (offset >= total || offset > MAX_SQL_OFFSET) {
-            return pageResult(Collections.emptyList(), total, safePage);
+        if (offset >= total || offset > PageResults.MAX_SQL_OFFSET) {
+            return PageResults.of(Collections.emptyList(), total, safePage);
         }
-        return pageResult(
+        return PageResults.of(
                 fetchFilteredByTagGroups(yearPattern, seasonKey, statusKey,
                         groups.genre(), groups.medium(), groups.source(), groups.region(), sort,
                         PageRequest.of(safePage - 1, safeLimit)),
@@ -1417,28 +1408,6 @@ public class AnimeService {
             ep.setTitle(dto.getNameCn());
         }
         return ep;
-    }
-
-    /**
-     * 组装 {@code {list, total, page}} —— 给**已经在 SQL 里切好页**的那几条读路径用.
-     *
-     * <p>与 {@link #buildSearchResult} 的区别就一件事: 它不切片. 那边手上的列表是
-     * 全部匹配行, 切片是它的一部分职责; 这边手上只有一页, 切片已经由库做完,
-     * 越界也已经在调用处拦掉(见 {@link #MAX_SQL_OFFSET}). 留着两个方法而不是让一个
-     * 方法"看情况切", 是为了让"这一页还需要切吗"这件事在调用处就看得见.
-     *
-     * @param total 上报的匹配总数, 来自与取页**同一份 WHERE** 的 count 查询 ——
-     *              这正是仓储那边不用 {@code Page<Anime>}(会有第二条自动拼出来的
-     *              count)而坚持让 service 配对调用的原因.
-     */
-    private static Map<String, Object> pageResult(List<Anime> list, int total, int page) {
-        Map<String, Object> data = new HashMap<>();
-        data.put("list", list);
-        // 上报值不得小于手上真实有的行数: count 与取页是两次查询, 期间有写入的话
-        // 这一页可能比 count 报的还长. 报小的会让用户看不到自己已经看到的那些行.
-        data.put("total", Math.max(total, list.size()));
-        data.put("page", page);
-        return data;
     }
 
     /**

@@ -9,14 +9,22 @@ import com.animetracker.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Pageable;
 
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -186,5 +194,163 @@ class AdminServiceTest {
         adminService.setUserRole(actor, 2L, "USER");
 
         assertThat(target.getRole()).isEqualTo("USER");
+    }
+
+    // ========== 用户列表: 参数白名单与夹取 ==========
+    //
+    // 这一组不起库, 只问"发给仓储的**条件**是什么". 之所以要单独钉一遍: 读路径对
+    // 垃圾值走**默认**而不是 400, 所以"认不出来"和"认成了另一个值"在 HTTP 层
+    // 完全同形 —— 接口两份都回 200, 只是结果集不一样. 只有在这一层才分得出来.
+
+    /** 默认桩: 计数给个非零值, 否则取页那一段会因为"越界"而根本不执行 */
+    private void stubUserPage(long matched) {
+        when(userRepository.countUsers(any(), any(), any(), any(), any())).thenReturn(matched);
+        when(userRepository.findUserPageByCreatedDesc(
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(userRepository.findUserPageByCreatedAsc(
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(userRepository.findUserPageByUsernameAsc(
+                any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(userRepository.findUserPageByUsernameDesc(
+                any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+    }
+
+    @Test
+    @DisplayName("认不出来的 role / status 当作「不筛」, 而不是把那个字符串发给数据库")
+    void unknownRoleAndStatusBecomeNoFilter() {
+        stubUserPage(1);
+
+        adminService.getUserPage(null, "SUPER", "BOGUS", null, null, 1, 20);
+
+        // 原样下发的话 `WHERE u.role = 'SUPER'` 会匹配到零行 —— 界面上是"这个站
+        // 没有用户", 而接口 200, 没有任何东西报错
+        verify(userRepository).countUsers(isNull(), isNull(), isNull(), isNull(), any());
+    }
+
+    @Test
+    @DisplayName("status=LOCKED 落在锁定条件上, 且**不同时**筛 status")
+    void lockedIsAPseudoValueOnTheOtherColumn() {
+        stubUserPage(1);
+
+        adminService.getUserPage(null, null, "LOCKED", null, null, 1, 20);
+
+        // 叠加的话就成了"已锁定的活跃账号"; 列表空着的时候没人分得清是"没有锁定的
+        // 账号"还是"条件写拧了" —— 这是拍板时接受的那个取舍的落点
+        verify(userRepository).countUsers(isNull(), isNull(), isNull(), eq(Boolean.TRUE), any());
+    }
+
+    @Test
+    @DisplayName("空白关键词等于不筛 —— 空串会拼出 '%%'(匹配全部), 不是 '没有关键词'")
+    void blankKeywordMeansNoFilter() {
+        stubUserPage(1);
+
+        for (String blank : new String[]{null, "", "   ", "\t"}) {
+            adminService.getUserPage(blank, null, null, null, null, 1, 20);
+        }
+
+        verify(userRepository, times(4)).countUsers(isNull(), isNull(), isNull(), isNull(), any());
+    }
+
+    @Test
+    @DisplayName("关键词前后的空格不进模式串")
+    void keywordIsTrimmedBeforeBecomingAPattern() {
+        stubUserPage(1);
+
+        adminService.getUserPage("  bob  ", null, null, null, null, 1, 20);
+
+        ArgumentCaptor<String> pattern = ArgumentCaptor.forClass(String.class);
+        verify(userRepository).countUsers(pattern.capture(), isNull(), isNull(), isNull(), any());
+        assertThat(pattern.getValue()).isEqualTo("%bob%");
+    }
+
+    @Test
+    @DisplayName("页码小于 1 当作第 1 页; 每页条数小于 1 回到默认而不是 1 条")
+    void pageAndLimitAreClamped() {
+        stubUserPage(500);
+
+        adminService.getUserPage(null, null, null, null, null, 0, 0);
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(userRepository).findUserPageByCreatedDesc(
+                any(), any(), any(), any(), any(), any(), pageable.capture());
+        assertThat(pageable.getValue().getPageNumber()).isZero();
+        // 1 条/页既没有用, 又和"分页坏了"长得一模一样
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("每页条数超过上限时夹到 100")
+    void limitIsCappedAtTheMaximum() {
+        stubUserPage(500);
+
+        adminService.getUserPage(null, null, null, null, null, 1, 100000);
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(userRepository).findUserPageByCreatedDesc(
+                any(), any(), any(), any(), any(), any(), pageable.capture());
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("排序: 默认注册时间倒序; username 不带 order 时是正序, 带 desc 才倒序")
+    void sortAndOrderPickTheRightQuery() {
+        stubUserPage(500);
+
+        adminService.getUserPage(null, null, null, null, null, 1, 20);
+        verify(userRepository).findUserPageByCreatedDesc(
+                any(), any(), any(), any(), any(), any(), any());
+
+        // 这一条是前后端那条约定的落点: 前端把 `sort=username&order=asc` 当作默认组合、
+        // **不写进 URL**, 所以分享出去的链接就是光秃秃的 `?sort=username`.
+        // 若这里按"不是 asc 就是 desc"处理, 那条链接会翻成倒序, 而界面上写着正序
+        adminService.getUserPage(null, null, null, "username", null, 1, 20);
+        verify(userRepository).findUserPageByUsernameAsc(
+                any(), any(), any(), any(), any(), any());
+
+        adminService.getUserPage(null, null, null, "username", "desc", 1, 20);
+        verify(userRepository).findUserPageByUsernameDesc(
+                any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("认不出来的 sort 落回注册时间倒序, 不抛异常")
+    void unknownSortFallsBackToTheDefault() {
+        stubUserPage(500);
+
+        adminService.getUserPage(null, null, null, "bogus", "asc", 1, 20);
+
+        verify(userRepository).findUserPageByCreatedAsc(
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("越界页: 报真实的 total, 一行都不取")
+    void outOfRangePageStillReportsTheRealTotal() {
+        stubUserPage(30);
+
+        Map<String, Object> result = adminService.getUserPage(null, null, null, null, null, 5, 20);
+
+        // total 报 0 是错的口径: 前端按 ceil(total/limit) 算出来的翻页控件会凭空
+        // 少几页, 用户从最后一页往回点就回不去了
+        assertThat(result.get("total")).isEqualTo(30);
+        assertThat((List<?>) result.get("list")).isEmpty();
+        verify(userRepository, never()).findUserPageByCreatedDesc(
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("getUserList 走的是同一条查询的无筛选 + 不分页版本")
+    void getUserListAsksForEverything() {
+        stubUserPage(3);
+
+        adminService.getUserList();
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(userRepository).findUserPageByCreatedDesc(
+                isNull(), isNull(), isNull(), isNull(), any(LocalDateTime.class),
+                any(LocalDateTime.class), pageable.capture());
+        // 助手侧的 list_users 与周报的构成统计要的是**全量**: 指到分页那条上,
+        // 周报的 byRole / byStatus 会静默变成"前 20 个人的构成"
+        assertThat(pageable.getValue().isUnpaged()).isTrue();
     }
 }

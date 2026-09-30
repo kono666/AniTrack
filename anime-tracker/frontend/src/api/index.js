@@ -124,7 +124,25 @@ export const getMyReview = (subjectId) =>
 
 // ========== 管理员 ==========
 export const getDashboard = () => api.get('/admin/dashboard')
-export const getAdminUsers = () => api.get('/admin/users')
+
+/**
+ * 用户列表可选的每页条数. 后端 limit 的上限是 100(AdminController 的 @Max), 20 是本页默认.
+ *
+ * 导出它是为了让算「共几页」的地方用的是**同一个数** —— 请求里发 limit=50 而分页控件
+ * 按 20 算, 两边对 totalPages 各说各话, 用户点到"最后一页"会发现是空的.
+ * 与 SEARCH_PAGE_SIZE 是同一条理由.
+ */
+export const ADMIN_USER_PAGE_SIZES = [20, 50, 100]
+export const ADMIN_USER_PAGE_SIZE = ADMIN_USER_PAGE_SIZES[0]
+
+/**
+ * 用户列表.
+ *
+ * 参数全部可选; 值为 undefined 的键会被 axios 从 query 里丢掉(不是发成空串) ——
+ * 这正是我们要的: 后端对 `keyword=` 与"没有这个参数"的处理虽然等价, 但地址栏和
+ * 服务端日志里少一堆空参数总是更好读.
+ */
+export const getAdminUsers = (params) => api.get('/admin/users', { params })
 export const toggleUserStatus = (targetUserId) =>
   api.put(`/admin/users/${targetUserId}/toggle`)
 export const unlockUser = (targetUserId) =>

@@ -11,6 +11,11 @@ vi.mock('../../../api', () => ({
   setUserRole: vi.fn(),
   unlockUser: vi.fn(),
   adminDeleteReview: vi.fn(),
+  // 常量也要给: 这是**整体替换**而不是部分替换, 漏掉的导出在导入侧是 undefined,
+  // 而 `ref(undefined)` 不会报错 —— 它会安静地把 limit 变成"没有每页条数",
+  // 直到某个断言因为别的原因为红才被发现. (AdminController 那边 @Max(100) 同理.)
+  ADMIN_USER_PAGE_SIZES: [20, 50, 100],
+  ADMIN_USER_PAGE_SIZE: 20,
 }))
 
 import Dashboard from '../Dashboard.vue'
@@ -39,10 +44,22 @@ const router = createRouter({
   ],
 })
 
+/**
+ * 用户列表的成功响应是**分页信封**, 不是裸数组.
+ *
+ * ⚠️ 这里若继续用裸数组, `users.value` 会变成一个对象 —— 于是 `users.length` 是
+ * undefined、「暂无用户」那条断言会因为**错误的原因**变绿, 而真正的形状错误
+ * (信封套错一层)要到线上没人点的时候才发现.
+ */
+const ADMIN_USER_OK = { data: { code: 200, data: { list: [], total: 0, page: 1 } } }
+
 const PAGES = [
-  { name: '仪表盘', component: Dashboard, api: () => getDashboard, empty: null },
-  { name: '用户管理', component: Users, api: () => getAdminUsers, empty: '暂无用户' },
-  { name: '评论管理', component: Reviews, api: () => getAdminReviews, empty: '暂无评论' },
+  { name: '仪表盘', component: Dashboard, api: () => getDashboard, empty: null,
+    ok: { data: { code: 200, data: [] } } },
+  { name: '用户管理', component: Users, api: () => getAdminUsers, empty: '暂无用户',
+    ok: ADMIN_USER_OK },
+  { name: '评论管理', component: Reviews, api: () => getAdminReviews, empty: '暂无评论',
+    ok: { data: { code: 200, data: [] } } },
 ]
 
 function mountPage(component) {
@@ -57,7 +74,7 @@ describe('管理端三页的加载失败', () => {
     setActivePinia(createPinia())
     const store = useUserStore()
     store.setUser(ADMIN)
-    for (const page of PAGES) page.api().mockResolvedValue({ data: { code: 200, data: [] } })
+    for (const page of PAGES) page.api().mockResolvedValue(page.ok)
     await router.push('/admin/users')
     await router.isReady()
   })
@@ -95,7 +112,7 @@ describe('管理端三页的加载失败', () => {
         const retry = wrapper.findAll('button').find(b => b.text() === '重试')
         expect(retry).toBeTruthy()
 
-        page.api().mockResolvedValue({ data: { code: 200, data: [] } })
+        page.api().mockResolvedValue(page.ok)
         await retry.trigger('click')
         await flushPromises()
 

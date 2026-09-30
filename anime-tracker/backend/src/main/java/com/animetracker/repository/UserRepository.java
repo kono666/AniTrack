@@ -1,6 +1,7 @@
 package com.animetracker.repository;
 
 import com.animetracker.entity.User;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -15,9 +16,65 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUsername(String username);
     boolean existsByUsername(String username);
     boolean existsByEmail(String email);
-    List<User> findByOrderByCreatedAtDesc();
     long countByRole(String role);
     long countByStatus(String status);
+
+    // ==================== 管理端用户列表(筛选 + 排序 + 分页) ====================
+    //
+    // 四条取页 + 一条计数, 语句全在 UserQueries 里. 三点与 AnimeRepository 一致:
+    //
+    //  · **返回 List<User> 而不是 Page<User>**: Page 会顺着方法名再发一条 count,
+    //    而这里要的 count 必须由同一份 WHERE 拼出来, 否则"这一页是谁"与"一共多少条"
+    //    来自两套各自演化的条件. 所以取页与计数是两条显式的方法, service 配对调用.
+    //  · **Pageable 一律不带 Sort**: 排序字面写在 JPQL 里, 再带一个 Sort 会被拼成
+    //    第二段 ORDER BY.
+    //  · **传 Pageable.unpaged() 就是"全部"**(AdminService.getUserList 走的那条),
+    //    显式 ORDER BY 仍然生效 —— ReviewRepository.findAllWithUser 已经验过这一点.
+    //
+    // createdAt 那两条多一个 :epoch, 只为让 ORDER BY 里不出现 NULL(见
+    // UserQueries.ORDER_CREATED_DESC); 计数那条不需要排序, 所以没有它.
+
+    @Query(UserQueries.PAGE_CREATED_DESC)
+    List<User> findUserPageByCreatedDesc(@Param("keywordPattern") String keywordPattern,
+                                         @Param("role") String role,
+                                         @Param("status") String status,
+                                         @Param("locked") Boolean locked,
+                                         @Param("now") LocalDateTime now,
+                                         @Param("epoch") LocalDateTime epoch,
+                                         Pageable pageable);
+
+    @Query(UserQueries.PAGE_CREATED_ASC)
+    List<User> findUserPageByCreatedAsc(@Param("keywordPattern") String keywordPattern,
+                                        @Param("role") String role,
+                                        @Param("status") String status,
+                                        @Param("locked") Boolean locked,
+                                        @Param("now") LocalDateTime now,
+                                        @Param("epoch") LocalDateTime epoch,
+                                        Pageable pageable);
+
+    /** 用户名两条不需要 :epoch —— username 是 NOT NULL, 排序里本来就没有 NULL */
+    @Query(UserQueries.PAGE_USERNAME_ASC)
+    List<User> findUserPageByUsernameAsc(@Param("keywordPattern") String keywordPattern,
+                                         @Param("role") String role,
+                                         @Param("status") String status,
+                                         @Param("locked") Boolean locked,
+                                         @Param("now") LocalDateTime now,
+                                         Pageable pageable);
+
+    @Query(UserQueries.PAGE_USERNAME_DESC)
+    List<User> findUserPageByUsernameDesc(@Param("keywordPattern") String keywordPattern,
+                                          @Param("role") String role,
+                                          @Param("status") String status,
+                                          @Param("locked") Boolean locked,
+                                          @Param("now") LocalDateTime now,
+                                          Pageable pageable);
+
+    @Query(UserQueries.COUNT_USERS)
+    long countUsers(@Param("keywordPattern") String keywordPattern,
+                    @Param("role") String role,
+                    @Param("status") String status,
+                    @Param("locked") Boolean locked,
+                    @Param("now") LocalDateTime now);
 
     /**
      * 失败计数 +1, 自增在**数据库里**做.

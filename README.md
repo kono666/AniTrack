@@ -381,8 +381,8 @@ docker compose start nginx backend
 
 | job | 跑什么 | 它能回答的问题 |
 | --- | --- | --- |
-| `backend` | JDK 17 + `mvn -B test`（540 个用例） | 代码逻辑还对吗？ |
-| `frontend` | `npm ci` + `npm test`（296 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
+| `backend` | JDK 17 + `mvn -B test`（578 个用例） | 代码逻辑还对吗？ |
+| `frontend` | `npm ci` + `npm test`（347 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
 | `image` | 构建后端与前端镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
 
 第三个 job 是有意加的。Dockerfile 和 `docker-compose.yml` 在写完的那一刻处于「看起来对」的状态——开发机上没有 Docker，谁也没法执行一次；而部署配置最大的特点就是「写错了不会报错，只会在别人机器上炸」。所以 CI 里用真实 PostgreSQL 把它整个跑起来。
@@ -442,11 +442,11 @@ docker compose start nginx backend
 ## 测试
 
 ```bash
-# 后端：单元测试 + 集成测试（540 个，70 个测试类）
+# 后端：单元测试 + 集成测试（578 个，71 个测试类）
 cd anime-tracker/backend
 mvn test
 
-# 前端：组件与接口层测试（296 个，34 个文件）
+# 前端：组件与接口层测试（347 个，40 个文件）
 cd anime-tracker/frontend
 npm test
 

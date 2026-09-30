@@ -124,6 +124,64 @@
 .admin-table tr:last-child td { border-bottom:none; }
 .admin-table tr:hover td { background:var(--card-hover); }
 
+/* ── 工具栏 ──
+   关键词 + 两个下拉 + 每页条数, 一行放不下就换行. flex-wrap 让窄屏自然堆叠,
+   不用为断点写第二套规则. */
+.admin-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.admin-toolbar-spacer { flex: 1; }
+
+/* 控件外观统一在这里, 页面上只用语义类名 —— 三个下拉 + 搜索框若各写一遍
+   padding/border, 迟早出现"这个框比那个矮 2px". */
+.admin-input,
+.admin-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+.admin-input:focus,
+.admin-select:focus { outline: none; border-color: var(--primary-line); }
+/* 搜索框独占一行时(窄屏)铺满, 桌面端 240px 够放十几个字 */
+.admin-search { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+
+/* 结果计数与「清除筛选」. 计数用次要色: 它是旁注, 不是这一页的主体 */
+.admin-result-count { font-size: 13px; color: var(--text-secondary); }
+
+/**
+ * 可排序表头.
+ *
+ * 用 <button> 而不是给 <th> 挂 @click: 键盘用户要能用, 而 th 不是可聚焦元素.
+ * 按钮只占内容宽度(不是整格), 所以点击热区比看上去小 —— 这是为了不把
+ * 悬停高亮铺满整格而盖掉行悬停的反馈. 图标与文字同色, 靠 opacity 表示
+ * "这一列没在排".
+ */
+.admin-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.admin-sort-btn:hover { color: var(--text); }
+/* 未选中的列给一个很淡的图标, 表示"这里可以点" */
+.admin-sort-btn .sort-icon { opacity: .3; }
+.admin-sort-btn.is-active { color: var(--primary); }
+.admin-sort-btn.is-active .sort-icon { opacity: 1; }
+
 /* ── 响应式: 窄屏侧栏变抽屉 ──
    照抄 assistant.css 里已经验过的那套(.chat-sidebar: fixed + translateX(-100%)
    + .open). 两处不同:

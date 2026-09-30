@@ -1,5 +1,6 @@
 package com.animetracker.service;
 
+import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.User;
 import com.animetracker.repository.AnimeRepository;
@@ -24,12 +25,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,6 +124,9 @@ class QueryCountIntegrationTest {
     /** 排行榜那条路带 @Cacheable, 而"读了几行"的断言不能被上一次调用的缓存命中搅乱 */
     @Autowired
     private CacheManager cacheManager;
+    /** 助手侧那些工具: 它们读的是**全量**口径, 而分页那几条接口是另一个口径 */
+    @Autowired
+    private ToolRegistry toolRegistry;
 
     private User user;
 
@@ -894,5 +900,207 @@ class QueryCountIntegrationTest {
         assertThat(result.get("total"))
                 .as("越界页也要报真实总数, 否则前端的翻页控件会凭空少几页")
                 .isEqualTo(3);
+    }
+
+    // ========== 管理端用户列表 ==========
+    //
+    // 用户表这一条路以前根本没有分页: 接口一次把**全部**用户吐给前端, 而且这条
+    // 路径上没有任何断言盯着"发了几条语句". 下面几条盯的是同一件事的三面:
+    // 语句条数与页大小无关、切片是库做的、以及越界页只该发一条.
+
+    /**
+     * 灌 n 个用户.
+     *
+     * <p>用户名带随机后缀: {@code username} 上有唯一索引, 而别的用例也在往这张表里灌.
+     * 前缀固定成 {@code pg} 是为了后面能用关键词把它从表里其它用户中**择出来** ——
+     * 别的用例用的都是十六进制 UUID 片段(不含 p / g), 所以 {@code keyword=pg}
+     * 命中的恰好是本方法灌的这几行.
+     *
+     * <p>{@code created_at} 显式给成递增的时刻: 默认排序按它倒序, 全 NULL 的话
+     * "第几页是哪几条"就成了运气, 而下面要断言的正是切页切对了没有.
+     */
+    private void seedUsersForPaging(int n) {
+        // 先清掉上一个用例灌的那些. 这一类是共享一个 Spring 上下文(因而共享一个库)的,
+        // 而**每个**用例都靠 `pg` 前缀把自己那几行择出来 —— 不清的话, 前面那个参数化
+        // 用例灌的 23 行还在, 于是"共 5 个用户"变成"共 30 个", 断言红得毫无道理.
+        // 这几行没有任何外键指向它们(追番/评论都是由别的用例的用户建的), 删得掉.
+        jdbc.execute("DELETE FROM \"user\" WHERE username LIKE 'pg%'");
+        long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
+        List<Object[]> args = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            args.add(new Object[]{
+                    "pg" + UUID.randomUUID().toString().substring(0, 10),
+                    "x", "USER", "ACTIVE", new java.sql.Timestamp(base + i * 60_000L)});
+        }
+        jdbc.batchUpdate("INSERT INTO \"user\" (username, password, role, status, created_at) "
+                + "VALUES (?, ?, ?, ?, ?)", args);
+    }
+
+    /** 用户表总行数 —— 这张表在本类里**没有**被清过, 所以总数必须现数, 不能写死 */
+    private int userRowCount() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM \"user\"", Integer.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Long> userIdsOf(Map<String, Object> page) {
+        return ((List<Map<String, Object>>) page.get("list")).stream()
+                .map(m -> ((Number) m.get("id")).longValue()).toList();
+    }
+
+    @ParameterizedTest(name = "每页 {0} 条")
+    @ValueSource(ints = {5, 20})
+    @DisplayName("用户分页: 不论页大小都是 2 条语句(一条 count, 一条取页)")
+    void userPageCostsTwoQueriesRegardlessOfPageSize(int limit) {
+        seedUsersForPaging(limit + 3);
+
+        long statements = statementsFor(
+                () -> adminService.getUserPage(null, null, null, null, null, 1, limit));
+
+        // 多出来说明有谁在循环里补了查询(比如给每一行单独查一次锁定状态);
+        // 少一条则是 total 拿这一页的行数糊出来的 —— 那样第 2 页之后就没有了,
+        // 而接口照样 200
+        assertThat(statements).as("每页 %d 条", limit).isEqualTo(2);
+    }
+
+    /**
+     * 第 2 页与第 1 页不重叠, 且真的按注册时间倒序.
+     *
+     * <p>语句条数分辨不出「切在数据库上」与「全读回来再在内存里切」(都是 2 条),
+     * 只有"拿回来的是哪几条"能. 顺带钉住 {@code PageRequest.of(page - 1, ...)} 那个
+     * {@code -1}: 少了它第 1 页会从第 limit+1 行开始, 于是两页之间正好漏掉第一页,
+     * 而两页各自看都"有数据".
+     */
+    @Test
+    @DisplayName("用户分页: 第 2 页与第 1 页不重叠, 两页拼起来一条不漏")
+    void userPagesDoNotOverlap() {
+        seedUsersForPaging(5); // created_at 递增, 所以倒序时最后灌的排最前
+
+        List<Long> first = userIdsOf(
+                adminService.getUserPage("pg", null, null, null, null, 1, 3));
+        List<Long> second = userIdsOf(
+                adminService.getUserPage("pg", null, null, null, null, 2, 3));
+
+        assertThat(first).hasSize(3);
+        assertThat(second).hasSize(2);
+        assertThat(first).doesNotContainAnyElementsOf(second);
+        assertThat(first).isSortedAccordingTo(Comparator.reverseOrder());
+        assertThat(Stream.concat(first.stream(), second.stream()))
+                .hasSize(5).doesNotHaveDuplicates();
+    }
+
+    /**
+     * 生成的 SQL: 排序里显式处理 NULL, 切片在库里做.
+     *
+     * <p><b>为什么必须看 SQL 文本.</b> {@code ORDER BY CASE WHEN created_at IS NULL …}
+     * 在 H2 上<b>测不出来</b> —— H2 本来就把 NULL 排最后, 换成裸的
+     * {@code ORDER BY created_at DESC} 结果一模一样, 上面那条顺序断言照样绿.
+     * 真正有差别的是 PostgreSQL(DESC 下它把 NULL 当最大值排最前), 而线上 PG 不在
+     * 本轮的验证范围内. 所以这条形状断言是那个坑**唯一**的哨兵, 与
+     * {@link #untaggedFilterSqlIsPushedDown} 是同一条理由.
+     */
+    @Test
+    @DisplayName("用户分页的 SQL: CASE 分组 + COALESCE, 且行数限制在库里")
+    void userPageSqlIsPushedDownWithNullSafeOrdering() {
+        seedUsersForPaging(3);
+
+        adminService.getUserPage(null, null, null, null, null, 1, 2);
+        String sql = lastSqlNormalized();
+
+        assertThat(sql).containsIgnoringCase("case when")
+                .as("缺时间的行要显式分组, 否则 NULL 排哪随库变, 第 2 页就会混进第 1 页的行")
+                .containsIgnoringCase("coalesce")
+                .as("分页必须是库做的, 不是读回来再切")
+                .containsIgnoringCase("fetch first")
+                .as("记下来的该是取页那条, 不是先跑的 count")
+                .containsIgnoringCase("order by");
+    }
+
+    /**
+     * 越界页只发 count 一条, 但报出来的 total 仍然是真实的用户总数.
+     *
+     * <p>两条路都很容易写错而看不出来: 把 total 报成 0 的话, 前端按
+     * {@code ceil(total/limit)} 算出来的翻页控件会凭空少几页, 用户从最后一页往回点
+     * 就回不去了; 而少了那道守卫, 一个 {@code page=9999} 会真的带着巨大的 OFFSET
+     * 发给数据库.
+     */
+    @Test
+    @DisplayName("用户分页: 越界页只发 count 一条, total 仍是全表用户数")
+    void outOfRangeUserPageOnlyRunsTheCount() {
+        seedUsersForPaging(3);
+        int all = userRowCount();
+        AtomicReference<Map<String, Object>> holder = new AtomicReference<>();
+
+        long statements = statementsFor(() -> holder.set(
+                adminService.getUserPage(null, null, null, null, null, 9999, 20)));
+
+        assertThat((List<?>) holder.get().get("list")).isEmpty();
+        assertThat(holder.get().get("total")).isEqualTo(all);
+        assertThat(statements).as("取页那一条根本不该发出去").isEqualTo(1);
+    }
+
+    /**
+     * 计数与取页用的是**同一份** WHERE —— 关键词给上时 total 必须跟着变.
+     *
+     * <p>计数那条若忘了带关键词条件, 结果是"共 N 个用户"而列表里只有几个: N 是
+     * 全表行数, 前端于是算出几十页, 翻过去每一页都是空的.
+     */
+    @Test
+    @DisplayName("用户分页: 关键词同时作用于 total 与列表")
+    void keywordNarrowsBothTheCountAndTheRows() {
+        seedUsersForPaging(4);
+
+        Map<String, Object> matched =
+                adminService.getUserPage("pg", null, null, null, null, 1, 20);
+        Map<String, Object> half =
+                adminService.getUserPage("pg", null, null, null, null, 1, 2);
+
+        assertThat(matched.get("total")).isEqualTo(4);
+        assertThat((List<?>) matched.get("list")).hasSize(4);
+        // 翻页不该改变 total —— 它答的是"匹配多少条", 不是"这一页有几行"
+        assertThat(half.get("total")).isEqualTo(4);
+        assertThat((List<?>) half.get("list")).hasSize(2);
+    }
+
+    /**
+     * 助手侧的两个管理员工具看的是**全量**用户, 不是分页后的前 30 个.
+     *
+     * <p><b>为什么这条要单独钉.</b> {@code getUserList()} 与 {@code getUserPage(..)}
+     * 并存, 唯一的理由是前者的调用方({@code AdminTools} 的 {@code list_users} 与
+     * {@code weekly_ops_report})要的是全量语义. 看着很像"两个入口没合并干净" ——
+     * 下一个人顺手把 {@code AdminTools} 指到分页那条上, 编译通过、接口 200、
+     * 界面上一个字都不变, 只是助手开始告诉管理员「平台一共有 30 个用户」,
+     * 以及把周报的 byRole 统计变成"最新 30 个人的构成". 这两句话错得没有任何痕迹.
+     *
+     * <p>所以断言的是"报出去的总数与表里的真实行数一致", 而不是某个具体数字:
+     * 本类里用户表从来没被清空过(每个用例只清自己灌的那批), 总数必须现数.
+     */
+    @Test
+    @DisplayName("助手侧 list_users / 周报看到的是全体用户, 不是被截断的那 30 个")
+    void agentAdminToolsSeeEveryUser() throws Exception {
+        seedUsersForPaging(35);
+        // 管理员自己也是一行, 所以**先**把他存进去再数总数 —— 顺序反过来会让
+        // 期望值比实际少 1, 而"少 1"看起来像某种正常的截断, 很容易被当成对的
+        User admin = userRepository.save(User.builder()
+                .username("ad" + UUID.randomUUID().toString().substring(0, 8))
+                .password("x")
+                .role("ADMIN")
+                .status("ACTIVE")
+                .build());
+        int all = userRowCount();
+        assertThat(all).as("这条用例要有超过 30 个用户才分得出全量与截断").isGreaterThan(30);
+
+        Map<?, ?> listed = (Map<?, ?>) toolRegistry.find("list_users")
+                .getExecutor().execute(null, admin);
+        Map<?, ?> breakdown = (Map<?, ?>) ((Map<?, ?>) toolRegistry.find("weekly_ops_report")
+                .getExecutor().execute(null, admin)).get("userBreakdown");
+
+        // 明细是截过的(工具说明里就写着"只返回最近 30 条"), 但**总数**不能跟着被截
+        assertThat(listed.get("total")).isEqualTo(all);
+        assertThat((List<?>) listed.get("list")).hasSizeLessThan(all);
+        assertThat(breakdown.get("total")).isEqualTo(all);
+
+        int byRoleSum = ((Map<?, ?>) breakdown.get("byRole")).values().stream()
+                .mapToInt(v -> ((Number) v).intValue()).sum();
+        assertThat(byRoleSum).as("构成统计要覆盖全体, 否则它只是'前 30 个人的构成'").isEqualTo(all);
     }
 }
