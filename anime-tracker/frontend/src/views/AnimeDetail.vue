@@ -191,7 +191,7 @@
                 <!-- 一个赞都没有时不摆「谁赞了」: 点开来是空的, 那是一句"这里有东西"
                      的谎话. 计数偏了(行数比计数少)时会有名字为空的情况, 那种空态由
                      下面那块自己兜 -->
-                <button v-if="(r.likeCount || 0) > 0" class="rv-act rv-act-quiet"
+                <button v-if="(r.likeCount || 0) > 0" class="rv-act rv-act-quiet rv-act-likers"
                   @click="toggleLikers(r)">
                   {{ likerBox[r.id]?.open ? '收起' : '谁赞了' }}
                 </button>
@@ -199,13 +199,51 @@
                      拆成两个按钮的话, 一条还没有回复的评论下会并排出现「0 条回复」和
                      「回复」, 而它们其实是同一个动作.
                      计数为 0 时不显示 "0", 只留图标: 满屏的 "0" 是噪音.
-                     注意它**不能**带 rv-act-quiet —— 那个类是「谁赞了」在测试里的抓手. -->
+                     这一排三个按钮各有一个**自己的**类(rv-act-likers / rv-act-reply /
+                     rv-act-report)当抓手. 别让测试去认 rv-act-quiet 那种样式类 ——
+                     举报按钮加上它之后, 「一个赞都没有时不摆「谁赞了」」那条用例当场变红,
+                     而它想说的其实是"谁赞了不见了", 不是"所有安静的按钮都不见了". -->
                 <button class="rv-act rv-act-reply" :class="{ open: replyBox[r.id]?.open }"
                   @click="toggleReplies(r)">
                   <PhArrowBendUpLeft :size="14" />
                   <span v-if="r.replyCount > 0">{{ r.replyCount }}</span>
                 </button>
+                <!-- 举报. 未登录也照渲染, 点了去登录页(与点赞同一套做法) —— 藏起来的话
+                     访客不知道这站能举报. 举报过的按钮点亮(旗子变实心), 再点只是重开
+                     面板 —— 服务端对"同一人对同一条评论"是幂等的, 那一下会回
+                     「你已经举报过这条评论」, 前端不自己猜一个状态出来. -->
+                <button class="rv-act rv-act-quiet rv-act-report"
+                  :class="{ on: reportBox[r.id]?.done }" @click="toggleReport(r)">
+                  <PhFlag :size="14" :weight="reportBox[r.id]?.done ? 'fill' : 'regular'" />
+                  <span>举报</span>
+                </button>
               </div>
+
+              <!-- 举报面板. 与回复区一样**就地展开**, 不造弹层(仓库里没有 Modal 组件).
+                   四个理由用单选框而不是下拉: 选项少, 摆开来比点两层快, 也把"有哪些
+                   理由"直接告诉了用户. radio 的 name 必须**逐条评论各不相同**, 否则
+                   给这条选了理由, 另一条已展开的会被一起清掉. -->
+              <div v-if="reportBox[r.id]?.open" class="rv-report">
+                <div class="rv-report-title">举报这条评论</div>
+                <label v-for="opt in REVIEW_REPORT_REASONS" :key="opt.value" class="rv-report-opt">
+                  <input type="radio" :name="'report-reason-' + r.id" :value="opt.value"
+                    v-model="reportBox[r.id].reason" />
+                  <span>{{ opt.label }}</span>
+                </label>
+                <textarea v-model="reportBox[r.id].detail" rows="2" maxlength="500"
+                  class="rv-report-detail" placeholder="补充说明（选填，最多 500 字）"></textarea>
+                <div class="rv-report-btns">
+                  <!-- 两道闸: 模板上的 :disabled 与 submitReport 里那句同步的 if.
+                       与回复那条路同一条理由 —— :disabled 要等下一个 tick 才落地,
+                       同一拍里的第二次点击打在的是还没 disabled 的按钮上. -->
+                  <button class="rv-report-send"
+                    :disabled="!reportBox[r.id].reason || Boolean(reportBox[r.id].busy)"
+                    @click="submitReport(r)">提交举报</button>
+                  <button class="rv-report-cancel" :disabled="Boolean(reportBox[r.id].busy)"
+                    @click="toggleReport(r)">取消</button>
+                </div>
+              </div>
+
               <div v-if="likerBox[r.id]?.open" class="rv-likers">
                 <span v-if="likerBox[r.id].loading" class="rv-likers-hint">加载中…</span>
                 <span v-else-if="!likerBox[r.id].names.length" class="rv-likers-hint">暂无</span>
@@ -329,6 +367,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import PhStar from '@icons/PhStar.vue.mjs'
 import PhHeart from '@icons/PhHeart.vue.mjs'
 import PhArrowBendUpLeft from '@icons/PhArrowBendUpLeft.vue.mjs'
+import PhFlag from '@icons/PhFlag.vue.mjs'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import {
@@ -339,6 +378,7 @@ import {
   likeReview, unlikeReview, getReviewLikers,
   getReplies, addReply, editReply, deleteReply,
   likeReply, unlikeReply, getReplyLikers,
+  reportReview, REVIEW_REPORT_REASONS,
   REVIEW_SORT_CREATED, REVIEW_SORT_HOT
 } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
@@ -430,6 +470,13 @@ const replyBusy = ref({})
 /** 回复的赞: 忙态与「谁赞了」盒子, 与评论那两个同构, 只是键换成了回复 id */
 const replyLikeBusy = ref({})
 const replyLikerBox = ref({})
+
+/* ── 举报 ──
+   每条评论一个盒子: { open, reason, detail, busy, done }. 与上面几组同一个形状(按
+   评论 id 存), 但**换列表时不清** —— 它装的是两样都跟着"这一条评论"走的东西:
+   用户敲了半截的理由与补充说明(草稿), 以及"我已经举报过它了"这个事实. 评论列表
+   重新排一次序, 同一条评论还是同一条, 把这两样丢掉都是错的. */
+const reportBox = ref({})
 
 const watchedEpisodes = ref([])
 const heat = ref(null)
@@ -683,6 +730,54 @@ async function toggleLikers(review){
   if(existing){ existing.open = !existing.open; return }
   likerBox.value[review.id] = { open: true, loading: true, total: 0, names: [] }
   await fetchLikers(review.id)
+}
+
+/* ══════════ 举报 ══════════ */
+
+/**
+ * 展开/收起一条评论的举报面板.
+ *
+ * 未登录**不**放行(与点赞、回复都不同): 点赞和回复的读路径是公开的, 举报不是 ——
+ * 它是写, 而且服务端那条路也刻意没进免登录清单. 所以这里直接送去登录页, 而不是
+ * 让用户填完一整个面板再收一个 401.
+ *
+ * 已经举报过也**照开着**: 那一下服务端会回 duplicate, 界面用一句提示说清楚就行,
+ * 拦在本地反而多一份要维护的状态(它没有真源, 刷新一次就没了).
+ */
+function toggleReport(review){
+  if(!userStore.loggedIn){ router.push('/login'); return }
+  const box = reportBox.value[review.id]
+  if(box){ box.open = !box.open; return }
+  reportBox.value[review.id] = { open: true, reason: '', detail: '', busy: false, done: false }
+}
+
+/**
+ * 提交举报.
+ *
+ * `duplicate` 由**服务端**给, 不在本地猜: 幂等路径下服务端什么都没做, 而它照回
+ * 200 —— 前端分不清"刚记下了"与"本来就在", 只有那个布尔分得清.
+ *
+ * 补充说明留空时传 undefined(axios 会把这个键丢掉), 而不是空串: 后端把空白一律
+ * 存成 null, 传空串只是让一次没写的填写看起来像写了.
+ */
+async function submitReport(review){
+  const box = reportBox.value[review.id]
+  // 与模板上的 :disabled 是两道闸, 理由见那段注释
+  if(!box || box.busy) return
+  if(!box.reason){ toast('请选择举报理由','warning'); return }
+  box.busy = true
+  try{
+    const res = await reportReview(review.id, {
+      reason: box.reason,
+      detail: box.detail.trim() || undefined,
+    })
+    const d = res.data.data || {}
+    box.done = true
+    box.open = false
+    toast(d.duplicate ? '你已经举报过这条评论' : '已收到举报',
+      d.duplicate ? 'info' : 'success')
+  }catch(e){ toast('举报失败','error') }
+  finally{ box.busy = false }
 }
 
 /* ══════════ 回复 ══════════ */
@@ -1002,6 +1097,34 @@ onMounted(load)
   color:var(--text-secondary); font-size:12px;
 }
 .rv-likers-hint{ color:var(--text-muted); font-size:12px; }
+
+/* ── 举报面板 ──
+   与回复区共用同一根竖线作为层级线索(它是这条评论的下一层), 但底色比回复区重一档:
+   回复是内容, 举报是一段要填的表单, 不区分的话满屏都是同一片灰. */
+.rv-report{
+  margin-top:8px; padding:10px 12px; border-radius:10px;
+  background:var(--surface-2, var(--tag-bg)); border:1px solid var(--border);
+  display:flex; flex-direction:column; gap:6px;
+}
+.rv-report-title{ font-size:12px; font-weight:600; color:var(--text-secondary); }
+/* 四行单选框排成一列而不是两列: 中文标签长度不一, 两列会参差 */
+.rv-report-opt{
+  display:flex; align-items:center; gap:6px; font-size:13px;
+  color:var(--text-secondary); cursor:pointer;
+}
+.rv-report-detail{
+  width:100%; box-sizing:border-box; resize:vertical; font:inherit; font-size:13px;
+  padding:6px 8px; border-radius:8px; border:1px solid var(--border);
+  background:var(--surface, transparent); color:var(--text);
+}
+.rv-report-btns{ display:flex; gap:8px; margin-top:2px; }
+.rv-report-send, .rv-report-cancel{
+  padding:5px 14px; border-radius:999px; font-size:13px; font-weight:600;
+  cursor:pointer; border:1px solid var(--border); font-family:inherit;
+}
+.rv-report-send{ background:var(--primary); border-color:var(--primary); color:#fff; }
+.rv-report-cancel{ background:transparent; color:var(--text-secondary); }
+.rv-report-send:disabled, .rv-report-cancel:disabled{ cursor:default; opacity:.55; }
 
 /* ── 回复区 ──
    左边那 4px 的竖线是唯一的层级线索: 回复列表与它上面那条评论共用同一个左边缘,

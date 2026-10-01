@@ -152,8 +152,40 @@ final class ReviewQueries {
     static final String FILTER_RATING_BAND =
             "(:minRating IS NULL OR (r.rating >= :minRating AND r.rating <= :maxRating))";
 
-    /** 两个可选条件的合取. 给值才筛、不给就不筛, 理由同 {@code UserQueries.WHERE} */
-    static final String WHERE_ADMIN = " WHERE " + FILTER_KEYWORD + " AND " + FILTER_RATING_BAND;
+    /**
+     * 只看有待处理举报的评论. {@code reported=true} 时生效, 其它值(包括不给)不筛.
+     *
+     * <p><b>为什么是 {@code EXISTS} 而不是 {@code JOIN review_report ... GROUP BY}。</b>
+     * 后者会让取页那句从「{@code JOIN FETCH r.user} + LIMIT 下推」退化成
+     * 「把整个结果集读进内存再切页」—— 因为 {@code GROUP BY} 之后行数不再与评论一一对应,
+     * Hibernate 就无法把 {@code LIMIT} 交给数据库。那正是这一轮要消灭的毛病本身。
+     * {@code EXISTS} 是半连接: 每行至多贡献一行, 分页照样下推。
+     *
+     * <p><b>为什么写成 {@code :reported = FALSE OR ...} 而不是 {@code :reported IS NULL OR ...}</b>
+     * ——与上面两条不同, 这里也<em>可以</em>写成 {@code IS NULL}, 但本仓已经有一条既定的
+     * 写法: {@code AnimeQueries} 那四个标签开关用的正是 {@code :xxxActive = FALSE OR ...},
+     * 而参数是基本类型 {@code boolean}。那一条在 H2 与 PG 上都跑过, 是现成的先例;
+     * 基本类型也顺带把「参数没传」这个状态从类型上消灭掉(与本类别处用小 record 而不是
+     * 两个可空局部变量是同一个手法)。
+     *
+     * <p>只认 {@code PENDING}: 被忽略掉的举报不该继续把评论留在队列里, 否则「忽略」
+     * 这个动作在界面上的效果是「点了没反应」。
+     *
+     * <p>⚠️ <b>H2 上这个 {@code OR} 不会被折叠掉。</b> 应用发的是**绑定参数**,
+     * H2 无法按参数值把没选中的那一支从计划里摘掉, 于是即使 {@code reported} 是 false,
+     * 那半句仍然在计划里(每行一次 {@code review_report} 的索引探针 —— 走
+     * {@code uk_review_report_review_reporter} 的最左前缀, 一次探针换一行,
+     * 一页几十次)。线上 PG 会按参数值折掉, 没选中的组整个不出现。这是**开发档独有**的
+     * 开销, 与 c78 那次「H2 消不掉 OR」是同一回事, 别拿 H2 的计划去推 PG。
+     */
+    static final String FILTER_REPORTED =
+            "(:reported = FALSE OR EXISTS ("
+                    + " SELECT 1 FROM ReviewReport rr"
+                    + " WHERE rr.review.id = r.id AND rr.status = 'PENDING'))";
+
+    /** 三个可选条件的合取. 给值才筛、不给就不筛, 理由同 {@code UserQueries.WHERE} */
+    static final String WHERE_ADMIN =
+            " WHERE " + FILTER_KEYWORD + " AND " + FILTER_RATING_BAND + " AND " + FILTER_REPORTED;
 
     /**
      * <b>差别二: 六条排序都不需要 {@code CASE WHEN .. IS NULL} 那一段, 一条都不需要。</b>

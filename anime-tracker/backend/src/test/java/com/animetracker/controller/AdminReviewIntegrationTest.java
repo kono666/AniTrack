@@ -92,10 +92,17 @@ class AdminReviewIntegrationTest {
 
     private static final String CACHED_TITLE = "缓存过的那部番";
 
-    /** 管理端一行该有的键. 用"恰好是这些"而不是"包含这些": 多一个键同样是契约变更 */
+    /**
+     * 管理端一行该有的键. 用"恰好是这些"而不是"包含这些": 多一个键同样是契约变更.
+     *
+     * <p>最后三个是 c94 举报补上的. {@code latestReason} 与 {@code latestReportAt}
+     * 在**没有被举报的行上也要在**, 值为 {@code null} —— 与 {@code animeTitle} 同一条
+     * 理由: 少一个键与"这个值恰好为空"在界面上长得一样, 而前端那一格会走 undefined 分支.
+     */
     private static final List<String> ROW_KEYS = List.of(
             "id", "subjectId", "animeTitle", "username", "userId",
-            "rating", "content", "likeCount", "replyCount", "createdAt");
+            "rating", "content", "likeCount", "replyCount", "createdAt",
+            "reportCount", "latestReason", "latestReportAt");
 
     @Autowired
     private MockMvc mockMvc;
@@ -230,6 +237,41 @@ class AdminReviewIntegrationTest {
         return id;
     }
 
+    /**
+     * 灌一条举报, 返回它的 id。
+     *
+     * <p>走 JDBC 而不是接口: 这里要验的是**列表怎么读举报**, 而举报怎么<b>写</b>进去
+     * 由 {@code ReviewReportIntegrationTest} 管。经过接口还会顺手带上"不能举报自己的
+     * 评论"那条规则, 于是种子数据能不能灌成取决于谁是作者 —— 那是另一个被测对象。
+     *
+     * <p>举报人必须<b>逐个指定</b>, 不给默认值: {@code (review_id, reporter_id)} 上有唯一
+     * 约束, "同一条评论攒两条举报"这个场景只有换人才造得出来。给个默认值会让第二次调用
+     * 静默撞约束失败 —— 而这里的写法强迫调用方想一下"这次是谁举报的"。
+     */
+    private long seedReport(long reviewId, long reporterId, String reason, String status) {
+        jdbc.update("INSERT INTO review_report "
+                        + "(review_id, reporter_id, reason, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                reviewId, reporterId, reason, status, Timestamp.valueOf(BASE));
+        Long id = jdbc.queryForObject(
+                "SELECT MAX(id) FROM review_report WHERE review_id = ?", Long.class, reviewId);
+        assertThat(id).as("举报行应当刚灌进去").isNotNull();
+        return id;
+    }
+
+    private long adminId() {
+        return idOf("admin");
+    }
+
+    private long authorIdOf() {
+        return idOf(AUTHOR);
+    }
+
+    private long idOf(String username) {
+        Long id = jdbc.queryForObject("SELECT id FROM \"user\" WHERE username = ?", Long.class, username);
+        assertThat(id).as("账号 <%s> 应当存在", username).isNotNull();
+        return id;
+    }
+
     // ========== 工具 ==========
 
     /** 以管理员身份发一次请求. 参数按 key,value 成对给 */
@@ -281,7 +323,7 @@ class AdminReviewIntegrationTest {
      * (别名没声明的话连 Spring 上下文都建不起来)。下面每条用例都带着参数, 只有这条不带。
      */
     @Test
-    @DisplayName("不带任何参数的默认请求: 200 + {list,total,page} 信封, 行里十个键一个不多一个不少")
+    @DisplayName("不带任何参数的默认请求: 200 + {list,total,page} 信封, 行里十三个键一个不多一个不少")
     void theDefaultRequestIsAWellFormedPage() throws Exception {
         JsonNode data = dataOf();
 
@@ -424,6 +466,124 @@ class AdminReviewIntegrationTest {
         JsonNode matched = dataOf("keyword", MARK + "0", "rating", "low");
         assertThat(totalOf(matched)).isEqualTo(1);
         assertThat(contentsOf(matched)).containsExactly(PERCENT_CONTENT);
+    }
+
+    // ========== 只看被举报的 ==========
+
+    /**
+     * {@code reported=true} 同时收窄 {@code total} 与 {@code list} —— 与关键词、档位
+     * 共用的那一份 WHERE。
+     *
+     * <p>三件事一起断, 少一件这条就不成立:
+     *
+     * <ul>
+     *   <li>不带参数时是<b>全部四条</b> —— 少了它, 一个"永远只返回被举报的"实现照样绿;</li>
+     *   <li>带上之后只剩被举报的那两条, 且 {@code total} 也是 2 —— 计数与取页只作用于
+     *       一边时, 前端按 {@code ceil(total/limit)} 算出来的页数会跟列表对不上;</li>
+     *   <li>{@code reported=false} 与不带参数<b>等价</b> —— 它是"不筛", 不是"只筛没被举报的"。
+     *       这条尤其要紧: 判据是"字面量 true 才算数", 写反成"false 时反过来筛"不会报错,
+     *       只会让管理员点一下"只看被举报"再点回来时, 看到的是另一个集合。</li>
+     * </ul>
+     */
+    @Test
+    @DisplayName("reported=true: 只留下被举报的两条, total 一起收窄; false 与不传等价")
+    void reportedFilterNarrowsBothTheCountAndTheRows() throws Exception {
+        long reported1 = reviewIdOf(MARK + "1");
+        long reported2 = reviewIdOf(MARK + "2");
+        seedReport(reported1, adminId(), "SPAM", "PENDING");
+        seedReport(reported2, authorIdOf(), "ABUSE", "PENDING");
+
+        assertThat(totalOf(dataOf("keyword", MARK)))
+                .as("不带这个参数时是全部四条")
+                .isEqualTo(4);
+
+        JsonNode filtered = dataOf("keyword", MARK, "reported", "true");
+        assertThat(totalOf(filtered)).isEqualTo(2);
+        assertThat(contentsOf(filtered)).containsExactly(MARK + "2", MARK + "1");
+
+        assertThat(totalOf(dataOf("keyword", MARK, "reported", "false")))
+                .as("false 是「不筛」, 不是「只筛没被举报的」")
+                .isEqualTo(4);
+        assertThat(contentsOf(dataOf("keyword", MARK, "reported", "false")))
+                .as("四个内容键一起断, 免得只比了条数")
+                .containsExactlyInAnyOrderElementsOf(contentsOf(dataOf("keyword", MARK, "reported", "1")));
+    }
+
+    /**
+     * 行上的举报摘要: {@code reportCount} 是<b>待处理</b>的条数, {@code latestReason} 是
+     * 其中最新那条的理由 —— 而<b>已忽略的不算</b>。
+     *
+     * <p>"已忽略的不算"是这一整块最容易写漏也最难被发现的地方: 摘要那条查询与筛选那条
+     * EXISTS 是两个独立的地方各写一遍 {@code status = 'PENDING'}(一处
+     * {@code ReviewQueries.FILTER_REPORTED}, 一处 {@code findPendingSummaries}), 只要
+     * 漏掉任何一处, 症状都只是"数字大了一点"。所以下面同时断三样: 条数、最新理由、
+     * 以及"忽略之后这两个数一起变小"。
+     *
+     * <p>{@code latestReason} 取的是<b>最新那条</b>而不是任意一条: 两条举报的理由刻意
+     * 不同(SPAM 先、ABUSE 后), 取错了会拿到 SPAM —— 而"到底拿的哪一条"在界面上
+     * 就是"管理员看到的是哪个理由"。
+     */
+    @Test
+    @DisplayName("行上的举报摘要: 只数待处理的, latestReason 是最新那条的理由")
+    void rowsCarryThePendingReportSummary() throws Exception {
+        long review1 = reviewIdOf(MARK + "1");
+        long review2 = reviewIdOf(MARK + "2");
+        seedReport(review1, adminId(), "SPAM", "PENDING");
+        long second = seedReport(review1, authorIdOf(), "ABUSE", "PENDING");
+        seedReport(review2, adminId(), "SPOILER", "DISMISSED");
+
+        JsonNode data = dataOf("keyword", MARK);
+
+        JsonNode reportedRow = rowOf(data, MARK + "1");
+        assertThat(reportedRow.path("reportCount").asInt())
+                .as("两条待处理")
+                .isEqualTo(2);
+        assertThat(reportedRow.path("latestReason").asText())
+                .as("取的是**最新**那条(后插的 ABUSE), 取成 SPAM 说明顺序反了")
+                .isEqualTo("ABUSE");
+        assertThat(reportedRow.path("latestReportAt").isNull())
+                .as("有举报时这个时间必须在 —— 前端要拿它显示「最近被举报于…」")
+                .isFalse();
+
+        JsonNode dismissedRow = rowOf(data, MARK + "2");
+        assertThat(dismissedRow.path("reportCount").asInt())
+                .as("唯一一条举报已被忽略 —— 它不该再进队列, 也不该再计数")
+                .isZero();
+        assertThat(dismissedRow.path("latestReason").isNull())
+                .as("键在、值为 null: 少了键的话前端那一格走的是 undefined 分支")
+                .isTrue();
+
+        JsonNode cleanRow = rowOf(data, MARK + "3");
+        assertThat(cleanRow.path("reportCount").asInt()).isZero();
+        assertThat(cleanRow.path("latestReason").isNull()).isTrue();
+        assertThat(cleanRow.path("latestReportAt").isNull()).isTrue();
+
+        // 忽略掉最新的那条之后再问一次: 条数与理由**一起**退回去 —— 只改一处的话,
+        // 界面会出现"还剩 1 条, 但理由是刚忽略掉的那条"
+        jdbc.update("UPDATE review_report SET status = 'DISMISSED' WHERE id = ?", second);
+
+        JsonNode afterDismiss = rowOf(dataOf("keyword", MARK), MARK + "1");
+        assertThat(afterDismiss.path("reportCount").asInt()).isEqualTo(1);
+        assertThat(afterDismiss.path("latestReason").asText())
+                .as("退回到还待处理的那条")
+                .isEqualTo("SPAM");
+    }
+
+    /**
+     * 认不出的 {@code reported} 值落回"不筛", 不是 400 —— 与 {@code rating}/{@code sort}
+     * 同一条 doctrine。
+     *
+     * <p>与管理端<b>写</b>路径正好相反: {@code AdminService.setUserRole} 拿到未知角色回
+     * 400。读路径筛错一个值的后果只是结果集放宽一点, 管理员看得出不对; 写路径写错一个值
+     * 意味着数据落进一个谁也筛不出来的档位。这个不对称是有意的, 两边各有一处注释讲它。
+     */
+    @Test
+    @DisplayName("认不出的 reported 值落回默认(不筛), 不是 400")
+    void anUnknownReportedValueFallsBackToNoFilter() throws Exception {
+        seedReport(reviewIdOf(MARK + "1"), adminId(), "SPAM", "PENDING");
+
+        assertThat(contentsOf(dataOf("keyword", MARK, "reported", "yes"))).hasSize(4);
+        assertThat(contentsOf(dataOf("keyword", MARK, "reported", "TRUE!"))).hasSize(4);
     }
 
     // ========== 排序 ==========

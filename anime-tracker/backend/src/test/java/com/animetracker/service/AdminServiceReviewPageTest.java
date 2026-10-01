@@ -6,6 +6,7 @@ import com.animetracker.entity.User;
 import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.ReviewRepository;
+import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.TrackingRepository;
 import com.animetracker.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +25,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -55,12 +57,14 @@ class AdminServiceReviewPageTest {
 
     private ReviewRepository reviewRepository;
     private AnimeRepository animeRepository;
+    private ReviewReportRepository reviewReportRepository;
     private AdminService adminService;
 
     @BeforeEach
     void setUp() {
         reviewRepository = mock(ReviewRepository.class);
         animeRepository = mock(AnimeRepository.class);
+        reviewReportRepository = mock(ReviewReportRepository.class);
         // 默认返回空列表而不是 null: toAdminReviewRows 会直接对它 .stream(),
         // 而 Mockito 对 List 返回值的默认就是空列表 —— 显式写出来是为了让"这里有个
         // 会被解引用的返回值"在下一个人眼里是可见的
@@ -68,13 +72,18 @@ class AdminServiceReviewPageTest {
         // 计数给一个够大的数, 好让取页那条**真的发出去** —— 给 0 的话
         // offset >= total 会提前返回, 于是"调了哪一条取页方法"这类断言全部空转.
         // 需要 0 / 越界的用例各自覆盖这个桩.
-        when(reviewRepository.countAdminReviews(any(), any(), any())).thenReturn(1000L);
+        when(reviewRepository.countAdminReviews(any(), any(), any(), anyBoolean()))
+                .thenReturn(1000L);
+        // 举报摘要是**批量**查的(一条 IN), toAdminReviewRows 会直接对它 .stream()。
+        // 与上面 animeRepository 那个桩同一条理由: 显式写出"这里有个会被解引用的返回值"。
+        when(reviewReportRepository.findPendingSummaries(any())).thenReturn(List.of());
         adminService = new AdminService(
                 mock(UserRepository.class),
                 reviewRepository,
                 mock(TrackingRepository.class),
                 animeRepository,
                 mock(AdminActionLogRepository.class),
+                reviewReportRepository,
                 new IsolatedInsert(),
                 mock(PasswordEncoder.class));
     }
@@ -82,13 +91,18 @@ class AdminServiceReviewPageTest {
     /** 一次"没有筛选条件"的取页, 只关心它往仓储传了什么 */
     private Map<String, Object> fetch(String keyword, String rating, String sort, String order,
                                       int page, int limit) {
-        return adminService.getReviewPage(keyword, rating, sort, order, page, limit);
+        return adminService.getReviewPage(keyword, rating, null, sort, order, page, limit);
+    }
+
+    /** 同上, 但只填"只看被举报的"那一维 —— 其余各维一律不筛 */
+    private Map<String, Object> fetchReported(String reported) {
+        return adminService.getReviewPage(null, null, reported, null, null, 1, 20);
     }
 
     /** 计数那条收到的关键词模式串 */
     private String capturedKeywordPattern() {
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        verify(reviewRepository).countAdminReviews(captor.capture(), any(), any());
+        verify(reviewRepository).countAdminReviews(captor.capture(), any(), any(), anyBoolean());
         return captor.getValue();
     }
 
@@ -147,7 +161,55 @@ class AdminServiceReviewPageTest {
     void ratingBandIsAFixedClosedInterval(String rating, Integer min, Integer max) {
         fetch(null, rating, null, null, 1, 20);
 
-        verify(reviewRepository).countAdminReviews(isNull(), eq(min), eq(max));
+        verify(reviewRepository).countAdminReviews(isNull(), eq(min), eq(max), eq(false));
+    }
+
+    // ========== 只看被举报的 ==========
+
+    /**
+     * {@code reported} → 布尔开关: <b>只有字面量 {@code true} 才算数</b>, 其余一律当"不筛"。
+     *
+     * <p>为什么这里是一个 boolean 而不是把 {@code reported} 原样传给仓储: 仓储上那个参数
+     * 参与的是 {@code :reported = FALSE OR EXISTS (...)} 这样一个**布尔守卫**(与
+     * {@code AnimeQueries} 的题材/标签筛选同一个形状), 它必须是基本类型 —— 写成
+     * {@code :reported IS NULL} 那种参数为 null 的判据在 PostgreSQL 上是个 prepare 期的坑。
+     *
+     * <p>三条边界各有各的失效方式, 所以逐条钉住:
+     *
+     * <ul>
+     *   <li>{@code null}(默认请求, 也就是"不带这个参数")必须落回<b>不筛</b> —— 落到 true
+     *       的话, 默认那一页会**只显示被举报的**, 而界面上没有任何东西解释为什么少了
+     *       一大半评论。这条是本类 {@code theDefaultRequestIsAWellFormedPage}
+     *       那个「一个参数都不带」的用例在服务层的对应物;</li>
+     *   <li>{@code "false"} 也必须是不筛 —— 它与 {@code null} 在这里**恰好等价**, 但那是
+     *       结果, 不是理由: 判据是"字面量 true 才算数", 而不是"false 才算假"。
+     *       写成 {@code Boolean.parseBoolean} 就没有这个区别, 但这两种写法在
+     *       {@code "1"} / {@code "yes"} 上会分道扬镳 —— 见下一条;</li>
+     *   <li>{@code "1"} / {@code "yes"} / 拼错的值**静默当不筛**, 不报 400 —— 这是管理端
+     *       读路径的 doctrine(见 {@code AdminService.getUserPage} 那段注释): 筛错一个值
+     *       的后果是结果集放宽一点, 管理员看得出不对。写路径(举报理由)反过来, 那里回 400。
+     *       这一条把那个不对称也钉住了: 同一件"未知取值"的事, 两个方向的期望是相反的。</li>
+     * </ul>
+     */
+    @ParameterizedTest(name = "reported=<{0}> → 只看被举报={1}")
+    @CsvSource({
+            "null,   false",
+            "false,  false",
+            "FALSE,  false",
+            "'',     false",
+            "'  ',   false",
+            "1,      false",
+            "yes,    false",
+            "ture,   false",
+            "true,   true",
+            "TRUE,   true",
+            "' true ', true",
+    })
+    @DisplayName("只看被举报: 只有字面量 true 才打开, 其余(含未知值)一律当不筛")
+    void onlyTheLiteralTrueTurnsTheReportedFilterOn(String reported, boolean expected) {
+        fetchReported("null".equals(reported) ? null : reported);
+
+        verify(reviewRepository).countAdminReviews(any(), any(), any(), eq(expected));
     }
 
     // ========== 排序 / 顺序 ==========
@@ -172,7 +234,7 @@ class AdminServiceReviewPageTest {
     void eachSortCombinationCallsItsOwnRepositoryMethod(String sort, String order) {
         fetch(null, null, sort, order, 1, 20);
 
-        verify(reviewRepository, times(1)).countAdminReviews(any(), any(), any());
+        verify(reviewRepository, times(1)).countAdminReviews(any(), any(), any(), anyBoolean());
         verifyNoMoreInteractionsOnPageMethodsOver(reviewRepository, expectedMethod(sort, order));
     }
 
@@ -209,7 +271,7 @@ class AdminServiceReviewPageTest {
         assertThatCode(() -> fetch(null, null, sort, order, 1, 20))
                 .doesNotThrowAnyException();
 
-        verify(reviewRepository).countAdminReviews(any(), any(), any());
+        verify(reviewRepository).countAdminReviews(any(), any(), any(), anyBoolean());
         verifyNoMoreInteractionsOnPageMethodsOver(reviewRepository, expected);
     }
 
@@ -251,15 +313,15 @@ class AdminServiceReviewPageTest {
     @Test
     @DisplayName("越界页: 空列表 + 真实 total, 取页那条根本不该发")
     void outOfRangePageReportsTheRealTotalButFetchesNothing() {
-        when(reviewRepository.countAdminReviews(any(), any(), any())).thenReturn(7L);
+        when(reviewRepository.countAdminReviews(any(), any(), any(), anyBoolean())).thenReturn(7L);
 
         Map<String, Object> result = fetch(null, null, null, null, 9999, 20);
 
         assertThat((List<?>) result.get("list")).isEmpty();
         assertThat(result.get("total")).isEqualTo(7);
         assertThat(result.get("page")).as("回显的是夹取后的页码").isEqualTo(9999);
-        verify(reviewRepository, never()).findAdminReviewPageByIdDesc(any(), any(), any(), any());
-        verify(reviewRepository, never()).findAdminReviewPageByIdAsc(any(), any(), any(), any());
+        verify(reviewRepository, never()).findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), any());
+        verify(reviewRepository, never()).findAdminReviewPageByIdAsc(any(), any(), any(), anyBoolean(), any());
         // 一条行都没有, 番剧名那次批量查询也不该发出去
         verify(animeRepository, never()).findAllById(any());
     }
@@ -274,13 +336,13 @@ class AdminServiceReviewPageTest {
     @Test
     @DisplayName("空库: 首页也是 0 行, total 0, 取页不发")
     void emptyTableOnTheFirstPageFetchesNothingEither() {
-        when(reviewRepository.countAdminReviews(any(), any(), any())).thenReturn(0L);
+        when(reviewRepository.countAdminReviews(any(), any(), any(), anyBoolean())).thenReturn(0L);
 
         Map<String, Object> result = fetch(null, null, null, null, 1, 20);
 
         assertThat((List<?>) result.get("list")).isEmpty();
         assertThat(result.get("total")).isEqualTo(0);
-        verify(reviewRepository, never()).findAdminReviewPageByIdDesc(any(), any(), any(), any());
+        verify(reviewRepository, never()).findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), any());
     }
 
     /**
@@ -311,8 +373,8 @@ class AdminServiceReviewPageTest {
     @Test
     @DisplayName("行: animeTitle 与 replyCount 都在, 作者名与赞数也带上了")
     void rowsCarryTheAnimeTitleAndTheReplyCount() {
-        when(reviewRepository.countAdminReviews(any(), any(), any())).thenReturn(1L);
-        when(reviewRepository.findAdminReviewPageByIdDesc(any(), any(), any(), any()))
+        when(reviewRepository.countAdminReviews(any(), any(), any(), anyBoolean())).thenReturn(1L);
+        when(reviewRepository.findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), any()))
                 .thenReturn(List.of(review(7L, 656083, 8, "正文", 2L, 3L)));
         when(animeRepository.findAllById(any()))
                 .thenReturn(List.of(Anime.builder().id(656083).title("某番").build()));
@@ -344,8 +406,8 @@ class AdminServiceReviewPageTest {
     @Test
     @DisplayName("行: 番剧没缓存过时 animeTitle 是 null, 但键必须在")
     void missingAnimeYieldsANullTitleNotAFabricatedOne() {
-        when(reviewRepository.countAdminReviews(any(), any(), any())).thenReturn(1L);
-        when(reviewRepository.findAdminReviewPageByIdDesc(any(), any(), any(), any()))
+        when(reviewRepository.countAdminReviews(any(), any(), any(), anyBoolean())).thenReturn(1L);
+        when(reviewRepository.findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), any()))
                 .thenReturn(List.of(review(7L, 656083, 8, "正文", 0L, 0L)));
 
         List<Map<String, Object>> rows = rowsOf(fetch(null, null, null, null, 1, 20));
@@ -365,8 +427,8 @@ class AdminServiceReviewPageTest {
     @Test
     @DisplayName("行: 番剧名一次批量查完, 有几行都只查一次")
     void animeTitlesAreResolvedInASingleBatchQuery() {
-        when(reviewRepository.countAdminReviews(any(), any(), any())).thenReturn(3L);
-        when(reviewRepository.findAdminReviewPageByIdDesc(any(), any(), any(), any()))
+        when(reviewRepository.countAdminReviews(any(), any(), any(), anyBoolean())).thenReturn(3L);
+        when(reviewRepository.findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), any()))
                 .thenReturn(List.of(
                         review(1L, 656083, 8, "a", 0L, 0L),
                         review(2L, 656083, 8, "b", 0L, 0L),
@@ -418,36 +480,36 @@ class AdminServiceReviewPageTest {
 
     private static void verifyCalled(ReviewRepository repo, PageMethod m) {
         switch (m) {
-            case ID_DESC -> verify(repo).findAdminReviewPageByIdDesc(any(), any(), any(), any());
-            case ID_ASC -> verify(repo).findAdminReviewPageByIdAsc(any(), any(), any(), any());
-            case LIKES_DESC -> verify(repo).findAdminReviewPageByLikesDesc(any(), any(), any(), any());
-            case LIKES_ASC -> verify(repo).findAdminReviewPageByLikesAsc(any(), any(), any(), any());
+            case ID_DESC -> verify(repo).findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), any());
+            case ID_ASC -> verify(repo).findAdminReviewPageByIdAsc(any(), any(), any(), anyBoolean(), any());
+            case LIKES_DESC -> verify(repo).findAdminReviewPageByLikesDesc(any(), any(), any(), anyBoolean(), any());
+            case LIKES_ASC -> verify(repo).findAdminReviewPageByLikesAsc(any(), any(), any(), anyBoolean(), any());
             case REPLIES_DESC ->
-                    verify(repo).findAdminReviewPageByRepliesDesc(any(), any(), any(), any());
+                    verify(repo).findAdminReviewPageByRepliesDesc(any(), any(), any(), anyBoolean(), any());
             case REPLIES_ASC ->
-                    verify(repo).findAdminReviewPageByRepliesAsc(any(), any(), any(), any());
+                    verify(repo).findAdminReviewPageByRepliesAsc(any(), any(), any(), anyBoolean(), any());
         }
     }
 
     private static void verifyNotCalled(ReviewRepository repo, PageMethod m) {
         switch (m) {
-            case ID_DESC -> verify(repo, never()).findAdminReviewPageByIdDesc(any(), any(), any(), any());
-            case ID_ASC -> verify(repo, never()).findAdminReviewPageByIdAsc(any(), any(), any(), any());
+            case ID_DESC -> verify(repo, never()).findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), any());
+            case ID_ASC -> verify(repo, never()).findAdminReviewPageByIdAsc(any(), any(), any(), anyBoolean(), any());
             case LIKES_DESC ->
-                    verify(repo, never()).findAdminReviewPageByLikesDesc(any(), any(), any(), any());
+                    verify(repo, never()).findAdminReviewPageByLikesDesc(any(), any(), any(), anyBoolean(), any());
             case LIKES_ASC ->
-                    verify(repo, never()).findAdminReviewPageByLikesAsc(any(), any(), any(), any());
+                    verify(repo, never()).findAdminReviewPageByLikesAsc(any(), any(), any(), anyBoolean(), any());
             case REPLIES_DESC ->
-                    verify(repo, never()).findAdminReviewPageByRepliesDesc(any(), any(), any(), any());
+                    verify(repo, never()).findAdminReviewPageByRepliesDesc(any(), any(), any(), anyBoolean(), any());
             case REPLIES_ASC ->
-                    verify(repo, never()).findAdminReviewPageByRepliesAsc(any(), any(), any(), any());
+                    verify(repo, never()).findAdminReviewPageByRepliesAsc(any(), any(), any(), anyBoolean(), any());
         }
     }
 
     /** 取页那条收到的 Pageable */
     private Pageable capturedPageable() {
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(reviewRepository, times(1)).findAdminReviewPageByIdDesc(any(), any(), any(), captor.capture());
+        verify(reviewRepository, times(1)).findAdminReviewPageByIdDesc(any(), any(), any(), anyBoolean(), captor.capture());
         return captor.getValue();
     }
 

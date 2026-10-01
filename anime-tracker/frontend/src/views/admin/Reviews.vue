@@ -24,6 +24,18 @@
       <option value="high">好评 8–10</option>
     </select>
 
+    <!-- 只看被举报. 是个**开关**而不是下拉: 只有"看全部"与"只看被举报"两态, 而
+         后者正是这一页最常用的那个动作(每天进来一次, 把队列清空) -->
+    <button
+      class="action-btn report-toggle"
+      :class="{ 'is-on': reported }"
+      :aria-pressed="reported ? 'true' : 'false'"
+      @click="toggleReported"
+    >
+      <PhFlag :size="13" :weight="reported ? 'fill' : 'regular'" />
+      只看被举报
+    </button>
+
     <select class="admin-select" :value="limit" aria-label="每页条数" @change="onLimitChange">
       <option v-for="size in ADMIN_PAGE_SIZES" :key="size" :value="size">{{ size }} 条/页</option>
     </select>
@@ -101,11 +113,20 @@
                 <PhCaretDown v-else class="sort-icon" :size="12" aria-hidden="true" />
               </button>
             </th>
+            <!-- 举报. 它不是个数字而是一行小标签, 因为管理员要判的是"哪一条该先看":
+                 次数说明有多少人受够它了, 最近那个理由说明他们在气什么.
+                 两个值都只在**有待处理举报**时才有(reportCount 不含已忽略的),
+                 所以一次都没被举报的行是空的 —— 与"举报都被处理完了"长得一样,
+                 而那两件事在这一页不需要分开说(点进去看明细即知). -->
+            <th>举报</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in reviews" :key="r.id">
+          <!-- template 包住两行: 主行 + 展开时的明细行. :key 挂在 template 上,
+               两个 tr 才是同一个"这一条评论"的两个部分 -->
+          <template v-for="r in reviews" :key="r.id">
+          <tr>
             <td class="time-cell">
               {{ formatTime(r.createdAt) }}
               <span class="id-cell">#{{ r.id }}</span>
@@ -125,10 +146,53 @@
             </td>
             <td class="num-cell">{{ r.likeCount }}</td>
             <td class="num-cell">{{ r.replyCount }}</td>
+            <td class="report-cell">
+              <button v-if="r.reportCount > 0" class="report-badge" @click="toggleDetail(r)"
+                :aria-expanded="detailBox[r.id]?.open ? 'true' : 'false'">
+                <PhFlag :size="12" weight="fill" />
+                <span>被举报 {{ r.reportCount }} 次</span>
+                <!-- 最近那个理由: 「被举报 3 次」说明有人在气, 「辱骂攻击」说明在气什么 -->
+                <span v-if="r.latestReason" class="report-reason">{{ reasonLabel(r.latestReason) }}</span>
+              </button>
+              <span v-else class="report-none">—</span>
+            </td>
             <td>
               <button class="delete-btn" @click="handleDelete(r)">删除</button>
             </td>
           </tr>
+
+          <!-- 明细: 点了那个徽标才拉(懒加载) —— 一页 20 行全带明细就是 20 倍的响应体,
+               而管理员一次只可能读一行. 与评论区「谁赞了」「回复」同一个做法. -->
+          <tr v-if="detailBox[r.id]?.open" class="report-detail-row">
+            <td :colspan="COLUMN_COUNT">
+              <div class="report-detail">
+                <div v-if="detailBox[r.id].loading" class="report-detail-hint">加载中…</div>
+                <div v-else-if="!detailBox[r.id].list.length" class="report-detail-hint">没有举报</div>
+                <template v-else>
+                  <div v-for="rp in detailBox[r.id].list" :key="rp.id" class="report-item">
+                    <span class="report-item-reason">{{ reasonLabel(rp.reason) }}</span>
+                    <span class="report-item-who">{{ rp.reporterName }}</span>
+                    <span class="report-item-time">{{ formatTime(rp.createdAt) }}</span>
+                    <span v-if="rp.detail" class="report-item-note">{{ rp.detail }}</span>
+                    <!-- 已处理的只留一句"谁在处理", 不再给按钮: 忽略是单向的,
+                         服务端那边也没有"恢复"这条路 -->
+                    <span v-if="rp.status !== 'PENDING'" class="report-item-done">
+                      已忽略<template v-if="rp.handlerName">（{{ rp.handlerName }}）</template>
+                    </span>
+                    <button v-else class="report-dismiss" :disabled="Boolean(dismissBusy[rp.id])"
+                      @click="handleDismiss(r, rp)">忽略</button>
+                  </div>
+                  <!-- total 是**不分状态**的全量条数, list 在服务端封顶(50):
+                       不说这一句, 面板上就分不清"就这些"与"还有一堆没显示" -->
+                  <div v-if="detailBox[r.id].total > detailBox[r.id].list.length"
+                    class="report-detail-hint">
+                    等共 {{ detailBox[r.id].total }} 条
+                  </div>
+                </template>
+              </div>
+            </td>
+          </tr>
+          </template>
         </tbody>
       </table>
     </div>
@@ -166,7 +230,11 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PhCaretUp from '@icons/PhCaretUp.vue.mjs'
 import PhCaretDown from '@icons/PhCaretDown.vue.mjs'
-import { getAdminReviews, adminDeleteReview, ADMIN_PAGE_SIZES, ADMIN_PAGE_SIZE } from '../../api'
+import PhFlag from '@icons/PhFlag.vue.mjs'
+import {
+  getAdminReviews, adminDeleteReview, getReviewReports, dismissReport,
+  REVIEW_REPORT_REASONS, ADMIN_PAGE_SIZES, ADMIN_PAGE_SIZE,
+} from '../../api'
 import { useToast } from '../../composables/useToast'
 import { useLatestOnly } from '../../composables/useLatestOnly'
 import { loadErrorMessage } from '../../utils/loadError'
@@ -228,6 +296,28 @@ const NATURAL_ORDER = { [SORT_ID]: 'desc', [SORT_LIKES]: 'desc', [SORT_REPLIES]:
 /** 档位键, 与后端 RATING_BANDS 的三行逐字对应 */
 const RATING_BANDS = ['low', 'mid', 'high']
 
+/**
+ * 「只看被举报」在 URL 上的取值.
+ *
+ * 后端认的是**字面量 `true`** —— 其余任何值(包括不给、`1`、`yes`)一律当"不筛"
+ * (读路径对未知值沉默放行, 见 AdminService.getReviewPage). 所以这里两态写成
+ * `''`(不写进 URL)与 `'true'`, 而不是 `'1'/'0'`: 后者是"发出去也当没发".
+ */
+const REPORTED_ON = 'true'
+
+/**
+ * 举报理由的取值 → 中文标签.
+ *
+ * 标签只活在前端(后端存的是 SPAM/ABUSE 这些常量), 所以映射也就只能在这儿.
+ * 取不到的键**原样显示**而不是留白: 那个值是真从接口来的, 显示出来至少能查,
+ * 而空白会让人以为"这条没有理由".
+ */
+const REASON_LABELS = Object.fromEntries(REVIEW_REPORT_REASONS.map(o => [o.value, o.label]))
+
+/** 明细行横跨整张表. 写死一个数而不是 `colspan="100"`: 数字对不上的表现是错位一格,
+ *  一眼能看出来; 而 100 会让"加了一列忘了改"永远看不出来 */
+const COLUMN_COUNT = 9
+
 /** 输入到发请求之间的静默期. 300ms ≈ 正常打字的字间隔, 连打一个字不会各发一次 */
 const SEARCH_DEBOUNCE = 300
 
@@ -241,6 +331,8 @@ const error = ref('')
 
 const keyword = ref('')
 const rating = ref('')
+/** 只看被举报. 存的是 URL 上的**字符串**('' 或 'true'), 与 rating 同一个形状 */
+const reported = ref('')
 const sort = ref(DEFAULT_SORT)
 const order = ref(NATURAL_ORDER[DEFAULT_SORT])
 const page = ref(1)
@@ -262,7 +354,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit.valu
  * 都在说一件没发生的事.
  */
 const hasFilter = computed(
-  () => keyword.value.trim() !== '' || rating.value !== '',
+  () => keyword.value.trim() !== '' || rating.value !== '' || reported.value !== '',
 )
 
 function formatTime(d) { return d ? new Date(d).toLocaleString('zh-CN') : '-' }
@@ -298,6 +390,9 @@ function readQuery() {
   return {
     keyword: strParam(route.query.q),
     rating: pick(RATING_BANDS, strParam(route.query.rating)),
+    // 只认字面量 true, 其余(含 'false'/'1'/'yes')一律当不筛 —— 与后端同一条规矩,
+    // 于是手改 URL 写成 `?reported=1` 时, 界面上的开关与后端的行为仍然一致
+    reported: strParam(route.query.reported) === REPORTED_ON ? REPORTED_ON : '',
     sort: nextSort,
     // order 的默认值跟着**解析后**的 sort 走, 不是跟着 URL 上那个原始值 ——
     // `?sort=bogus` 会落回 id, 那 order 的自然首向也该是 desc
@@ -310,18 +405,19 @@ function readQuery() {
 /** 当前状态. 与 readQuery 的返回值同形, 用来判定"URL 读回来的和手上的其实一样" */
 function currentState() {
   return {
-    keyword: keyword.value, rating: rating.value,
+    keyword: keyword.value, rating: rating.value, reported: reported.value,
     sort: sort.value, order: order.value, page: page.value, limit: limit.value,
   }
 }
 
 function stateKey(s) {
-  return [s.keyword, s.rating, s.sort, s.order, s.page, s.limit].join('|')
+  return [s.keyword, s.rating, s.reported, s.sort, s.order, s.page, s.limit].join('|')
 }
 
 function applyState(s) {
   keyword.value = s.keyword
   rating.value = s.rating
+  reported.value = s.reported
   sort.value = s.sort
   order.value = s.order
   page.value = s.page
@@ -349,6 +445,7 @@ function syncQuery() {
   // 短一位的 q, 下面那个 watch 判定"URL 与我手上的不一样"而再取一次数据.
   set('q', keyword.value)
   set('rating', rating.value)
+  set('reported', reported.value)
   set('sort', sort.value === DEFAULT_SORT ? '' : sort.value)
   set('order', order.value === NATURAL_ORDER[sort.value] ? '' : order.value)
   set('limit', limit.value === ADMIN_PAGE_SIZE ? '' : String(limit.value))
@@ -374,6 +471,7 @@ async function loadReviews() {
       // 在请求上就表现为参数不存在, 与后端 `:param IS NULL` 那条一一对应
       keyword: keyword.value.trim() || undefined,
       rating: rating.value || undefined,
+      reported: reported.value || undefined,
       // sort 只在**不是默认列**时才发 —— 与 Users.vue 同一条规矩, 后端对缺省
       // 走默认(主键倒序)
       sort: sort.value === DEFAULT_SORT ? undefined : sort.value,
@@ -436,6 +534,77 @@ async function handleDelete(r) {
   } catch (e) { toast(e.response?.data?.message || '删除失败', 'error') }
 }
 
+// ==================== 举报明细 ====================
+
+/**
+ * 每条评论的明细盒子: `{ open, loading, list, total }`.
+ *
+ * 与评论区那几个「谁赞了」盒子同形, 但**重取列表时不清** —— 那几个装的是一份
+ * "那批数据当时的样子"(赞数一变就过期了), 而这个装的是**这条评论自己的举报**:
+ * 列表换一次序、翻一页, 那些举报一条没变. 清了只会让管理员的展开白点一次.
+ * 唯一的例外是"别人同时在处理", 那种偏差由上面那次 handleDismiss 的重取兜住.
+ */
+const detailBox = ref({})
+/** 正在忽略的那些**举报** id(不是评论 id): 一条评论下可以有好几条举报各点各的 */
+const dismissBusy = ref({})
+
+function reasonLabel(value) {
+  return REASON_LABELS[value] || value
+}
+
+/** 拉某条评论的举报明细, 填进那个盒子 */
+async function fetchReports(reviewId) {
+  /* 必须从 detailBox 里**读回来**再改, 不能拿赋值时那个对象的引用 —— 与 fetchLikers
+     同一条理由: 存进去的是普通对象, 读的时候才被包成响应式代理, 直接改原始对象
+     不触发依赖, 表现是"点了没反应"而请求其实成功了 */
+  const box = detailBox.value[reviewId]
+  if (!box) return
+  box.loading = true
+  try {
+    const res = await getReviewReports(reviewId)
+    const d = res.data.data || {}
+    box.list = d.list || []
+    box.total = d.total || 0
+  } catch (e) {
+    // 拉不到就收起它 —— 留一块空白比收起来更让人以为"这条没被举报"
+    box.open = false
+    toast(e.response?.data?.message || '加载举报明细失败', 'error')
+  } finally {
+    box.loading = false
+  }
+}
+
+/** 展开/收起一条评论的举报明细. 第一次展开才去拉 */
+async function toggleDetail(r) {
+  const existing = detailBox.value[r.id]
+  if (existing) { existing.open = !existing.open; return }
+  detailBox.value[r.id] = { open: true, loading: true, list: [], total: 0 }
+  await fetchReports(r.id)
+}
+
+/**
+ * 忽略一条举报.
+ *
+ * 忽略之后**重取当前页**, 不做本地 `filter` —— 与删除那条同一个理由:
+ * `reportCount` 只数待处理的, 而且开着「只看被举报」时, 忽略掉最后一条待处理会让
+ * 这一行**不再符合筛选**. 这两件事只有服务端说得准, 本地改一个数字等于把它的口径
+ * 抄了第二份. 行还在、面板还开着的话, 再把明细也刷一次(明细里那条会变成"已忽略").
+ */
+async function handleDismiss(r, report) {
+  if (dismissBusy.value[report.id]) return
+  dismissBusy.value[report.id] = true
+  try {
+    await dismissReport(report.id)
+    toast('已忽略', 'success')
+    await loadReviews()
+    if (detailBox.value[r.id]?.open) await fetchReports(r.id)
+  } catch (e) {
+    toast(e.response?.data?.message || '忽略失败', 'error')
+  } finally {
+    delete dismissBusy.value[report.id]
+  }
+}
+
 // ==================== 改条件 ====================
 
 let debounceTimer = null
@@ -464,9 +633,16 @@ function onRatingChange(e) { rating.value = e.target.value; return applyFilterCh
 /** 每页条数: 必须回到第 1 页 —— 不重置的话, 20 条/页时的第 4 页在 100 条/页下是空的 */
 function onLimitChange(e) { limit.value = Number(e.target.value); return applyFilterChange() }
 
+/** 开关没有防抖 —— 它是一次点击, 不是一个字一个字打出来的 */
+function toggleReported() {
+  reported.value = reported.value === REPORTED_ON ? '' : REPORTED_ON
+  return applyFilterChange()
+}
+
 function clearFilters() {
   keyword.value = ''
   rating.value = ''
+  reported.value = ''
   cancelPendingSearch()
   return applyFilterChange()
 }
@@ -582,9 +758,54 @@ onUnmounted(cancelPendingSearch)
   font-size: 13px; white-space: nowrap;
 }
 
+/* 举报徽标: 可点(展开明细), 所以必须长得像个能点的东西 —— 底色比周围重一档,
+   而不是像一列普通文字. */
+.report-cell { white-space: nowrap; }
+.report-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--primary-line); background: var(--primary-soft);
+  color: var(--primary); font-size: 12px; font-weight: 600; font-family: inherit;
+}
+.report-badge:hover { border-color: var(--primary); }
+/* 理由那一小段用中性色: 它是补充信息, 与"被举报 N 次"不是同一层信息 */
+.report-reason { color: var(--text-secondary); font-weight: 500; }
+.report-none { color: var(--text-muted); }
+
+/* 明细行. 底色比主行浅一档并与主行用同一根左边框连起来: 它是那一行的下一层,
+   不是又一条评论 */
+.report-detail-row > td { background: var(--tag-bg); }
+.report-detail{ display:flex; flex-direction:column; gap:6px; padding:2px 0; }
+.report-detail-hint{ color:var(--text-muted); font-size:12px; }
+.report-item{
+  display:flex; align-items:center; flex-wrap:wrap; gap:10px;
+  font-size:13px; color:var(--text-secondary);
+}
+.report-item-reason{ font-weight:600; color:var(--text); }
+.report-item-who{ font-weight:500; }
+.report-item-time{ color:var(--text-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+/* 补充说明是管理员最该读的一段, 所以给它整行的宽度(换行时不会挤成一团) */
+.report-item-note{ flex-basis:100%; color:var(--text); line-height:1.6; word-break:break-word; }
+.report-item-done{ color:var(--text-muted); font-size:12px; }
+.report-dismiss{
+  padding:3px 12px; border-radius:999px; cursor:pointer; font-family:inherit;
+  border:1px solid var(--border); background:var(--card);
+  color:var(--text-secondary); font-size:12px;
+}
+.report-dismiss:hover{ border-color:var(--primary-line); color:var(--primary); }
+.report-dismiss:disabled{ cursor:default; opacity:.55; }
+
 /* 「清除筛选」是个普通按钮(不带语义色): 它是一个中性动作, 而不是"危险"或"主要" */
 .admin-toolbar .action-btn { border: 1px solid var(--border); color: var(--text-secondary); }
 .admin-toolbar .action-btn:hover { border-color: var(--primary-line); color: var(--primary); }
+/* 「只看被举报」开着时用主色: 与"清除筛选"共用 .action-btn 这个类, 所以这一条必须
+   排在它**后面**才压得住(同权重, 后写的赢) */
+.admin-toolbar .report-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.admin-toolbar .report-toggle.is-on {
+  border-color: var(--primary); background: var(--primary-soft); color: var(--primary);
+}
 
 /* 改前这里还有一句「不是管理员就 router.push('/')」. 现在收在 AdminLayout 里,
    那边用 `<router-view v-if="authorized">` 挡着, 未授权时这个组件不会挂载. */

@@ -2,9 +2,11 @@ package com.animetracker.controller;
 
 import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
+import com.animetracker.dto.RequestDTO.ReportRequest;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.entity.User;
 import com.animetracker.service.ReviewLikeService;
+import com.animetracker.service.ReviewReportService;
 import com.animetracker.service.ReviewService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -28,10 +30,14 @@ public class ReviewController {
 
     private final ReviewService reviewService;
     private final ReviewLikeService reviewLikeService;
+    private final ReviewReportService reviewReportService;
 
-    public ReviewController(ReviewService reviewService, ReviewLikeService reviewLikeService) {
+    public ReviewController(ReviewService reviewService,
+                            ReviewLikeService reviewLikeService,
+                            ReviewReportService reviewReportService) {
         this.reviewService = reviewService;
         this.reviewLikeService = reviewLikeService;
+        this.reviewReportService = reviewReportService;
     }
 
     /** 添加或更新评论 */
@@ -134,6 +140,31 @@ public class ReviewController {
     @GetMapping("/{reviewId}/likes")
     public ApiResponse<Map<String, Object>> getReviewLikers(@PathVariable Long reviewId) {
         return ApiResponse.success(reviewLikeService.getLikers(reviewId));
+    }
+
+    /**
+     * 举报一条评论（必须登录）.
+     *
+     * <p><b>这条路刻意不放进 SecurityConfig 的公开清单</b> —— 举报是写, 匿名举报既没有
+     * 意义(没人能复核)也是一个现成的灌水入口. {@code anyRequest().authenticated()}
+     * 已经兜住它, 不需要额外写一行; 写上去反而是个开口.
+     *
+     * <p>幂等: 同一个人对同一条评论重复举报回 200 且 {@code duplicate=true}, 不报错.
+     * 理由见 {@code ReviewReportService.report}.
+     *
+     * <p>{@code detail} 是选填的补充说明. 两个字段的白名单/长度校验都在 service 与
+     * {@link ReportRequest} 上, 这里只负责把 {@code @Valid} 挂上 —— 少了它,
+     * {@code @NotBlank} 会被静默忽略.
+     *
+     * @return {@code {reported, duplicate}}
+     */
+    @PostMapping("/{reviewId}/report")
+    public ApiResponse<Map<String, Object>> reportReview(
+            @CurrentUser User user,
+            @PathVariable Long reviewId,
+            @Valid @RequestBody ReportRequest request) {
+        return ApiResponse.success("已收到举报",
+                reviewReportService.report(user, reviewId, request.getReason(), request.getDetail()));
     }
 
     /** 获取番剧评分统计 */

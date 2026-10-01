@@ -553,27 +553,34 @@ class QueryCountIntegrationTest {
     }
 
     /**
-     * 管理端评论列表一页 = <b>恰好 3 条</b>: count + 取页 + 番剧名批量.
+     * 管理端评论列表一页 = <b>恰好 4 条</b>: count + 取页 + 番剧名批量 + 举报摘要批量.
      *
-     * <p>第三条是这一页独有的: 行里要给 {@code animeTitle}, 而
-     * {@code review.subject_id} 与 {@code anime} 之间**没有外键**, 名字只能另查一次.
-     * 逐行查会变成 2+N, 所以把数字钉死在 3 才有意义 —— 与
+     * <p>后两条都是"行里要一个不在 {@code review} 表上的字段, 而两张表之间**没有外键**,
+     * 只能另查一次": 番剧名给 {@code animeTitle}({@code review.subject_id} → {@code anime}),
+     * 举报给 {@code reportCount}/{@code latestReason}({@code review} → {@code review_report})。
+     * 逐行查会变成 2+2N, 所以把数字钉死在 4 才有意义 —— 与
      * {@link #trackingListCostsTwoQueriesRegardlessOfRowCount} 是同一条道理.
      *
+     * <p><b>数字是 c94 从 3 改成 4 的, 不是顺手加的。</b> 举报摘要那条查询**不看有没有
+     * 举报**: 没有举报时它收下一个空 IN、返回空列表, 但仍是一条语句。这个取舍是刻意的 ——
+     * 把"有没有举报"当成一个分支去省那次查询, 等于让语句条数随数据变; 而这一页的成本
+     * 要能被一个常量盯住, 才是这条用例存在的理由。(同一取舍在
+     * {@code AdminService.toAdminReviewRows} 的注释里写的是另一半.)
+     *
      * <p>参数化取两档页大小: 要防的回归是"有人在循环里又补一次查询", 那种改动会让
-     * 次数随着行数长上去, 而不是从 3 变成 4. 只测一个页大小的话, 恰好等于某个数字
+     * 次数随着行数长上去, 而不是从 4 变成 5. 只测一个页大小的话, 恰好等于某个数字
      * 也能过.
      */
     @ParameterizedTest(name = "每页 {0} 条")
     @ValueSource(ints = {5, 20})
-    @DisplayName("管理端评论列表: 不论页大小都是 3 条语句(count + 取页 + 番剧名批量)")
-    void adminReviewPageCostsThreeQueriesRegardlessOfPageSize(int limit) {
+    @DisplayName("管理端评论列表: 不论页大小都是 4 条语句(count + 取页 + 番剧名 + 举报摘要)")
+    void adminReviewPageCostsFourQueriesRegardlessOfPageSize(int limit) {
         seedReviewsOnDistinctSubjects(limit + 3);
 
         long statements = statementsFor(
-                () -> adminService.getReviewPage(null, null, null, null, 1, limit));
+                () -> adminService.getReviewPage(null, null, null, null, null, 1, limit));
 
-        assertThat(statements).as("每页 %d 条", limit).isEqualTo(3);
+        assertThat(statements).as("每页 %d 条", limit).isEqualTo(4);
     }
 
     /**
@@ -595,7 +602,7 @@ class QueryCountIntegrationTest {
                 SUBJECT_BASE, "番0", "科幻");
 
         List<Map<String, Object>> rows = rowsOfPage(
-                adminService.getReviewPage(null, null, null, null, 1, 20));
+                adminService.getReviewPage(null, null, null, null, null, 1, 20));
 
         assertThat(rows).hasSize(2);
         // 键**必须都在**(哪怕值是 null): 少了这个键, 前端那一格走的是 undefined 分支,
@@ -628,7 +635,7 @@ class QueryCountIntegrationTest {
         AtomicReference<Map<String, Object>> holder = new AtomicReference<>();
 
         long statements = statementsFor(() -> holder.set(
-                adminService.getReviewPage(null, null, null, null, 9999, 20)));
+                adminService.getReviewPage(null, null, null, null, null, 9999, 20)));
 
         assertThat((List<?>) holder.get().get("list")).isEmpty();
         assertThat(holder.get().get("total")).isEqualTo(3);
@@ -647,9 +654,9 @@ class QueryCountIntegrationTest {
     void adminReviewFiltersNarrowBothTheCountAndTheRows() {
         seedReviewsForFiltering();
 
-        Map<String, Object> low = adminService.getReviewPage(null, "low", null, null, 1, 20);
-        Map<String, Object> keyword = adminService.getReviewPage("t1", null, null, null, 1, 20);
-        Map<String, Object> both = adminService.getReviewPage("t1", "high", null, null, 1, 20);
+        Map<String, Object> low = adminService.getReviewPage(null, "low", null, null, null, 1, 20);
+        Map<String, Object> keyword = adminService.getReviewPage("t1", null, null, null, null, 1, 20);
+        Map<String, Object> both = adminService.getReviewPage("t1", "high", null, null, null, 1, 20);
 
         assertThat(low.get("total")).as("差评 1–4 只该收下前两条").isEqualTo(2);
         assertThat(contentsOfPage(low)).containsExactly("t1", "t0");
@@ -658,6 +665,110 @@ class QueryCountIntegrationTest {
         // 两个条件必须**同时**生效(AND 而不是 OR): 用 OR 的话这条会是 3
         assertThat(both.get("total")).as("t1 是中评, 落在好评档里就该是 0").isEqualTo(0);
         assertThat(contentsOfPage(both)).isEmpty();
+    }
+
+    /**
+     * 「只看被举报的」同时收窄 total 与列表, 而且**只认待处理的**。
+     *
+     * <p>种子里 {@code w3} 只被忽略过 —— 它是这条用例的落点: 判据写成"这张评论有没有
+     * 举报行"的实现, 会把 {@code w3} 一起留下(total 变 3), 而"有没有**待处理**的举报"
+     * 才该是判据。这个区别在别的用例上一点都不显形: {@code w2} 同时有一条待处理和一条
+     * 已忽略, 两种实现都留下它。所以**必须有一个只被忽略过的种子行**, 否则这条用例
+     * 看着在测筛选, 实际两种实现都能过。
+     */
+    @Test
+    @DisplayName("管理端评论列表: 只看被举报时 total 与列表一起收窄, 只被忽略过的不算")
+    void adminReviewReportedFilterNarrowsBothTheCountAndTheRows() {
+        seedReviewsForReportedFilter();
+
+        Map<String, Object> all = adminService.getReviewPage(null, null, null, null, null, 1, 20);
+        Map<String, Object> reported =
+                adminService.getReviewPage(null, null, "true", null, null, 1, 20);
+
+        assertThat(all.get("total")).as("不带这个开关时四条都在").isEqualTo(4);
+        assertThat(reported.get("total"))
+                .as("w0 没人举报, w1/w2 有待处理的, w3 只被忽略过 —— 该是 2")
+                .isEqualTo(2);
+        assertThat(contentsOfPage(reported)).containsExactly("w2", "w1");
+    }
+
+    /**
+     * 这一句必须是 {@code EXISTS} 半连接, 不能退化成 {@code JOIN review_report} + {@code GROUP BY}。
+     *
+     * <p>两种写法**返回的行完全一样**, 所以上面那条行序断言一条都拦不住 —— 它们只在
+     * 一件事上不同: {@code GROUP BY} 之后行数不再与评论一一对应, Hibernate 就没法把
+     * {@code LIMIT} 交给数据库, 于是取页那句退化成"整张评论表读进 JVM 再切页", 而那正是
+     * 这一轮要消灭的毛病本身。这里能证明的只有 SQL 文本这一条路。
+     *
+     * <p>{@code fetch first} 是 H2 对 {@code setMaxResults} 的渲染, 与
+     * {@link #adminReviewPageSqlNamesTheRequestedSortColumn} 里那半句同一个来历。
+     */
+    @Test
+    @DisplayName("管理端评论列表的 SQL: 只看被举报是 EXISTS 半连接, 分页仍然下推")
+    void adminReviewReportedFilterSqlStaysAHalfJoin() {
+        seedReviewsForReportedFilter();
+
+        adminService.getReviewPage(null, null, "true", null, null, 1, 20);
+        String sql = pageSql();
+
+        assertThat(sql).as("每行至多贡献一行, limit 才交得出去")
+                .containsIgnoringCase("exists")
+                .doesNotContainIgnoringCase("group by");
+        assertThat(sql).as("子查询要落在举报表上, 而不是另找一张表").containsIgnoringCase("review_report");
+        assertThat(sql).as("分页必须是库做的, 不是读回来再切").containsIgnoringCase("fetch first");
+    }
+
+    /**
+     * 四条评论: {@code w0} 没人举报, {@code w1} 一条待处理, {@code w2} 一条待处理 +
+     * 一条已忽略, <b>{@code w3} 只有一条已忽略</b>。
+     *
+     * <p>{@code w3} 是刻意造的, 理由写在上面那条用例上。{@code w2} 挂着两条举报则要求
+     * <b>两个不同的举报人</b> —— {@code (review_id, reporter_id)} 上有唯一约束。
+     */
+    private void seedReviewsForReportedFilter() {
+        long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
+        for (int i = 0; i < 4; i++) {
+            // 一行一个作者: review 上有 uk_review_user_subject(一人对一部番只留一条评论),
+            // 四条评论挂同一个 subject 就必须换人 —— 与 {@link #seedReviews} 同一条理由
+            jdbc.update("INSERT INTO review (user_id, subject_id, rating, content, created_at) "
+                            + "VALUES (?, ?, 8, ?, ?)",
+                    freshUserId("w"), SUBJECT_BASE, "w" + i,
+                    new java.sql.Timestamp(base + i * 60_000L));
+        }
+        // 举报人另建两个, 不复用那四个作者 —— 走 JDBC 绕得过「不能举报自己的评论」
+        // 那条规则, 但种子数据长得像真的才不至于误导下一个人
+        long first = freshUserId("s");
+        long second = freshUserId("s");
+
+        seedReportOn("w1", first, "PENDING");
+        seedReportOn("w2", first, "PENDING");
+        seedReportOn("w2", second, "DISMISSED");
+        seedReportOn("w3", first, "DISMISSED");
+    }
+
+    /**
+     * 存一个新用户并给出它的 id. 前缀由调用方给, 用来把这一组的用户名与别组错开
+     * (别处是 {@code q}/{@code r}/{@code k}/{@code f}/{@code p})。
+     *
+     * <p>本类里所有会碰到 {@code review} 的种子数据都得一人一行: 那张表上有
+     * {@code uk_review_user_subject}(一人对一部番只留一条评论), 而同组的评论又都挂在
+     * 同一个 {@code SUBJECT_BASE} 上。
+     */
+    private long freshUserId(String prefix) {
+        return userRepository.save(User.builder()
+                .username(prefix + UUID.randomUUID().toString().substring(0, 12))
+                .password("x").role("USER").status("ACTIVE").build()).getId();
+    }
+
+    /** 走 JDBC: 这里要的是"库里已经有这样的举报行", 举报怎么**写**进去由别的类管 */
+    private void seedReportOn(String content, long reporterId, String status) {
+        Long reviewId = jdbc.queryForObject(
+                "SELECT id FROM review WHERE content = ?", Long.class, content);
+        assertThat(reviewId).as("种子行 <%s> 应当刚灌进去", content).isNotNull();
+        jdbc.update("INSERT INTO review_report (review_id, reporter_id, reason, status, created_at)"
+                        + " VALUES (?, ?, 'SPAM', ?, ?)",
+                reviewId, reporterId, status,
+                java.sql.Timestamp.valueOf("2030-01-01 00:00:00"));
     }
 
     /**
@@ -708,11 +819,11 @@ class QueryCountIntegrationTest {
         seedReviewsForSorting();
 
         List<String> page1 = contentsOfPage(
-                adminService.getReviewPage(null, null, sort, order, 1, 2));
+                adminService.getReviewPage(null, null, null, sort, order, 1, 2));
         List<String> page2 = contentsOfPage(
-                adminService.getReviewPage(null, null, sort, order, 2, 2));
+                adminService.getReviewPage(null, null, null, sort, order, 2, 2));
         List<String> page3 = contentsOfPage(
-                adminService.getReviewPage(null, null, sort, order, 3, 2));
+                adminService.getReviewPage(null, null, null, sort, order, 3, 2));
 
         assertThat(page1).as("%s %s 的第 1 页", sort, order).isEqualTo(split(first));
         assertThat(page2).as("%s %s 的第 2 页", sort, order).isEqualTo(split(second));
@@ -756,7 +867,7 @@ class QueryCountIntegrationTest {
     void adminReviewPageSqlNamesTheRequestedSortColumn() {
         seedReviewsForSorting();
 
-        adminService.getReviewPage(null, null, "replies", "asc", 1, 2);
+        adminService.getReviewPage(null, null, null, "replies", "asc", 1, 2);
         String sql = pageSql();
         String orderBy = orderByClause(sql);
 
@@ -770,7 +881,7 @@ class QueryCountIntegrationTest {
         assertThat(sql).as("分页必须是库做的, 不是读回来再切")
                 .containsIgnoringCase("fetch first");
 
-        adminService.getReviewPage(null, null, "likes", "desc", 1, 2);
+        adminService.getReviewPage(null, null, null, "likes", "desc", 1, 2);
         assertThat(orderByClause(pageSql()))
                 .as("倒序时 desc 在位, 而且没有串到回复数那一列去")
                 .containsIgnoringCase("like_count desc")
@@ -1330,11 +1441,24 @@ class QueryCountIntegrationTest {
     /**
      * 管理端取页那一句 —— 按内容挑, 不是按"最后一条".
      *
-     * <p>原因见 {@code SqlRecorder.lastContaining}: 取页之后还有一条补番剧名的批量查询,
-     * 而它才是那次调用里最后发出的语句.
+     * <p>原因见 {@code SqlRecorder.lastContaining}: 取页之后还有两条补数据的批量查询
+     * (番剧名、举报摘要), 而它们才是那次调用里最后发出的语句.
+     *
+     * <p><b>⚠️ 这里的针从 {@code "order by"} 换成了 {@code "from review "}(c94).</b>
+     * 原先那两个参数之所以够用, 是因为取页那句**恰好**是那次调用里最后一条带
+     * {@code order by} 的语句; 举报摘要那条也带 {@code order by rr.id DESC}, 于是
+     * {@code lastContaining("order by")} 会**静默地**换成它 —— 断言照跑, 只是从此
+     * 打在另一条 SQL 上. 这与本用例自身第一版吃掉的红是同一类(那次打在
+     * {@code from anime} 上), 所以针要钉在"哪张表"上, 而不是钉在"有没有 order by"上.
+     *
+     * <p>{@code "from review "} 末尾那个空格不是手滑: 少了它, 同一个前缀会连
+     * {@code from review_report} 与 {@code from review_reply} 一起匹配上, 而那正是
+     * 这次要排除的两条.
      */
     private static String pageSql() {
-        return SqlRecorder.lastContaining("order by").replaceAll("\\s+", " ");
+        // 没匹配上就回空串(断言会红), 不是 NPE —— 与下面 orderByClause 同一条理由
+        String found = SqlRecorder.lastContaining("from review ");
+        return found == null ? "" : found.replaceAll("\\s+", " ");
     }
 
     /**

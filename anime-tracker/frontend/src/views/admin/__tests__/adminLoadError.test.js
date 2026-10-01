@@ -11,6 +11,16 @@ vi.mock('../../../api', () => ({
   setUserRole: vi.fn(),
   unlockUser: vi.fn(),
   adminDeleteReview: vi.fn(),
+  // 举报那一组同理: 漏了 REVIEW_REPORT_REASONS, 组件在 setup 里就 .map 一个
+  // undefined, 整页直接抛 —— 而那看起来像"接口挂了", 正是这个文件要分辨的东西
+  getReviewReports: vi.fn(),
+  dismissReport: vi.fn(),
+  REVIEW_REPORT_REASONS: [
+    { value: 'SPAM', label: '垃圾广告' },
+    { value: 'ABUSE', label: '辱骂攻击' },
+    { value: 'SPOILER', label: '剧透' },
+    { value: 'OTHER', label: '其他' },
+  ],
   // 常量也要给: 这是**整体替换**而不是部分替换, 漏掉的导出在导入侧是 undefined,
   // 而 `ref(undefined)` 不会报错 —— 它会安静地把 limit 变成"没有每页条数",
   // 直到某个断言因为别的原因为红才被发现. (AdminController 那边 @Max(100) 同理.)

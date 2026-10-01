@@ -180,6 +180,45 @@ export const unlikeReview = (reviewId) => api.delete(`/review/${reviewId}/like`)
 /** 谁赞了这条评论. 公开接口, 未登录也能看(与评论列表本身一样) */
 export const getReviewLikers = (reviewId) => api.get(`/review/${reviewId}/likes`)
 
+// ========== 举报 ==========
+//
+// 四个理由的**取值**与后端 ReviewReport.REASONS 逐个对齐, 标签只活在前端 ——
+// 后端存的是英文常量, 界面上的中文不占库也不进接口, 于是改文案不用配一次数据迁移.
+//
+// 顺序与后端那个 LinkedHashSet 一致: 单选按钮照这个顺序渲染, 两边各写一份顺序的话,
+// 每次改动后"哪个排第一"会悄悄分家.
+
+/** 举报理由, 值为接口参数. 界面上渲染的是 label */
+export const REVIEW_REPORT_REASONS = [
+  { value: 'SPAM', label: '垃圾广告' },
+  { value: 'ABUSE', label: '辱骂攻击' },
+  { value: 'SPOILER', label: '剧透' },
+  { value: 'OTHER', label: '其他' },
+]
+
+/**
+ * 举报一条评论. **必须登录**(这条路刻意不在后端的免登录清单里, 匿名会拿到 401).
+ *
+ * 幂等: 同一个人对同一条评论重复举报回 200 且 `duplicate=true`, 不是 409. 前端因此
+ * 不需要为"已经举报过"写一条错误分支 —— 它是一条正常响应, 只是提示语不一样.
+ *
+ * @param payload {reason, detail} —— detail 选填, 空白由后端存成 null
+ */
+export const reportReview = (reviewId, payload) =>
+  api.post(`/review/${reviewId}/report`, payload)
+
+/**
+ * 某条评论的举报明细(管理端). 回 `{list, total}`, 评论不存在时 404.
+ *
+ * 明细与列表**分开一条接口**: 一页 20 行全带明细就是 20 倍的响应体, 而管理员一次
+ * 只可能展开一行 —— 所以它是「点了展开才拉」.
+ */
+export const getReviewReports = (reviewId) =>
+  api.get(`/admin/reviews/${reviewId}/reports`)
+/** 忽略一条举报. PUT 而不是 POST: 它把状态改回一个确定值, 重复调用结果相同 */
+export const dismissReport = (reportId) =>
+  api.put(`/admin/reports/${reportId}/dismiss`)
+
 // ========== 回复 ==========
 //
 // 路径分成两组前缀, 与后端一一对应: 「某条评论下的回复」用 /review/{id}/replies,

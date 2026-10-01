@@ -29,6 +29,14 @@ vi.mock('../../api', () => ({
   likeReply: vi.fn(),
   unlikeReply: vi.fn(),
   getReplyLikers: vi.fn(),
+  // 举报同理(值 + 那四个理由的常量), 理由也要列全 —— 漏了就是面板空白
+  reportReview: vi.fn(),
+  REVIEW_REPORT_REASONS: [
+    { value: 'SPAM', label: '垃圾广告' },
+    { value: 'ABUSE', label: '辱骂攻击' },
+    { value: 'SPOILER', label: '剧透' },
+    { value: 'OTHER', label: '其他' },
+  ],
   REVIEW_SORT_CREATED: 'createdAt',
   REVIEW_SORT_HOT: 'hot',
 }))
@@ -262,7 +270,7 @@ describe('谁赞了', () => {
     const wrapper = await mountDetail()
 
     expect(wrapper.find('.rv-likers').exists()).toBe(false)
-    await itemAt(wrapper, 0).find('.rv-act-quiet').trigger('click')
+    await itemAt(wrapper, 0).find('.rv-act-likers').trigger('click')
     await flushPromises()
 
     expect(getReviewLikers).toHaveBeenCalledWith(1)
@@ -274,7 +282,7 @@ describe('谁赞了', () => {
     getReviewLikers.mockResolvedValue(ok({ total: 80, list: [{ userId: 3, username: 'bob' }] }))
     const wrapper = await mountDetail()
 
-    await itemAt(wrapper, 0).find('.rv-act-quiet').trigger('click')
+    await itemAt(wrapper, 0).find('.rv-act-likers').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('.rv-likers').text()).toContain('80')
@@ -283,7 +291,7 @@ describe('谁赞了', () => {
   it('收起再展开不重拉(名单是拉过一次就留着的)', async () => {
     getReviewLikers.mockResolvedValue(ok({ total: 1, list: [{ userId: 3, username: 'bob' }] }))
     const wrapper = await mountDetail()
-    const toggle = () => itemAt(wrapper, 0).find('.rv-act-quiet').trigger('click')
+    const toggle = () => itemAt(wrapper, 0).find('.rv-act-likers').trigger('click')
 
     await toggle()
     await flushPromises()
@@ -301,7 +309,10 @@ describe('谁赞了', () => {
     getSubjectReviews.mockResolvedValue(ok([review({ likeCount: 0 })]))
     const wrapper = await mountDetail()
 
-    expect(itemAt(wrapper, 0).find('.rv-act-quiet').exists()).toBe(false)
+    expect(itemAt(wrapper, 0).find('.rv-act-likers').exists()).toBe(false)
+    // 而举报按钮照在 —— 这一排的按钮各有各的显示条件, 别把"谁赞了不见了"读成
+    // "安静的那几个都不见了": 它们曾经共用一个 rv-act-quiet 类, 认类就等于认错人
+    expect(itemAt(wrapper, 0).find('.rv-act-report').exists()).toBe(true)
   })
 
   it('切排序后旧名单必须清掉 —— 它存的是上一批数据的快照', async () => {
@@ -309,7 +320,7 @@ describe('谁赞了', () => {
     getReviewLikers.mockResolvedValue(ok({ total: 1, list: [{ userId: 3, username: 'bob' }] }))
     const wrapper = await mountDetail()
 
-    await itemAt(wrapper, 0).find('.rv-act-quiet').trigger('click')
+    await itemAt(wrapper, 0).find('.rv-act-likers').trigger('click')
     await flushPromises()
     expect(wrapper.findAll('.rv-liker')).toHaveLength(1)
 

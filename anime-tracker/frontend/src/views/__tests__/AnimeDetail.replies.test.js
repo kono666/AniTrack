@@ -28,6 +28,14 @@ vi.mock('../../api', () => ({
   likeReply: vi.fn(),
   unlikeReply: vi.fn(),
   getReplyLikers: vi.fn(),
+  // 举报同理(值 + 那四个理由的常量), 理由也要列全 —— 漏了就是面板空白
+  reportReview: vi.fn(),
+  REVIEW_REPORT_REASONS: [
+    { value: 'SPAM', label: '垃圾广告' },
+    { value: 'ABUSE', label: '辱骂攻击' },
+    { value: 'SPOILER', label: '剧透' },
+    { value: 'OTHER', label: '其他' },
+  ],
   REVIEW_SORT_CREATED: 'createdAt',
   REVIEW_SORT_HOT: 'hot',
 }))

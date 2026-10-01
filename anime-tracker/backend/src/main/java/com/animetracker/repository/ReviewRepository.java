@@ -177,6 +177,13 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     //
     // 现在的形状与 UserRepository 那五条一一对应: 一条计数 + 六条取页, 排序字面写在
     // JPQL 里, 所以**下面每个方法的 Pageable 都不带 Sort**。
+    //
+    // 七个方法的参数表**逐字相同**(keywordPattern / minRating / maxRating / reported),
+    // 这不是巧合: 它们共用同一份 WHERE_ADMIN。少传一个参数的话 Hibernate 在建仓 bean
+    // 时就会报「参数未绑定」—— 那属于"应用根本起不来"那一类, 拦得住, 但也要知道
+    // 是为什么拦住的。
+    //
+    // reported 是**基本类型**: 见 ReviewQueries.FILTER_REPORTED 里那段说明。
 
     /**
      * 匹配的评论条数(管理端). 与六条取页共用同一份 WHERE, 见 {@link ReviewQueries#COUNT_ADMIN}.
@@ -187,42 +194,49 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     @Query(ReviewQueries.COUNT_ADMIN)
     long countAdminReviews(@Param("keywordPattern") String keywordPattern,
                            @Param("minRating") Integer minRating,
-                           @Param("maxRating") Integer maxRating);
+                           @Param("maxRating") Integer maxRating,
+                           @Param("reported") boolean reported);
 
     /** 管理端取页, 默认序: 主键倒序(最新在前). 六条只差 ORDER BY 常量 */
     @Query(ReviewQueries.ADMIN_ID_DESC)
     List<Review> findAdminReviewPageByIdDesc(@Param("keywordPattern") String keywordPattern,
                                              @Param("minRating") Integer minRating,
                                              @Param("maxRating") Integer maxRating,
+                                             @Param("reported") boolean reported,
                                              Pageable pageable);
 
     @Query(ReviewQueries.ADMIN_ID_ASC)
     List<Review> findAdminReviewPageByIdAsc(@Param("keywordPattern") String keywordPattern,
                                             @Param("minRating") Integer minRating,
                                             @Param("maxRating") Integer maxRating,
+                                            @Param("reported") boolean reported,
                                             Pageable pageable);
 
     @Query(ReviewQueries.ADMIN_LIKES_DESC)
     List<Review> findAdminReviewPageByLikesDesc(@Param("keywordPattern") String keywordPattern,
                                                 @Param("minRating") Integer minRating,
                                                 @Param("maxRating") Integer maxRating,
+                                                @Param("reported") boolean reported,
                                                 Pageable pageable);
 
     @Query(ReviewQueries.ADMIN_LIKES_ASC)
     List<Review> findAdminReviewPageByLikesAsc(@Param("keywordPattern") String keywordPattern,
                                                @Param("minRating") Integer minRating,
                                                @Param("maxRating") Integer maxRating,
+                                               @Param("reported") boolean reported,
                                                Pageable pageable);
 
     @Query(ReviewQueries.ADMIN_REPLIES_DESC)
     List<Review> findAdminReviewPageByRepliesDesc(@Param("keywordPattern") String keywordPattern,
                                                   @Param("minRating") Integer minRating,
                                                   @Param("maxRating") Integer maxRating,
+                                                  @Param("reported") boolean reported,
                                                   Pageable pageable);
 
     @Query(ReviewQueries.ADMIN_REPLIES_ASC)
     List<Review> findAdminReviewPageByRepliesAsc(@Param("keywordPattern") String keywordPattern,
                                                  @Param("minRating") Integer minRating,
                                                  @Param("maxRating") Integer maxRating,
+                                                 @Param("reported") boolean reported,
                                                  Pageable pageable);
 }

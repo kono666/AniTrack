@@ -5,6 +5,7 @@ import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.ResetPasswordRequest;
 import com.animetracker.entity.User;
 import com.animetracker.service.AdminService;
+import com.animetracker.service.ReviewReportService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -31,9 +32,11 @@ import java.util.*;
 public class AdminController {
 
     private final AdminService adminService;
+    private final ReviewReportService reviewReportService;
 
-    public AdminController(AdminService adminService) {
+    public AdminController(AdminService adminService, ReviewReportService reviewReportService) {
         this.adminService = adminService;
+        this.reviewReportService = reviewReportService;
     }
 
     /** 仪表盘统计 */
@@ -159,6 +162,7 @@ public class AdminController {
             @CurrentUser User user,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String rating,
+            @RequestParam(required = false) String reported,
             @RequestParam(required = false) String sort,
             @RequestParam(required = false) String order,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码从 1 开始") int page,
@@ -166,7 +170,42 @@ public class AdminController {
             @Max(value = 100, message = "每页最多 100 条") int limit) {
         adminService.checkAdmin(user);
         return ApiResponse.success(
-                adminService.getReviewPage(keyword, rating, sort, order, page, limit));
+                adminService.getReviewPage(keyword, rating, reported, sort, order, page, limit));
+    }
+
+    /**
+     * 某条评论的举报明细.
+     *
+     * <p>与列表分开一条接口, 而不是把明细塞进列表的每一行: 明细要带举报人和补充说明,
+     * 一页 20 行全部带上就是 20 倍的响应体, 而管理员一次只可能展开一行.
+     *
+     * <p>评论不存在 → 404, 不是空列表. 理由见 {@code ReviewReportService.getDetails}.
+     */
+    @GetMapping("/reviews/{reviewId}/reports")
+    public ApiResponse<Map<String, Object>> getReviewReports(
+            @CurrentUser User user,
+            @PathVariable Long reviewId) {
+        adminService.checkAdmin(user);
+        return ApiResponse.success(reviewReportService.getDetails(reviewId));
+    }
+
+    /**
+     * 忽略一条举报. <b>幂等</b>: 已经忽略过再调一次, 同样回 200.
+     *
+     * <p>用 PUT 不用 POST: 与 {@code unlockUser} 同一条理由 —— 它把状态改回一个
+     * **确定值**, 重复执行与执行一次的结果相同.
+     *
+     * <p>这一步不记审计账(与四个破坏性动作不同), 理由写在
+     * {@code ReviewReportService.dismiss} 的注释里.
+     *
+     * @return {@code {status}} —— 处理之后的那个状态, 由服务端给, 不让前端自己猜
+     */
+    @PutMapping("/reports/{reportId}/dismiss")
+    public ApiResponse<Map<String, Object>> dismissReport(
+            @CurrentUser User user,
+            @PathVariable Long reportId) {
+        adminService.checkAdmin(user);
+        return ApiResponse.success("已忽略", reviewReportService.dismiss(user, reportId));
     }
 
     /** 删除评论 */

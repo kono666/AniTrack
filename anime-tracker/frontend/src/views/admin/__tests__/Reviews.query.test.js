@@ -5,6 +5,16 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 vi.mock('../../../api', () => ({
   getAdminReviews: vi.fn(),
   adminDeleteReview: vi.fn(),
+  // 举报那一组: 漏了 REVIEW_REPORT_REASONS 组件在 setup 里就 .map 一个 undefined,
+  // 整页直接抛, 下面每条断言都会变成"找不到元素"
+  getReviewReports: vi.fn(),
+  dismissReport: vi.fn(),
+  REVIEW_REPORT_REASONS: [
+    { value: 'SPAM', label: '垃圾广告' },
+    { value: 'ABUSE', label: '辱骂攻击' },
+    { value: 'SPOILER', label: '剧透' },
+    { value: 'OTHER', label: '其他' },
+  ],
   // 常量也必须在: 这是整体替换, 漏掉的导出在导入侧是 undefined, 而 ref(undefined)
   // 不报错 —— limit 会安静地变成"没有每页条数", 分页页数跟着变成 NaN
   ADMIN_PAGE_SIZES: [20, 50, 100],

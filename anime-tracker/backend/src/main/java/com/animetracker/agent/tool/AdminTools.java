@@ -165,10 +165,15 @@ public class AdminTools implements ToolProvider {
      * 所以消费这两处的提示词与卡片渲染都不用动。
      */
     private Map<String, Object> reviewSample(int limit) {
-        // 四个 null 依次是 keyword / rating / sort / order —— 全给 null 表示
+        // 五个 null 依次是 keyword / rating / reported / sort / order —— 全给 null 表示
         // "不筛 + 后端的默认序(主键倒序, 也就是最新在前)". 刻意不在这里写死 "id"/"desc":
         // 那是 AdminService 的私有常量, 抄一份过来就是同一个约定的第二处定义。
-        Map<String, Object> page = adminService.getReviewPage(null, null, null, null, 1, limit);
+        //
+        // reported 也给 null(而不是 "false"): 那个开关的判据是"字面量 true 才算数",
+        // 于是 null 与 "false" 在这里等价 —— 但 null 更诚实, 它说的是"这个工具没有
+        // 那个筛选维度", 而不是"我把它关掉了"。
+        Map<String, Object> page =
+                adminService.getReviewPage(null, null, null, null, null, 1, limit);
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> rows = (List<Map<String, Object>>) page.get("list");

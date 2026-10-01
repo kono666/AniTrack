@@ -7,6 +7,7 @@ import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.ReviewRepository;
+import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.TrackingRepository;
 import com.animetracker.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -81,7 +82,7 @@ class AdminServiceTest {
         when(passwordEncoder.encode(anyString())).thenReturn(ENCODED_PASSWORD);
         adminService = new AdminService(userRepository, reviewRepository,
                 mock(TrackingRepository.class), mock(AnimeRepository.class),
-                adminActionLogRepository, isolatedInsert, passwordEncoder);
+                adminActionLogRepository, mock(ReviewReportRepository.class), isolatedInsert, passwordEncoder);
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

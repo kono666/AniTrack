@@ -8,6 +8,7 @@ import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.UserRepository;
+import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.TrackingRepository;
 import com.animetracker.util.PageResults;
@@ -126,6 +127,7 @@ public class AdminService {
     private final TrackingRepository trackingRepository;
     private final AnimeRepository animeRepository;
     private final AdminActionLogRepository adminActionLogRepository;
+    private final ReviewReportRepository reviewReportRepository;
     private final IsolatedInsert isolatedInsert;
     private final PasswordEncoder passwordEncoder;
 
@@ -134,6 +136,7 @@ public class AdminService {
                         TrackingRepository trackingRepository,
                         AnimeRepository animeRepository,
                         AdminActionLogRepository adminActionLogRepository,
+                        ReviewReportRepository reviewReportRepository,
                         IsolatedInsert isolatedInsert,
                         PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
@@ -141,6 +144,7 @@ public class AdminService {
         this.trackingRepository = trackingRepository;
         this.animeRepository = animeRepository;
         this.adminActionLogRepository = adminActionLogRepository;
+        this.reviewReportRepository = reviewReportRepository;
         this.isolatedInsert = isolatedInsert;
         this.passwordEncoder = passwordEncoder;
     }
@@ -525,22 +529,30 @@ public class AdminService {
      * —— 改前前端就在渲染 {@code r.replyCount}, 而后端从来没发过这个键, 于是那一项
      * **永不显示**。它不是新功能, 是一件"写了一半"的东西。
      *
-     * @param keyword 关键词, 命中评论正文或作者名; 空白等于不筛
-     * @param rating  档位键 {@code low}/{@code mid}/{@code high}, 其他值等于不筛
-     * @param sort    {@code id}(默认) / {@code likes} / {@code replies}, 其他值等于默认
-     * @param order   {@code asc} / {@code desc}; 不认识或没给时一律 desc(见上面第二条)
+     * <p><b>四、{@code reported} 是三个筛选里唯一一个布尔开关。</b> 它不是"再筛一个字段",
+     * 是**换一个队列看**: 打开之后列表里剩下的正是「有人在等一个答复」的那些评论。
+     * 判据(待处理 = {@code status='PENDING'} 且评论还在)只有一处定义, 在
+     * {@link ReviewQueries#FILTER_REPORTED} 里。
+     *
+     * @param keyword  关键词, 命中评论正文或作者名; 空白等于不筛
+     * @param rating   档位键 {@code low}/{@code mid}/{@code high}, 其他值等于不筛
+     * @param reported {@code true} 表示只看有待处理举报的; 其他值(包括不给)不筛
+     * @param sort     {@code id}(默认) / {@code likes} / {@code replies}, 其他值等于默认
+     * @param order    {@code asc} / {@code desc}; 不认识或没给时一律 desc(见上面第二条)
      */
-    public Map<String, Object> getReviewPage(String keyword, String rating, String sort, String order,
-                                             int page, int limit) {
+    public Map<String, Object> getReviewPage(String keyword, String rating, String reported,
+                                             String sort, String order, int page, int limit) {
         String keywordPattern = keywordPatternOf(keyword);
         RatingBand band = ratingBandOf(rating);
+        boolean reportedOnly = reportedOnlyOf(reported);
 
         int safePage = Math.max(page, 1);
         int safeLimit = limit < 1 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
 
         // count 先算, 理由同 getUserPage: 越界页也要报真实 total, 否则前端的翻页控件
         // 会凭空少几页, 用户从最后一页往回点就回不去了
-        long matched = reviewRepository.countAdminReviews(keywordPattern, band.min(), band.max());
+        long matched = reviewRepository.countAdminReviews(
+                keywordPattern, band.min(), band.max(), reportedOnly);
         int total = (int) Math.min(matched, Integer.MAX_VALUE);
 
         long offset = (long) (safePage - 1) * safeLimit;
@@ -563,23 +575,40 @@ public class AdminService {
         if (SORT_REPLIES.equals(sortKey)) {
             rows = ascending
                     ? reviewRepository.findAdminReviewPageByRepliesAsc(
-                            keywordPattern, band.min(), band.max(), pageable)
+                            keywordPattern, band.min(), band.max(), reportedOnly, pageable)
                     : reviewRepository.findAdminReviewPageByRepliesDesc(
-                            keywordPattern, band.min(), band.max(), pageable);
+                            keywordPattern, band.min(), band.max(), reportedOnly, pageable);
         } else if (SORT_LIKES.equals(sortKey)) {
             rows = ascending
                     ? reviewRepository.findAdminReviewPageByLikesAsc(
-                            keywordPattern, band.min(), band.max(), pageable)
+                            keywordPattern, band.min(), band.max(), reportedOnly, pageable)
                     : reviewRepository.findAdminReviewPageByLikesDesc(
-                            keywordPattern, band.min(), band.max(), pageable);
+                            keywordPattern, band.min(), band.max(), reportedOnly, pageable);
         } else {
             rows = ascending
                     ? reviewRepository.findAdminReviewPageByIdAsc(
-                            keywordPattern, band.min(), band.max(), pageable)
+                            keywordPattern, band.min(), band.max(), reportedOnly, pageable)
                     : reviewRepository.findAdminReviewPageByIdDesc(
-                            keywordPattern, band.min(), band.max(), pageable);
+                            keywordPattern, band.min(), band.max(), reportedOnly, pageable);
         }
         return PageResults.of(toAdminReviewRows(rows), total, safePage);
+    }
+
+    /**
+     * {@code reported=true}(不区分大小写、忽略首尾空白)才算"只看有待处理举报的".
+     *
+     * <p>其余一切值 —— 包括 {@code null}、空串、{@code "false"}、{@code "yes"}、
+     * {@code "1"} —— 一律当作**不筛**, 不返回 400。这条与上面 {@link #ratingBandOf}
+     * 是同一条 doctrine(读路径的取值写错只是把结果集放宽一点), 也与前端"默认值不写进
+     * URL"的规矩对齐: 那一侧把开关关掉时是把这个键**删掉**, 而不是写一个 {@code false}
+     * 进来 —— 于是 {@code null} 才是常态, 它必须等于"不筛"。
+     *
+     * <p>那为什么不顺手也认 {@code "1"} / {@code "yes"}: 每多认一个写法, 「什么算 true」
+     * 就多一处定义, 而这一处的收益是零 —— 调用方只有本仓的前端, 它传的就是字面量
+     * {@code "true"}。
+     */
+    private static boolean reportedOnlyOf(String reported) {
+        return reported != null && "true".equalsIgnoreCase(reported.trim());
     }
 
     /**
@@ -620,11 +649,18 @@ public class AdminService {
      * {@code anime} 表的)。查不到就给 null, 由前端退化成「番剧 #656083」——
      * 编一个假名字比空着更糟, 而"这个 id 对应的番剧还没进本地库"本身是**真信息**。
      *
-     * <p>空页提前返回, 于是那一次批量查询不会为一个空列表白跑一遍 —— 但**它并不是
+     * <p>空页提前返回, 于是那两次批量查询不会为一个空列表白跑一遍 —— 但**它并不是
      * 越界页的那道防线**: {@link #getReviewPage} 里 {@code offset >= total} 的提前返回
      * 排在取页之前, 越界页根本走不到这里(那里只发一条 count). 这个守卫够得着的是
      * 另一种情况: count 那一刻 offset 还够、真去取页时那一页已被别人删空(并发下的
      * 窗口), 单线程测不到. 两处都留着, 一处省一次主键扫描, 一处是并发下的第二道.
+     *
+     * <p><b>举报那三样也是一次批量聚合, 而且照发不误。</b>
+     * {@code findPendingSummaries} 按 {@code review_id IN (...)} 一次问完这一页
+     * (走 {@code uk_review_report_review_reporter} 的最左前缀), 不是逐条 count.
+     * 与番剧名不同的是: 它**不按内容分支** —— 这一页一条举报都没有时那条查询照样发.
+     * 于是「管理端评论列表一页要发几条语句」是一个与数据无关的常数, 语句计数用例
+     * 才能钉住它(照数据分支的话, 用例得先造出举报才看得见那一条).
      */
     private List<Map<String, Object>> toAdminReviewRows(List<Review> reviews) {
         if (reviews.isEmpty()) {
@@ -638,9 +674,21 @@ public class AdminService {
         Map<Integer, Anime> byId = animeRepository.findAllById(subjectIds).stream()
                 .collect(Collectors.toMap(Anime::getId, a -> a, (a, b) -> a));
 
+        List<Long> reviewIds = reviews.stream().map(Review::getId).collect(Collectors.toList());
+        // 投影是 {reviewId, reason, createdAt}, 按 rr.id DESC 排 => 同一条评论的第一行
+        // 就是最近那条举报. 计数在 Java 侧数一下即可(一页几十行, 不差这一次哈希).
+        Map<Long, Object[]> latestReport = new HashMap<>();
+        Map<Long, Integer> reportCounts = new HashMap<>();
+        for (Object[] row : reviewReportRepository.findPendingSummaries(reviewIds)) {
+            Long reviewId = (Long) row[0];
+            latestReport.putIfAbsent(reviewId, row);
+            reportCounts.merge(reviewId, 1, Integer::sum);
+        }
+
         List<Map<String, Object>> result = new ArrayList<>(reviews.size());
         for (Review r : reviews) {
             Anime anime = byId.get(r.getSubjectId());
+            Object[] report = latestReport.get(r.getId());
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("id", r.getId());
             map.put("subjectId", r.getSubjectId());
@@ -654,6 +702,13 @@ public class AdminService {
             // 不额外发查询(与用户侧评论列表那条不同 —— 那里每行都要问一次"我赞过没有").
             map.put("likeCount", r.getLikeCount());
             map.put("replyCount", r.getReplyCount());
+            // 举报三样. **没有举报时是 0 / null / null, 不是缺键** —— 与 likeCount 那种
+            // "老后端不发"的情况不同: 这三个是管理端自己的聚合, 不存在"对面版本旧"这回事,
+            // 而缺键会让前端的 `row.reportCount > 0` 走 undefined 分支, 看着与 0 一样.
+            // 计数只算 PENDING(被忽略掉的举报不该继续在列表上留一个待办标记).
+            map.put("reportCount", reportCounts.getOrDefault(r.getId(), 0));
+            map.put("latestReason", report == null ? null : report[1]);
+            map.put("latestReportAt", report == null ? null : report[2]);
             map.put("createdAt", r.getCreatedAt());
             result.add(map);
         }
