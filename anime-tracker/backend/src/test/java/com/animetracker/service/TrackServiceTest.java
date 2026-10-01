@@ -265,6 +265,16 @@ class TrackServiceTest {
     }
 
     /**
+     * 上游没公布总集数(声明值 0)、但本地真收齐了 n 条的那部番 —— 这是**绝大多数**条目的样子.
+     *
+     * <p>2026-10-02 实测: 库里 29379 条番有 29322 条的 total_episodes 是 0. 所以这不是边界情况,
+     * 而是常态; 前端拿声明值当分母时进度条整根不画, 就是被这个数坑的.
+     */
+    private static Anime animeWithLocalCount(int id, Integer episodeTotal) {
+        return Anime.builder().id(id).title("t" + id).totalEpisodes(0).episodeTotal(episodeTotal).build();
+    }
+
+    /**
      * 最近一次调用真的传给仓储的 (status, pageable).
      *
      * <p>用 atLeastOnce + getValue(拿最后一个)而不是 verify(默认 1 次): 夹取那条用例在一个
@@ -345,6 +355,43 @@ class TrackServiceTest {
         // 把 null 当 0 的话 progress >= 0 恒真, 所有没缓存过的番会一起从继续看里消失
         assertThat(result).hasSize(1);
         assertThat(result.get(0)).doesNotContainKey("totalEpisodes");
+    }
+
+    @Test
+    @DisplayName("继续看: 行里同时带出声明值与本地收齐的条数, 不用同一个键混着表示")
+    void continueWatchingCarriesBothEpisodeCounts() {
+        when(trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(List.of(watching(100, 5), watching(101, 5)));
+        when(animeRepository.findAllById(any())).thenReturn(List.of(
+                animeWithLocalCount(100, 12), animeWithTotal(101, 12)));
+
+        List<Map<String, Object>> result = trackService.getContinueWatching(user(), null);
+
+        // 两个数不是一个字段的两种写法, 是两件事: 声明值 = 官方说有这么多集,
+        // episodeTotal = 我们这边真收齐了这么多条. 前端"声明优先、缺了才用本地"的顺序
+        // 就建在两个键同时在场这一点上 —— 只发一个的话它无从选.
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0)).containsEntry("totalEpisodes", 0).containsEntry("episodeTotal", 12);
+        assertThat(result.get(1)).containsEntry("totalEpisodes", 12);
+        // 没完整取回过剧集就是 null(不是 0 —— 0 的意思是"取回来了, 但一条正片都没有", 见实体上那段)
+        assertThat(result.get(1).get("episodeTotal")).as("没取过就是 null").isNull();
+    }
+
+    @Test
+    @DisplayName("继续看: 过滤只看声明值 —— 本地收齐的条数不作为「看完了」的依据")
+    void continueWatchingDoesNotUseTheLocalEpisodeCountForFiltering() {
+        when(trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(List.of(watching(100, 16)));
+        when(animeRepository.findAllById(any())).thenReturn(List.of(animeWithLocalCount(100, 8)));
+
+        List<Map<String, Object>> result = trackService.getContinueWatching(user(), null);
+
+        // 声明值 0 → isFinished 为假 → 留着. 拿本地条数当上限的话 16 >= 8 会被滤掉, 而
+        // 「连载中 + 手输进度」正是这一行的常态.
+        //
+        // ⚠️ 这条守着 2026-10-02 的拍板: 本次只修**显示**, 过滤口径一字不改. 若哪天有人
+        //    顺手把 isFinished 也切到 episodeTotal 上, 用户的继续看会当场缩水, 这里会红.
+        assertThat(result).extracting(m -> m.get("subjectId")).containsExactly(100);
     }
 
     @Test

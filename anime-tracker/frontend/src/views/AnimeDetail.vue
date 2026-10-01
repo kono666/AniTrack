@@ -72,7 +72,7 @@
              没动的一个字都不带 —— 否则本地那份副本一旧, 没碰过的字段就会被静默回退 -->
         <div class="track-input-row">
           <label>直接改进度</label><input type="number" v-model.number="trackForm.progress" min="0" :max="maxProgress" @input="markDirty('progress')" />
-          <span>/ {{ subject.totalEpisodes || '?' }}</span>
+          <span>/ {{ totalEpisodesHere || '?' }}</span>
           <label style="margin-left:16px;">评分</label><input type="number" v-model.number="trackForm.score" min="1" max="10" @input="markDirty('score')" />
         </div>
         <button class="d-btn-save" @click="saveTrack">保存</button>
@@ -395,6 +395,7 @@ import {
   REVIEW_SORT_CREATED, REVIEW_SORT_HOT
 } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { effectiveEpisodes } from '../utils/episodes'
 import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
 import SectionHeader from '../components/SectionHeader.vue'
@@ -510,7 +511,23 @@ const heatTotal = computed(() => heat.value
   : 0)
 const error = ref('')
 
-const maxProgress = computed(() => subject.value?.totalEpisodes || 999)
+/**
+ * 这一页上「这部番一共多少集」的答案, 用来给进度封顶.
+ *
+ * 分母的第二项是**本页已经取回来的剧集条数** —— 就是下面那一排瓷砖的个数. 为什么要它:
+ * `subject.totalEpisodes` 是条目接口的声明值, 而 Bangumi 对绝大多数条目填的就是 0
+ * (实测 29379 条里 29322 条), 于是改前 `totalEpisodes || 999` 一路退到 999,
+ * **封顶整个失效** —— 一部 12 集的番能把进度存成 18.
+ *
+ * 和 Profile 那一页不同(那边刻意只用声明值, 理由写在 Profile 的 totalOf 上), 这里敢用
+ * 本地条数是因为**这一页每次打开都会回源刷新剧集列表**, 拿到的不是过期数据。
+ * 列表还没回来时它是 0 -> 不封顶, 但那一刻用户也还没看到瓷砖。
+ */
+const totalEpisodesHere = computed(() =>
+  effectiveEpisodes(subject.value?.totalEpisodes, episodes.value.length)
+)
+
+const maxProgress = computed(() => totalEpisodesHere.value || 999)
 
 /** 提交前把进度夹回合法范围.
  *
@@ -518,11 +535,14 @@ const maxProgress = computed(() => subject.value?.totalEpisodes || 999)
  *  但用户拿到的只是一句「保存失败」—— 输入框里那个 -5 还在, 看不出哪里不对;
  *  打 999 则更糟: 后端收下了, 于是进度变成 999/12, 进度条还是 100%,
  *  数字却永远停在那儿. 所以负数按 0 处理(它表达的是"记不清了", 不是"倒着看"),
- *  超出总集数按总集数封顶. 非数字(输入框清空时 v-model.number 给的是空串)也归 0. */
+ *  超出总集数按总集数封顶. 非数字(输入框清空时 v-model.number 给的是空串)也归 0.
+ *
+ *  上限取的是 {@link totalEpisodesHere} —— 声明值没有时用本页已取回的剧集条数,
+ *  不是宁可退到 999. 改前那一步退让就是"12 集能存 18"的全部原因. */
 function clampProgress(value) {
   const n = Number(value)
   if (!Number.isFinite(n) || n < 0) return 0
-  const total = subject.value?.totalEpisodes
+  const total = totalEpisodesHere.value
   return total ? Math.min(Math.floor(n), total) : Math.floor(n)
 }
 

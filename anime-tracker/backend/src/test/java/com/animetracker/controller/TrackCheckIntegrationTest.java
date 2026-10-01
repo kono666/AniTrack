@@ -186,7 +186,7 @@ class TrackCheckIntegrationTest {
      * (前端要靠这个区分「这部番没有总集数」与「服务端没发这个字段」). 两个分支都钉住.
      */
     @Test
-    @DisplayName("追番行的形状: 本地没缓存这部番是 8 个键, 缓存了才是 11 个")
+    @DisplayName("追番行的形状: 本地没缓存这部番是 8 个键, 缓存了才是 12 个")
     void trackingRowCarriesTheWholeShapeInBothBranches() throws Exception {
         String token = registerAndLogin();
 
@@ -194,17 +194,22 @@ class TrackCheckIntegrationTest {
         assertThat(keysOf(rowFor(trackingList(token), SUBJECT_NOT_CACHED))).containsOnly(
                 "id", "subjectId", "status", "progress", "score", "notes", "createdAt", "updatedAt");
 
-        // anime.id 就是 Bangumi 的 subject id, 由同步逻辑写入 —— 这里手工造一行来走另一支
-        jdbc.update("INSERT INTO anime (id, title, title_cn, total_episodes) VALUES (?, ?, ?, ?)",
-                SUBJECT_CACHED, "original title", "中文名", 12);
+        // anime.id 就是 Bangumi 的 subject id, 由同步逻辑写入 —— 这里手工造一行来走另一支.
+        // episode_total 特意取一个与 total_episodes **不等**的值: 这两个数在前端是两个不同的
+        // 东西(声明值 vs 本地收齐的条数), 取相同值的话"发的是哪一个"就验不出来了.
+        jdbc.update("INSERT INTO anime (id, title, title_cn, total_episodes, episode_total) VALUES (?, ?, ?, ?, ?)",
+                SUBJECT_CACHED, "original title", "中文名", 12, 9);
         toggle(token, SUBJECT_CACHED, 1);
 
         JsonNode withAnime = rowFor(trackingList(token), SUBJECT_CACHED);
         assertThat(keysOf(withAnime)).containsOnly(
                 "id", "subjectId", "status", "progress", "score", "notes", "createdAt", "updatedAt",
-                "animeTitle", "animeCover", "totalEpisodes");
+                "animeTitle", "animeCover", "totalEpisodes", "episodeTotal");
         assertThat(withAnime.path("animeTitle").asText()).as("titleCn 优先").isEqualTo("中文名");
         assertThat(withAnime.path("totalEpisodes").asInt()).isEqualTo(12);
+        // 两个键都得真的带上值 —— 只断键存在的话, 发一个恒 null 的 episodeTotal 也会绿,
+        // 而前端拿它当分母时 null 与 0 一样是"不知道", 进度条仍然不画
+        assertThat(withAnime.path("episodeTotal").asInt()).isEqualTo(9);
     }
 
     // ========== 边界 ==========
