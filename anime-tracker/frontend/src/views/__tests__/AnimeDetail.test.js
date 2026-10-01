@@ -86,20 +86,33 @@ function trackingPayload(id) {
   return { data: { code: 200, data: { id, tracked: true, status: 'watching', progress: 3, score: 8 } } }
 }
 
+/**
+ * 这一页会调的接口给一套默认值.
+ *
+ * load() 里是一个 Promise.all: 任何一个返回 undefined 都会在解构 .data 时抛,
+ * 整页落到错误态 —— 那样后面的断言全都会变成"找不到元素".
+ */
+function stubApis() {
+  getAnimeDetail.mockResolvedValue({ data: { code: 200, data: SUBJECT } })
+  getEpisodes.mockResolvedValue({ data: { code: 200, data: [] } })
+  getRatingStats.mockResolvedValue({
+    data: { code: 200, data: { average: 0, count: 0, distribution: Array(10).fill(0) } },
+  })
+  getSubjectReviews.mockResolvedValue({ data: { code: 200, data: [] } })
+  getMyReview.mockResolvedValue({ data: { code: 200, data: { exists: false } } })
+  getTrackingStatus.mockResolvedValue(trackingPayload(11))
+}
+
+/** 那一排状态按钮里的某一个(顺序与 statusOptions 一致) */
+function statusButton(wrapper, label) {
+  return wrapper.findAll('.track-status-btn').find(b => b.text() === label)
+}
+
 describe('追番进度的封顶', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.clearAllMocks()
-    // load() 里是一个 Promise.all: 任何一个返回 undefined 都会在解构 .data 时抛,
-    // 整页落到错误态 —— 那样后面的断言全都会变成"找不到元素"
-    getAnimeDetail.mockResolvedValue({ data: { code: 200, data: SUBJECT } })
-    getEpisodes.mockResolvedValue({ data: { code: 200, data: [] } })
-    getRatingStats.mockResolvedValue({
-      data: { code: 200, data: { average: 0, count: 0, distribution: Array(10).fill(0) } },
-    })
-    getSubjectReviews.mockResolvedValue({ data: { code: 200, data: [] } })
-    getMyReview.mockResolvedValue({ data: { code: 200, data: { exists: false } } })
-    getTrackingStatus.mockResolvedValue(trackingPayload(11))
+    stubApis()
   })
 
   it('输入超过总集数时按总集数提交', async () => {
@@ -169,5 +182,90 @@ describe('追番进度的封顶', () => {
     await flushPromises()
 
     expect(saveTracking).toHaveBeenCalledWith(expect.objectContaining({ progress: 999 }))
+  })
+})
+
+/**
+ * 只提交动过的字段, 以及状态按钮的提交时机.
+ *
+ * 改前这一条 bar 上是三套规矩: 剧集格子立刻落库、状态按钮只改本地要再按「保存」、
+ * 而「保存」把 status + progress + score **整行**发回去. 于是任何一处副本旧了,
+ * 没碰过的字段就被写回旧值 —— 而界面上每一步都显示成功.
+ *
+ * 断言写精确对象而不是 objectContaining: 多带一个字段正是这个 bug 本身.
+ */
+describe('详情页只提交动过的字段', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    stubApis()
+  })
+
+  it('点状态按钮立刻落库, 而且只发 status', async () => {
+    const wrapper = await mountDetail()
+    saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 11 } } })
+
+    await statusButton(wrapper, '看过').trigger('click')
+    await flushPromises()
+
+    // 改前这一步一个字都不发, 得再按一次「保存」才作数 —— 而按钮点完就高亮了
+    expect(saveTracking).toHaveBeenCalledWith({ subjectId: 7, status: 'watched' })
+  })
+
+  it('状态落库失败时高亮退回原来那个, 不留一个"看着已生效"的按钮', async () => {
+    const wrapper = await mountDetail()
+    saveTracking.mockRejectedValue(new Error('boom'))
+
+    await statusButton(wrapper, '看过').trigger('click')
+    await flushPromises()
+
+    expect(statusButton(wrapper, '看过').classes()).not.toContain('active')
+    expect(statusButton(wrapper, '在看').classes()).toContain('active')
+  })
+
+  it('保存只发动过的进度, 不带 status / score', async () => {
+    const wrapper = await mountDetail()
+    saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 11 } } })
+
+    await wrapper.find('.track-input-row input[type="number"]').setValue(7)
+    await wrapper.find('.d-btn-save').trigger('click')
+    await flushPromises()
+
+    expect(saveTracking).toHaveBeenCalledWith({ subjectId: 7, progress: 7 })
+  })
+
+  it('只动了评分时, 进度一个字都不发', async () => {
+    const wrapper = await mountDetail()
+    saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 11 } } })
+
+    const score = wrapper.findAll('.track-input-row input[type="number"]')[1]
+    await score.setValue(6)
+    await wrapper.find('.d-btn-save').trigger('click')
+    await flushPromises()
+
+    expect(saveTracking).toHaveBeenCalledWith({ subjectId: 7, score: 6 })
+  })
+
+  it('什么都没改就点保存: 不发请求(服务端那边三个字段全可缺席, 空请求只会凭空建一条)', async () => {
+    const wrapper = await mountDetail()
+
+    await wrapper.find('.d-btn-save').trigger('click')
+    await flushPromises()
+
+    expect(saveTracking).not.toHaveBeenCalled()
+  })
+
+  it('「+ 追番」只发 subjectId + status, 不把进度和评分写成 0', async () => {
+    getTrackingStatus.mockResolvedValue({ data: { code: 200, data: { tracked: false } } })
+    const wrapper = await mountDetail()
+    saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 11, status: 'watching', progress: 0 } } })
+
+    await wrapper.find('.d-btn-track').trigger('click')
+    await flushPromises()
+
+    // 改前这里先把 trackForm 清成 progress:0 / score:0 再整行走 saveTrack ——
+    // 于是"服务端已经有行、本地还没拿到 id"的那一小段时间里点它, 会把打卡
+    // 刚推上去的进度清零
+    expect(saveTracking).toHaveBeenCalledWith({ subjectId: 7, status: 'watching' })
   })
 })

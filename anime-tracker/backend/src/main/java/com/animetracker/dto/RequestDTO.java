@@ -105,7 +105,18 @@ public class RequestDTO {
         @NotNull(message = "缺少番剧 id")
         private Integer subjectId;
 
-        @NotBlank(message = "缺少追番状态")
+        /**
+         * 追番状态. <b>可以缺席</b> —— 缺席的意思是「别碰这个字段」, 不是「清空」.
+         *
+         * <p>本类四个字段里只有 subjectId 是必填的, 其余三个缺席都等于保持原值
+         * (见 TrackService#applyAndSave)。改前 status 上是 @NotBlank, 于是
+         * 「只把进度改成 5」这件事在协议层面就做不到 —— 每个调用方都只能先把整行读回来、
+         * 改一个字段、再把整行发回去。谁手里那份副本一旧(个人页放了一会儿、开了两个标签页),
+         * 就会把它没碰过的字段静默回退。整行覆盖是那个必填逼出来的, 不是谁偷懒。
+         *
+         * <p>@Pattern 对 null 放行、对空串不放行, 这个差别正好是要的: 不传键 = 不动,
+         * 传了键却给了空值 = 调用方有 bug, 照样拒。
+         */
         @Pattern(regexp = STATUS_REGEX, message = "追番状态不在允许的取值里")
         private String status;
 

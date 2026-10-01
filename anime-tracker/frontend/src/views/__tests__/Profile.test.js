@@ -61,18 +61,35 @@ async function mountProfile() {
   return wrapper
 }
 
+/**
+ * 这一页会调的接口给一套默认值.
+ *
+ * vi.mock('../../api', ...) 是**整体替换**, 没给实现的 mock 返回 undefined,
+ * 而 loadProfile 里是解构 .data —— 当场抛, 整页落到错误态, 后面所有断言都会变成
+ * "找不到元素". 所以每个 describe 的 beforeEach 都得先铺这一层.
+ */
+function stubApis() {
+  getTrackingList.mockResolvedValue({ data: { code: 200, data: TRACKINGS.map(t => ({ ...t })) } })
+  getOverallStats.mockResolvedValue({ data: { code: 200, data: { totalAnime: 6, totalEpisodes: 30, totalReviews: 2, avgScore: 7.5, completed: 1 } } })
+  saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 1 } } })
+  // 通知那一块默认给空 —— 那几个用例测的是追番统计, 不关心它.
+  // 不给也能跑(那一块的失败自己咽掉了, 只显示"通知暂时拉不到"), 但给空更接近
+  // 真实情况: 那些用例的断言是"整页正常", 而一个必然失败的附带区块混在里面,
+  // 会把"整页正常"这件事的成色说糊
+  getNotifications.mockResolvedValue({ data: { code: 200, data: { list: [], total: 0 } } })
+}
+
+/** 按标题取那一行的状态下拉 */
+function statusSelectOf(wrapper, title) {
+  const card = wrapper.findAll('.p-card').find(c => c.text().includes(title))
+  return card.find('.pca-select')
+}
+
 describe('个人页的统计口径与 +1 封顶', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.clearAllMocks()
-    getTrackingList.mockResolvedValue({ data: { code: 200, data: TRACKINGS.map(t => ({ ...t })) } })
-    getOverallStats.mockResolvedValue({ data: { code: 200, data: { totalAnime: 6, totalEpisodes: 30, totalReviews: 2, avgScore: 7.5, completed: 1 } } })
-    saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 1 } } })
-    // 通知那一块默认给空 —— 这几个用例测的是追番统计, 不关心它.
-    // 不给也能跑(那一块的失败自己咽掉了, 只显示"通知暂时拉不到"), 但给空更接近
-    // 真实情况: 这几条用例的断言是"整页正常", 而一个必然失败的附带区块混在里面,
-    // 会把"整页正常"这件事的成色说糊
-    getNotifications.mockResolvedValue({ data: { code: 200, data: { list: [], total: 0 } } })
+    stubApis()
   })
 
   it('「在看」按 status=watching 统计, 与筛选栏同一口径', async () => {
@@ -119,5 +136,48 @@ describe('个人页的统计口径与 +1 封顶', () => {
     await plusOneOf(wrapper, '未知集数').trigger('click')
     await flushPromises()
     expect(saveTracking).toHaveBeenCalledWith(expect.objectContaining({ progress: 100 }))
+  })
+})
+
+/**
+ * 改一个字段, 就只发一个字段.
+ *
+ * 改前这两处都是把**整行**发回去(含这一页进来时拉到的 progress / score).
+ * 于是"本地那份副本"只要旧了一点点 —— 页面开着放了一会儿、去详情页打过卡再切回来、
+ * 开了两个标签页 —— 改状态就会把进度写回旧值, 而界面上两处都显示成功.
+ *
+ * 断言写的是**精确对象**而不是 objectContaining: 多带一个字段正是这个 bug 本身,
+ * 用 objectContaining 的话它永远绿.
+ */
+describe('个人页只提交动过的那个字段', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    stubApis()
+  })
+
+  it('+1 只发 progress, 不带 status / score', async () => {
+    const wrapper = await mountProfile()
+    await plusOneOf(wrapper, 'A').trigger('click')
+    await flushPromises()
+
+    expect(saveTracking).toHaveBeenCalledWith({ subjectId: 101, progress: 4 })
+  })
+
+  it('改状态只发 status, 不把本地那份进度一起发回去', async () => {
+    const wrapper = await mountProfile()
+    await statusSelectOf(wrapper, 'A').setValue('watched')
+    await flushPromises()
+
+    expect(saveTracking).toHaveBeenCalledWith({ subjectId: 101, status: 'watched' })
+  })
+
+  it('改状态成功之后卡片上的徽章跟着变', async () => {
+    const wrapper = await mountProfile()
+    await statusSelectOf(wrapper, 'A').setValue('watched')
+    await flushPromises()
+
+    const card = wrapper.findAll('.p-card').find(c => c.text().includes('A'))
+    expect(card.find('.pc-status-badge').text()).toBe('看过')
   })
 })

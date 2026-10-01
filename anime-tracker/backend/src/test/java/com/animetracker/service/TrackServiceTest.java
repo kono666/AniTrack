@@ -104,6 +104,70 @@ class TrackServiceTest {
         assertThat(saved.getProgress()).isEqualTo(5);
     }
 
+    // ========== 局部更新: 没传的字段一律不动 ==========
+    //
+    // 这一组的存在理由: 接口改前是「整行覆盖」, 每个调用方都只能把整行读回来、
+    // 改一个字段、再整行发回去。谁手里那份副本一旧, 它没碰过的字段就被静默回退 ——
+    // 个人页把状态从「在看」改成「看过」, 顺带把进度从 8 打回 3, 而两处都显示成功。
+    // 下面三条把「缺席 = 保持原值」这件事在服务层钉死, 光有一侧(前端只发改动字段)
+    // 是不够的: 服务端只要还在无条件写, 别的调用方照样能把字段覆盖掉。
+
+    /** 只带指定字段的请求. 用 setter 而不是 req(...) —— 那三个字段现在「不设」本身就是语义 */
+    private static TrackRequest partial(int subjectId) {
+        TrackRequest req = new TrackRequest();
+        req.setSubjectId(subjectId);
+        return req;
+    }
+
+    @Test
+    @DisplayName("只发 status 时进度一个字都不动")
+    void keepsTheProgressWhenTheRequestOmitsIt() {
+        AnimeTracking existing = row(7L, 100, "watching");
+        existing.setProgress(8);
+        when(trackingRepository.findByUserAndSubjectId(any(), any()))
+                .thenReturn(Optional.of(existing));
+
+        TrackRequest req = partial(100);
+        req.setStatus("watched");
+
+        AnimeTracking saved = trackService.saveTracking(user(), req);
+
+        assertThat(saved.getStatus()).isEqualTo("watched");
+        assertThat(saved.getProgress()).as("只改状态不该把进度写回旧值, 更不该清零").isEqualTo(8);
+    }
+
+    @Test
+    @DisplayName("只发 progress 时状态保持原值, 不会被改成默认的「想看」")
+    void keepsTheExistingStatusWhenTheRequestOmitsIt() {
+        AnimeTracking existing = row(7L, 100, "on_hold");
+        existing.setProgress(3);
+        when(trackingRepository.findByUserAndSubjectId(any(), any()))
+                .thenReturn(Optional.of(existing));
+
+        TrackRequest req = partial(100);
+        req.setProgress(9);
+
+        AnimeTracking saved = trackService.saveTracking(user(), req);
+
+        assertThat(saved.getStatus()).as("没传 status 不等于改成默认值").isEqualTo("on_hold");
+        assertThat(saved.getProgress()).isEqualTo(9);
+    }
+
+    @Test
+    @DisplayName("新建且没传 status 时兜一个默认值 —— 库里那一列是 NOT NULL, 漏了就是插入时 500")
+    void defaultsTheStatusWhenCreatingARowWithoutOne() {
+        when(trackingRepository.findByUserAndSubjectId(any(), any())).thenReturn(Optional.empty());
+
+        TrackRequest req = partial(100);
+        req.setScore(9);
+
+        AnimeTracking saved = trackService.saveTracking(user(), req);
+
+        assertThat(saved.getStatus()).isEqualTo("want_to_watch");
+        assertThat(saved.getScore()).isEqualTo(9);
+        assertThat(saved.getProgress()).as("没传进度就是 0, 也就是实体上的默认值").isZero();
+    }
+
     @Test
     @DisplayName("并发落败: 插入撞了唯一约束, 就回头改对手那行, 而不是把 500 抛给用户")
     void fallsBackToUpdatingTheWinnersRowOnConflict() {

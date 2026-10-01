@@ -64,14 +64,20 @@ public class TrackingTools implements ToolProvider {
                         + "调用前必须先用 search_anime 确认是哪一部作品，同名番剧很常见，不要凭猜测传 id。")
                 .access(Access.USER)
                 .intParam("subjectId", "番剧 id，必须来自 search_anime 等工具的返回结果", true)
-                .enumParam("status", "追番状态", true, STATUSES.toArray(String[]::new))
+                .enumParam("status", "追番状态。不填则保持原值；这部番还没进过追番列表时不填按「想看」建一条",
+                        false, STATUSES.toArray(String[]::new))
                 .intParam("progress", "已看到第几集。不填则保持原值", false)
-                .intParam("score", "个人评分 1-10。不填则不评分", false)
+                .intParam("score", "个人评分 1-10。不填则保持原值，要清掉已打的评分才填 0", false)
                 .stringParam("notes", "个人备注。不填则保持原值", false)
                 .executor((call, user) -> {
                     requireLogin(user);
-                    String status = call.str("status", "");
-                    if (!STATUSES.contains(status)) {
+                    // 缺席 = 别碰这个字段, 所以默认值只能是 null —— 不能拿 "" 当缺席的替身:
+                    // 传了键就得是个合法值, 空串在 DTO 那边会被 @Pattern 拒掉.
+                    // status 改前是必填, 于是「把进度改成 5」这个动作一定会顺带替你决定一次状态,
+                    // 助手只能按自己的理解挑一个(常挑 watching), 用户看到的是"我就改了个进度,
+                    // 它怎么自己变成在看了".
+                    String status = call.str("status", null);
+                    if (status != null && !STATUSES.contains(status)) {
                         throw new IllegalArgumentException(
                                 "status 只能是 " + STATUSES + " 之一，收到的是「" + status + "」");
                     }

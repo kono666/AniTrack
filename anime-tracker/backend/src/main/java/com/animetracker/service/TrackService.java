@@ -14,6 +14,14 @@ import java.util.*;
 @Service
 public class TrackService {
 
+    /**
+     * 「新建一条追番记录、但调用方没说它是什么状态」时落的值.
+     *
+     * <p>写在这里而不是写进 {@link TrackRequest}, 是因为这条规则只在**建行**这一刻成立:
+     * 更新时缺席的 status 是「保持原值」, 一个默认值表达不了那件事。
+     */
+    private static final String DEFAULT_STATUS = "want_to_watch";
+
     private final TrackingRepository trackingRepository;
     private final AnimeRepository animeRepository;
     private final IsolatedInsert isolatedInsert;
@@ -73,14 +81,33 @@ public class TrackService {
     }
 
     /**
-     * 把请求字段落到实体上并落库.
+     * 把请求字段落到实体上并落库. <b>这是一个局部更新: 没传的字段一律不动.</b>
      *
-     * 用 saveAndFlush 而不是 save: 三个实体的主键都是 IDENTITY, 现在 save 也会立刻发
+     * <p>四个字段里 status / progress / score / notes 缺席都等于「别碰它」,
+     * 只有 status 在**新建**那一行上有例外(取 {@link #DEFAULT_STATUS}, 因为那一列 NOT NULL)。
+     * 于是「只把进度改成 5」可以真的只发 {@code {subjectId, progress}} —— 不用先把整行读回来
+     * 改一个字段再整行发回去.
+     *
+     * <p><b>为什么这件事重要</b>: 整行覆盖的写法下, 调用方手里那份副本一旧, 它没碰过的字段
+     * 就会被静默回退 —— 个人页把状态从「在看」改成「看过」, 顺带把进度从 8 打回 3,
+     * 而界面上两处都显示成功. 唯一能防住它的办法是别把没改的字段发上来.
+     *
+     * <p><b>怎么清空</b>: 想清掉评分就发 0(它过了 @Min(0)), 想清掉备注就发空串(null 是
+     * 「不动」, 发 null 清不掉). 这一条写在 DTO 上.
+     *
+     * <p>用 saveAndFlush 而不是 save: 三个实体的主键都是 IDENTITY, 现在 save 也会立刻发
      * INSERT, 但这是自增主键带来的巧合. saveAndFlush 把 flush 钉死在这次调用里,
      * 约束冲突必定在 try 块内抛出, 换个主键策略也不会悄悄失效.
      */
     private AnimeTracking applyAndSave(AnimeTracking track, TrackRequest req) {
-        track.setStatus(req.getStatus());
+        // status 缺席 = 别碰它(更新时)/ 取默认(新建时)。两种都要在这里兜住:
+        // 库里那一列是 NOT NULL, 新建那条路漏了这个分支就是插入时 500。
+        // 只有新建的那一行 getStatus() 会是 null —— 更新时读回来的行必然已经带着状态。
+        if (req.getStatus() != null) {
+            track.setStatus(req.getStatus());
+        } else if (track.getStatus() == null) {
+            track.setStatus(DEFAULT_STATUS);
+        }
         if (req.getProgress() != null) track.setProgress(req.getProgress());
         if (req.getScore() != null) track.setScore(req.getScore());
         if (req.getNotes() != null) track.setNotes(req.getNotes());

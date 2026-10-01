@@ -365,18 +365,26 @@ function atLastEpisode(item) {
   return !!item.totalEpisodes && (item.progress || 0) >= item.totalEpisodes
 }
 
+/**
+ * 改状态: **只发 status**.
+ *
+ * 改前这里把整行发回去(含本地那份 progress 与 score), 而"本地那份"是这个页面
+ * 进来时拉的 —— 页面放一会儿、或者去详情页打过卡再切回来, 进度就被这一次改状态
+ * 悄悄写回旧值, 而界面上两处都显示成功. 服务端现在是局部更新, 没动的字段不该发.
+ */
 async function updateStatus(item, newStatus) {
   try {
-    await saveTracking({ subjectId: item.subjectId, status: newStatus, progress: item.progress || 0, score: item.score || 0 })
+    await saveTracking({ subjectId: item.subjectId, status: newStatus })
     item.status = newStatus
     toast('已更新', 'success')
   } catch (e) { toast('更新失败', 'error') }
 }
 
+/** 「+1」: 只发 progress. field 现在是载荷的键名 —— 改前它是个传进来没人用的死参数 */
 async function quickUpdate(item, field, val) {
   try {
-    await saveTracking({ subjectId: item.subjectId, status: item.status, progress: val, score: item.score || 0 })
-    item.progress = val
+    await saveTracking({ subjectId: item.subjectId, [field]: val })
+    item[field] = val
   } catch (e) { toast('更新失败', 'error') }
 }
 

@@ -59,19 +59,21 @@
         <div class="track-status-btns">
           <button v-for="s in statusOptions" :key="s.value"
             class="track-status-btn" :class="{ active: trackForm.status === s.value }"
-            @click="trackForm.status = s.value">{{ s.label }}</button>
+            @click="changeStatus(s.value)">{{ s.label }}</button>
         </div>
         <!-- 进度现在的**主入口是下面那一排剧集格子**(点一下就是一次打卡, 服务端顺手把
              进度推到这一集). 这个数字框留着当次要入口, 因为追番的人常一次看好几集、
              或者先看完后补记 —— 逼着一集集点五次很难受. 文案因此从「进度」改成
-             「直接改进度」, 不再暗示它是唯一的路; 除此之外这个框一个字没动. -->
+             「直接改进度」, 不再暗示它是唯一的路. -->
         <!-- min="0" 与 :max 只是浏览器给的护栏(拖动步进箭头时用), 提交时不算数 ——
              手打一个 999 照样能提交, 所以 saveTrack 里还有一道 clamp. 两道都要:
              只有前者的话手打能绕过去, 只有后者的话用户得先提交才知道自己填错了 -->
+        <!-- @input 只是**记下这个框被动过**, 不发请求. 「保存」只把动过的字段发上去,
+             没动的一个字都不带 —— 否则本地那份副本一旧, 没碰过的字段就会被静默回退 -->
         <div class="track-input-row">
-          <label>直接改进度</label><input type="number" v-model.number="trackForm.progress" min="0" :max="maxProgress" />
+          <label>直接改进度</label><input type="number" v-model.number="trackForm.progress" min="0" :max="maxProgress" @input="markDirty('progress')" />
           <span>/ {{ subject.totalEpisodes || '?' }}</span>
-          <label style="margin-left:16px;">评分</label><input type="number" v-model.number="trackForm.score" min="1" max="10" />
+          <label style="margin-left:16px;">评分</label><input type="number" v-model.number="trackForm.score" min="1" max="10" @input="markDirty('score')" />
         </div>
         <button class="d-btn-save" @click="saveTrack">保存</button>
       </div>
@@ -524,6 +526,43 @@ function clampProgress(value) {
   return total ? Math.min(Math.floor(n), total) : Math.floor(n)
 }
 
+/**
+ * 这一页上「被用户动过、但还没提交」的字段名.
+ *
+ * 它存在是因为服务端那个接口是**局部更新**: 没传的字段一律保持原值。
+ * 改前这里每次都把 status + progress + score 整行发回去, 于是本地那份副本
+ * 只要旧了一点点(页面开着没动、两个标签页), 就会把没碰过的字段一起写回旧值 ——
+ * 用户改个状态, 进度自己退回去了, 而界面上两处都显示成功。
+ *
+ * 用普通 Set 而不是 reactive: 它只在 saveTrack 被点的那一刻读一次,
+ * 没有任何地方要跟着它重新渲染, 加上响应式只是白白多一层代理。
+ */
+const dirty = new Set()
+function markDirty(field) { dirty.add(field) }
+
+/**
+ * 点状态按钮 = **立刻落库**, 与个人页那个下拉同一个规矩。
+ *
+ * 改前这里只改本地 trackForm.status, 什么都不发, 得再按一次「保存」才作数 ——
+ * 而按钮点完就高亮了, 看上去像已经生效。同一件事在两个页面上两套规矩(个人页即改即存),
+ * 是这块最容易让人说「有问题」的地方。
+ *
+ * 先置位再发, 失败退回原值: 状态就五个按钮, 乐观更新比转一圈等待舒服得多,
+ * 而失败时界面必须回到真实状态, 不能留一个"看着已生效、其实没存上"的高亮。
+ */
+async function changeStatus(next){
+  if(!userStore.loggedIn || next === trackForm.status) return
+  const prev = trackForm.status
+  trackForm.status = next
+  try{
+    await saveTracking({ subjectId: sid, status: next })
+    toast('已更新','success')
+  }catch(e){
+    trackForm.status = prev
+    toast(loadErrorMessage(e, '更新'))
+  }
+}
+
 const coverImg = computed(() => coverFailed.value ? fallbackImg : (subject.value?.images?.large || subject.value?.images?.common || fallbackImg))
 const heroBg = computed(() => coverFailed.value ? null : (subject.value?.images?.large || subject.value?.images?.common || null))
 
@@ -659,20 +698,61 @@ function changeEpPage(page){
   epPage.value = page
   epSectionTop.value?.scrollIntoView({ block: 'start' })
 }
+/**
+ * 「+ 追番」: 建一条在看记录.
+ *
+ * 只发 status —— progress / score 一个字不带. 改前这里先把 trackForm 清成
+ * progress:0 / score:0 再走 saveTrack, 于是"服务端已经有行、本地 id 还是 null"
+ * 的那一小段时间里点这个按钮, 会把刚打卡推上去的进度**清零**. c98 起这个窗口是真实存在的:
+ * 打完第一个勾由服务端建行, 而本地要等 refreshTrackForm 回来才知道 id,
+ * 那一次请求失败的话那个 catch 是静默的.
+ *
+ * 现在服务端缺席即保持原值, 所以"我想在看这部番"可以真的只发一个 status.
+ */
 async function quickTrack(){
-  trackForm.status='watching'; trackForm.progress=0; trackForm.score=0
-  await saveTrack()
+  try{
+    const r = await saveTracking({ subjectId: sid, status: 'watching' })
+    const d = r.data?.data
+    if(d?.id) trackForm.id = d.id
+    trackForm.status = d?.status || 'watching'
+    trackForm.progress = d?.progress || 0
+    trackForm.score = d?.score || 0
+    dirty.clear()
+    toast('已追番','success')
+  }catch(e){
+    toast(loadErrorMessage(e, '追番'))
+  }
 }
+
+/**
+ * 「保存」: 只提交这一页上被动过的字段.
+ *
+ * 一个字段都没动就不发请求 —— 服务端那边三个字段全是可选的, 一个字段都不带地发过去,
+ * 只会在库里凭空建一条默认状态的记录(「没有改动」比这诚实).
+ */
 async function saveTrack(){
   if(!userStore.loggedIn) return
-  // 夹一次再发, 顺便把输入框里的数字改回夹过之后的值 ——
-  // 否则界面上还显示着用户填的 999, 而库里存的是 12, 两边对不上
-  trackForm.progress = clampProgress(trackForm.progress)
-  try{ const r=await saveTracking({subjectId:sid,status:trackForm.status,progress:trackForm.progress,score:trackForm.score}); trackForm.id=r.data.data?.id; toast('已保存','success') }catch(e){toast('保存失败','error')}
+  if(dirty.size === 0){ toast('没有改动','info'); return }
+  const payload = { subjectId: sid }
+  if(dirty.has('progress')){
+    // 夹一次再发, 顺便把输入框里的数字改回夹过之后的值 ——
+    // 否则界面上还显示着用户填的 999, 而库里存的是 12, 两边对不上
+    trackForm.progress = clampProgress(trackForm.progress)
+    payload.progress = trackForm.progress
+  }
+  if(dirty.has('score')) payload.score = trackForm.score
+  try{
+    const r = await saveTracking(payload)
+    if(r.data?.data?.id) trackForm.id = r.data.data.id
+    dirty.clear()
+    toast('已保存','success')
+  }catch(e){
+    toast(loadErrorMessage(e, '保存'))
+  }
 }
 async function removeTrack(){
   if(!confirm('取消追番？')) return
-  try{ await deleteTracking(sid); trackForm.id=null; trackForm.status='want_to_watch'; trackForm.progress=0; trackForm.score=0; toast('已取消','info') }catch(e){toast('操作失败','error')}
+  try{ await deleteTracking(sid); trackForm.id=null; trackForm.status='want_to_watch'; trackForm.progress=0; trackForm.score=0; dirty.clear(); toast('已取消','info') }catch(e){toast('操作失败','error')}
 }
 async function submitReview(){
   if(!userStore.loggedIn||myReview.rating<=0){toast('请评分','warning');return}

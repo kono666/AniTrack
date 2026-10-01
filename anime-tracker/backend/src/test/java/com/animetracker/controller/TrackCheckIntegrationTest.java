@@ -8,8 +8,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -92,6 +94,19 @@ class TrackCheckIntegrationTest {
                         .param("animeId", String.valueOf(subjectId))
                         .param("episodeNum", String.valueOf(episodeNum)))
                 .andExpect(status().isOk());
+    }
+
+    /** POST /api/track, 返回原始响应 —— 状态码与响应体两边都要看 */
+    private MockHttpServletResponse postTrack(String token, String json) throws Exception {
+        return mockMvc.perform(post("/api/track")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andReturn().getResponse();
+    }
+
+    private JsonNode bodyOf(MockHttpServletResponse res) throws Exception {
+        return objectMapper.readTree(res.getContentAsString());
     }
 
     /** /api/track/list 的 data 数组 */
@@ -316,5 +331,68 @@ class TrackCheckIntegrationTest {
 
         assertThat(continueWatching(mine, null).size()).isEqualTo(1);
         assertThat(continueWatching(theirs, null).size()).isZero();
+    }
+
+    // ========== POST /api/track 是局部更新 ==========
+
+    /**
+     * 这一组钉的是「没传的字段一律不动」在 HTTP 这一层真的成立.
+     *
+     * <p>服务层的三条用例验的是实体上的字段, 但整行覆盖的入口在 HTTP 这一侧:
+     * 只要 DTO 还要求 status 必填, 每个调用方就只能把整行发回来 ——
+     * 而"整行发回来"正是「个人页改个状态, 进度被写回旧值」的来源. 所以这里要的不只是
+     * 「结果对」, 而是「只带一个字段的请求本身能被收下」.
+     */
+    @Test
+    @DisplayName("只发 progress: 请求被收下, 而且状态一个字节都没动")
+    void aProgressOnlyRequestLeavesTheStatusAlone() throws Exception {
+        String token = registerAndLogin();
+        postTrack(token, "{\"subjectId\":" + SUBJECT_NOT_CACHED + ",\"status\":\"on_hold\"}");
+
+        // 改前这一句就是 400(缺少追番状态), 于是"只改进度"只能整行发
+        MockHttpServletResponse res = postTrack(token,
+                "{\"subjectId\":" + SUBJECT_NOT_CACHED + ",\"progress\":5}");
+        assertThat(res.getStatus()).isEqualTo(HttpStatus.OK.value());
+        assertThat(bodyOf(res).path("data").path("progress").asInt()).isEqualTo(5);
+
+        JsonNode row = rowFor(trackingList(token), SUBJECT_NOT_CACHED);
+        assertThat(row.path("status").asText()).as("没传 status 就该保持 on_hold").isEqualTo("on_hold");
+        assertThat(row.path("progress").asInt()).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("只发 status: 进度保持原值, 不会被清零或写回旧值")
+    void aStatusOnlyRequestLeavesTheProgressAlone() throws Exception {
+        String token = registerAndLogin();
+        postTrack(token, "{\"subjectId\":" + SUBJECT_NOT_CACHED
+                + ",\"status\":\"watching\",\"progress\":8}");
+
+        postTrack(token, "{\"subjectId\":" + SUBJECT_NOT_CACHED + ",\"status\":\"watched\"}");
+
+        JsonNode row = rowFor(trackingList(token), SUBJECT_NOT_CACHED);
+        assertThat(row.path("status").asText()).isEqualTo("watched");
+        assertThat(row.path("progress").asInt()).as("只改状态不该动进度").isEqualTo(8);
+    }
+
+    @Test
+    @DisplayName("status 整个缺席可以, 传了键给空值不行")
+    void statusMayBeOmittedButNotBlank() throws Exception {
+        String token = registerAndLogin();
+
+        // 传了键却给空值 = 调用方有 bug: 空串不是一个合法状态, 放进去会变成
+        // 一个五个统计口径都不认的值(「追番了但总数没变」)
+        assertThat(postTrack(token, "{\"subjectId\":" + SUBJECT_NOT_CACHED + ",\"status\":\"\"}").getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST.value());
+
+        // 键整个不在 = 合法, 新建那一行按默认的「想看」建(库里那一列 NOT NULL)
+        MockHttpServletResponse res = postTrack(token,
+                "{\"subjectId\":" + SUBJECT_NOT_CACHED + ",\"score\":9}");
+        assertThat(res.getStatus()).isEqualTo(HttpStatus.OK.value());
+        assertThat(bodyOf(res).path("data").path("status").asText()).isEqualTo("want_to_watch");
+
+        JsonNode row = rowFor(trackingList(token), SUBJECT_NOT_CACHED);
+        assertThat(row.path("status").asText()).isEqualTo("want_to_watch");
+        assertThat(row.path("score").asInt()).isEqualTo(9);
+        assertThat(row.path("progress").asInt()).isZero();
     }
 }

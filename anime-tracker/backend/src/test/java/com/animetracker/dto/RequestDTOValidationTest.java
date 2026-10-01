@@ -416,14 +416,39 @@ class RequestDTOValidationTest {
         assertThat(messagesOn(track(1, "watchedwatched"), "status")).isNotEmpty();
     }
 
+    /**
+     * null 与空串是两件事, 这一条专门盯住那个差别.
+     *
+     * <p>改前 status 上是 @NotBlank, null 和空串一起被拒 —— 于是「只把进度改成 5」
+     * 在协议层面就做不到, 每个调用方都只能整行读回来、改一个字段、再整行发回去,
+     * 而整行覆盖正是「改状态顺手把进度写回旧值」的来源。现在 null 的语义是
+     * 「保持原值」, 空串仍然是「调用方有 bug」。库里那一列 NOT NULL 由
+     * TrackService 建行时兜默认值, 不再靠这里的 @NotBlank。
+     */
     @Test
-    @DisplayName("状态为空或 null 时给出可读提示, 而不是把 null 写进 NOT NULL 的列")
-    void rejectsMissingStatus() {
-        for (String blank : new String[]{null, "", "   "}) {
+    @DisplayName("status 缺席(null)放行 —— 缺席的语义是「保持原值」, 不是「清空」")
+    void allowsMissingStatus() {
+        assertThat(messagesOn(track(1, null), "status")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("但传了键却给空值仍然被拒: 那不是一个合法状态, 是调用方有 bug")
+    void rejectsBlankStatusWhenTheKeyIsPresent() {
+        for (String blank : new String[]{"", "   "}) {
             assertThat(messagesOn(track(1, blank), "status"))
                     .as("status = %s 应当被拒", blank)
-                    .contains("缺少追番状态");
+                    .contains("追番状态不在允许的取值里");
         }
+    }
+
+    @Test
+    @DisplayName("只带 subjectId + progress 的请求整体合法 —— 这正是「只改进度」要发的东西")
+    void acceptsAProgressOnlyRequest() {
+        TrackRequest req = new TrackRequest();
+        req.setSubjectId(1);
+        req.setProgress(5);
+
+        assertThat(validator.validate(req)).isEmpty();
     }
 
     // ========== 追番进度 ==========
