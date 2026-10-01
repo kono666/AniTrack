@@ -230,7 +230,8 @@ describe('操作日志: 列内容', () => {
     const wrapper = await mountAt('/admin/actions')
 
     const cells = wrapper.findAll('tbody tr td').map(td => td.text())
-    expect(cells[1]).toBe('删除评论')
+    // V14 起叫「移除」而不是「删除」: 这个动作是软删、可撤销的, 撤销它就是恢复那一条
+    expect(cells[1]).toBe('移除评论')
     expect(cells[2]).toBe('admin')
     expect(cells[3]).toBe('评论 #77')
     expect(cells[4]).toBe('删了条评论')
@@ -250,6 +251,34 @@ describe('操作日志: 列内容', () => {
     const badge = wrapper.find('tbody tr .action-badge')
     expect(badge.text()).toBe('重置密码')
     expect(badge.classes()).toContain('badge-danger')
+  })
+
+  /**
+   * {@code REVIEW_RESTORE} 是 V14 加上的第七个动作, 它与 REVIEW_DELETE 是一对 ——
+   * 一前一后两行才是一条评论的完整经过。
+   *
+   * <p><b>它必须是中性色, 不能跟移除同色。</b> 判据还是这一页那句"这个动作有多该被查":
+   * 该查的是那次移除, 不是撤销。两者同色的话, 管理员扫这一页时看到的是一片同样重的红,
+   * 而他要找的正是"哪个方向不对" —— 同色等于把方向抹掉了。
+   */
+  it('恢复评论显示成人话, 且不跟移除同色(它是撤销, 不是又一次处置)', async () => {
+    getAdminActions.mockResolvedValue(pageResult([
+      row(1, { action: 'REVIEW_RESTORE', targetType: 'REVIEW', targetId: 77, detail: '恢复了…' }),
+    ], 1))
+    const wrapper = await mountAt('/admin/actions')
+
+    const badge = wrapper.find('tbody tr .action-badge')
+    expect(badge.text()).toBe('恢复评论')
+    expect(badge.classes()).toContain('badge-neutral')
+    expect(badge.classes()).not.toContain('badge-danger')
+  })
+
+  it('筛选下拉里有 V14 新加的「恢复评论」', async () => {
+    const wrapper = await mountAt('/admin/actions')
+
+    const values = selectByLabel(wrapper, '按操作类型筛选').findAll('option')
+      .map(o => o.attributes('value'))
+    expect(values).toContain('REVIEW_RESTORE')
   })
 
   it('没见过的 action 显示原样的码, 不是一片空白', async () => {

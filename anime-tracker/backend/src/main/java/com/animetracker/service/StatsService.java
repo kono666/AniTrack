@@ -118,7 +118,7 @@ public class StatsService {
 
         stats.put("totalAnime", all.size());
         stats.put("totalEpisodes", epWatchedRepo.countByUser(user));
-        stats.put("totalReviews", reviewRepo.findByUserOrderByCreatedAtDesc(user).size());
+        stats.put("totalReviews", reviewRepo.findByUserAndDeletedAtIsNullOrderByCreatedAtDesc(user).size());
         double avg = all.stream().filter(t -> t.getScore() != null)
                 .mapToInt(AnimeTracking::getScore).average().orElse(0);
         stats.put("avgScore", Math.round(avg * 10.0) / 10.0);

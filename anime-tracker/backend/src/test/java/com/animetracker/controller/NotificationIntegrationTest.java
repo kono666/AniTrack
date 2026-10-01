@@ -66,6 +66,8 @@ class NotificationIntegrationTest {
     private static final int SUBJECT_PAGING = 960404;
     private static final int SUBJECT_CASCADE = 960405;
     private static final int SUBJECT_GUARDS = 960406;
+    /** 管理员软删那一组(V14) */
+    private static final int SUBJECT_SOFT_DELETE = 960408;
 
     /** 清库时按这个区间删 —— 上面那些 id 全落在里面 */
     private static final int SUBJECT_FROM = 960401;
@@ -83,9 +85,11 @@ class NotificationIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
-    /** 两个账号整个类共用一次 —— 登录按 IP 限流(10 次/分钟) */
+    /** 三个账号整个类共用一次 —— 登录按 IP 限流(10 次/分钟) */
     private static String meToken;
     private static String actorToken;
+    /** 管理员是 {@code DataInitializer} 建的那个。只有 V14 那条用例用得着 */
+    private static String adminToken;
 
     @BeforeEach
     void seedAndLogin() throws Exception {
@@ -97,6 +101,9 @@ class NotificationIntegrationTest {
         }
         if (actorToken == null) {
             actorToken = registerAndLogin(ACTOR);
+        }
+        if (adminToken == null) {
+            adminToken = login("admin", "admin123");
         }
     }
 
@@ -473,5 +480,69 @@ class NotificationIntegrationTest {
         assertThat(notifications(meToken).path("total").asLong()).isZero();
         assertThat(unreadCount(meToken))
                 .as("被级联带走的未读不能继续占着红点").isZero();
+    }
+
+    /**
+     * <b>V14 的另一半: 管理员把它「移除」了, 通知同样要从收件箱里消失 —— 但那些行必须还在。</b>
+     *
+     * <p>与上面那条级联用例是一对, 而它们的机制正好相反:
+     *
+     * <ul>
+     *   <li>作者自己删评论走的是**物理删行**, V11 那条 {@code ON DELETE CASCADE} 替我们
+     *       把通知带走了, 读路径一个过滤条件都不用写;</li>
+     *   <li>管理员移除走的是**软删**, 行还躺在库里, 那条级联**永远不会触发**。所以这一条
+     *       是唯一能证明 {@code NotificationRepository} 里那个 {@code NOT EXISTS} 真的在
+     *       起作用的地方 —— 它一去掉, 用户就会在自己的通知里看见一条点进去什么都没有的记录。</li>
+     * </ul>
+     *
+     * <p>{@code SELECT COUNT(*) FROM notification} 那句是本条的骨干: 没有它, "藏起来了"和
+     * "被删掉了"在接口上长得一模一样, 而后者会让下面恢复那一步直接失败。反过来, 恢复之后
+     * 原样回来也同时证明了前面那次真的是软删。
+     *
+     * <p>最后那段"藏起来的时候点全部已读"是刻意的: 看不见的通知不该被顺手标成已读 ——
+     * 否则它们恢复出来时是已读状态, 用户永远不知道这三条发生过。
+     */
+    @Test
+    @DisplayName("管理员移除评论: 三类通知从收件箱消失但行还在, 恢复后原样回来且全程未读")
+    void softDeletingAReviewHidesItsNotificationsWithoutDeletingThem() throws Exception {
+        long reviewId = writeReview(meToken, SUBJECT_SOFT_DELETE, "会被管理员移除的评论");
+        long replyId = reply(meToken, reviewId, "我自己的回复");
+        reply(actorToken, reviewId, "他回的");
+        likeReview(actorToken, reviewId);
+        likeReply(actorToken, replyId);
+        assertThat(notifications(meToken).path("total").asLong())
+                .as("先确认三类真在, 否则下面那条断言是空过").isEqualTo(3L);
+
+        mockMvc.perform(delete("/api/admin/reviews/" + reviewId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                .andExpect(status().isOk());
+
+        JsonNode hidden = notifications(meToken);
+        assertThat(hidden.path("total").asLong()).isZero();
+        assertThat(hidden.path("list").size()).as("列表与 total 是两条查询, 两边都得挡住").isZero();
+        assertThat(unreadCount(meToken)).isZero();
+        assertThat(myNotificationRows())
+                .as("行必须还在: 这里的消失是读路径过滤出来的, 不是级联删掉的。报 0 的话"
+                        + "「藏起来了」与「删掉了」就分不出来, 而恢复那一步会立刻暴露")
+                .isEqualTo(3);
+
+        // 藏起来的时候点一次「全部已读」—— 看不见的那些不该因此变成已读
+        markRead(meToken);
+
+        mockMvc.perform(put("/api/admin/reviews/" + reviewId + "/restore")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                .andExpect(status().isOk());
+
+        assertThat(notifications(meToken).path("total").asLong())
+                .as("恢复之后三条一条不少").isEqualTo(3L);
+        assertThat(unreadCount(meToken))
+                .as("藏起来那段时间点的『全部已读』不该把它们吃掉").isEqualTo(3L);
+    }
+
+    /** 我名下还剩几行通知 —— 绕开读路径直接数表, 用来分开"藏起来了"和"删掉了" */
+    private int myNotificationRows() {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM notification WHERE recipient_id = "
+                        + "(SELECT id FROM \"user\" WHERE username = ?)", Integer.class, ME);
     }
 }

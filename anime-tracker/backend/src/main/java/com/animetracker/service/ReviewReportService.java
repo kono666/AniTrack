@@ -101,6 +101,9 @@ public class ReviewReportService {
             //   · fk_review_report_review —— 这条评论刚好在这两步之间被别人删了,
             //     那是真的没有了, 该报 404 而不是假装举报成功。
             // 只在冲突这条罕见路径上多花一条查询, 正常路径一次都不花。
+            //
+            // 这里用的是**不过滤删除标记**的 existsById, 与 getDetails 那处不同: 外键冲突
+            // 只可能由物理删除引起(软删不碰子表), 它回答的是"这一行还在不在库里"。
             if (!reviewRepository.existsById(reviewId)) {
                 throw BusinessException.notFound("评论不存在");
             }
@@ -122,7 +125,11 @@ public class ReviewReportService {
      * 「就这 50 条」和「有 300 条, 只给你看 50 条」。
      */
     public Map<String, Object> getDetails(Long reviewId) {
-        if (!reviewRepository.existsById(reviewId)) {
+        // V14 起判"在架上", 于是这里的口径与举报队列、与列表上那个角标三者一致:
+        // 被移除的评论**没有任何待处理的举报**(队列不列它、角标算它 0 条, 这里回 404)。
+        // 这三处必须一起改 —— 单独留下某一处, 表现是「角标 0、点进去却有 3 条」。
+        // 要让管理员看到它的举报明细, 先恢复这条评论(恢复之后三样一起回来)。
+        if (!reviewRepository.existsByIdAndDeletedAtIsNull(reviewId)) {
             throw BusinessException.notFound("评论不存在");
         }
 

@@ -709,6 +709,18 @@ public class AdminService {
             map.put("reportCount", reportCounts.getOrDefault(r.getId(), 0));
             map.put("latestReason", report == null ? null : report[1]);
             map.put("latestReportAt", report == null ? null : report[2]);
+            // 被管理员移除的时间(V14): null = 在架上. 这一整列**只有管理端看得见** ——
+            // 被移除的行照样出现在这一页里(它要能被恢复), 界面靠这个键决定显示"已移除"
+            // 还是"删除"按钮.
+            //
+            // 给时间戳而不是一个 deleted 布尔: 这一页本来就是给管理员看的, 而"什么时候
+            // 移除的"是他判断该不该恢复的信息之一(与给用户侧的 getUserReview 相反,
+            // 那边刻意只给布尔).
+            //
+            // 不一起给 deletedBy: 显示"谁移除的"要么多一个 join, 要么每行一次懒加载,
+            // 而这一页的语句条数是一条用例钉着的常数. 要读人名的地方是账本(操作日志页),
+            // 它写的时候就存了名字快照. 完整理由写在 Review.deletedBy 的注释上.
+            map.put("deletedAt", r.getDeletedAt());
             map.put("createdAt", r.getCreatedAt());
             result.add(map);
         }
@@ -737,24 +749,91 @@ public class AdminService {
      * 那两句话之间的空隙。加了账本之后它顺带被关掉了: 账里要写被删评论的作者和正文摘要,
      * 于是这里必须把那一行**读出来**, 变成 findById + delete, 而两句在同一个事务里 ——
      * 中间再没有可以让别人插进来的地方。
+     *
+     * <p><b>V14 起删的是"可见性", 不是那一行</b> —— 置 {@code deletedAt/deletedBy} 而不是
+     * {@code delete}, 于是这个动作变成可撤销的(见 {@link #restoreAnyReview})。它原本是这一
+     * 组里唯一不可逆的那个(封禁能解、角色能改回来、锁能解、密码能重置, 而删掉的评论连正文
+     * 都找不回来), 补上软删之后五个动作就都留了退路。库级那条 {@code ON DELETE CASCADE}
+     * 仍然留着, 它守的是另外三条**真删**的路径(用户删自己的评论、删号), 见 V13 末尾的注记。
+     *
+     * <p>两处"怎么算不存在"要说清, 因为它们看起来像同一个判断:
+     * <ul>
+     *   <li>{@code findById} 取不到 → 404「评论不存在」(目标本来就没有);</li>
+     *   <li>取到了但已经是"已移除" → 400「该评论已被移除」而不是再记第二笔账 ——
+     *       重复点删除(或两个管理员同时点)不该产生两条 REVIEW_DELETE, 那会让账本读起来
+     *       像"删了两次"。返回 404 也是错的: 那一行明明就在列表里给管理员看着。</li>
+     * </ul>
      */
     public void deleteAnyReview(User actor, Long reviewId) {
         isolatedInsert.attempt(() -> {
             Review review = reviewRepository.findById(reviewId)
                     .orElseThrow(() -> BusinessException.notFound("评论不存在"));
+            if (review.isRemoved()) {
+                throw BusinessException.badRequest("该评论已被移除");
+            }
 
             // 三样都要在事务结束**之前**读出来: Review.user 是 LAZY 的, 而 IsolatedInsert
-            // 的约定正是「实体出了这个事务就脱离持久化上下文」—— 出去之后再取作者名会炸
+            // 的约定正是「实体出了这个事务就脱离持久化上下文」—— 出去之后再取作者名会炸.
+            // (V14 之后还要多一样:`deletedBy` 只存一个 id, 而账本里要有**名字** ——
+            //  恢复那条路也同样要把这两样先读出来)
             String authorName = review.getUser().getUsername();
             Integer subjectId = review.getSubjectId();
             String snippet = TextSnippet.of(review.getContent());
 
-            reviewRepository.delete(review);
+            review.setDeletedAt(LocalDateTime.now());
+            review.setDeletedBy(actor == null ? null : actor.getId());
+            reviewRepository.save(review);
 
-            // detail 里带上作者名与正文摘要, 而不是只留一个 reviewId: 评论已经删了,
-            // 事后想弄清「删的是哪条」就只能靠这一行字
+            // detail 里带上作者名与正文摘要, 而不是只留一个 reviewId: 评论已经从用户侧
+            // 消失了, 事后想弄清「移除的是哪条」就只能靠这一行字
+            //
+            // 措辞是「移除」而不是「删除」: V14 起这句话描述的那个动作是可撤销的, 而
+            // 撤销它就是 {@link #restoreAnyReview} 记的「恢复…」那一行 —— 一前一后读起来
+            // 才是一件事的两半。(c94 写下的那批老记录仍是「删除…」, 账本不改写历史.)
             recordAction(actor, AdminActionLog.REVIEW_DELETE, AdminActionLog.TARGET_REVIEW, reviewId,
-                    "删除用户 " + authorName + " 在作品 " + subjectId + " 下的评论"
+                    "移除用户 " + authorName + " 在作品 " + subjectId + " 下的评论"
+                            + (snippet == null ? "（无正文）" : "：" + snippet));
+            return null;
+        });
+    }
+
+    /**
+     * 撤销一次移除(V14) —— 把一条被管理员删掉的评论放回架上.
+     *
+     * <p><b>为什么恢复也要记一笔账。</b> 账本里那条 REVIEW_DELETE 不会因为撤销而消失
+     * (账本记的是发生过的事实), 所以"这条评论后来怎么了"必须由一条新记录来回答 ——
+     * 只有删除记录的话, 事后看到的就是「某年某月被删了」, 而它现在明明在列表上,
+     * 读账的人会以为是账本坏了。两个动作各占一行, 时间顺序就是真实经过。
+     *
+     * <p>写的是 {@code REVIEW_RESTORE}, 与删除同属一本账(通用的 admin_action_log),
+     * <b>没有第二本"评论专用账"</b> —— 管理端所有的处置都在操作日志页上, 按时间排开,
+     * 一条评论的来龙去脉就是一前一后两行。
+     *
+     * <p>{@code deletedBy} 一并清空: 那两个字段的约定是**同时有值或同时为空**(见 V14),
+     * 而"谁把它撤下来的"这个身份已经由这一行账记着了, 不必在 review 表上留半截状态。
+     *
+     * <p>状态判断与删除那条对称: 没被移除的 → 400「该评论未被移除」(同样是"状态不对",
+     * 不是"不存在"); 已经是"在架上"了还回 200 的话, 账本里会多出一条什么都没做的
+     * REVIEW_RESTORE。
+     */
+    public void restoreAnyReview(User actor, Long reviewId) {
+        isolatedInsert.attempt(() -> {
+            Review review = reviewRepository.findById(reviewId)
+                    .orElseThrow(() -> BusinessException.notFound("评论不存在"));
+            if (!review.isRemoved()) {
+                throw BusinessException.badRequest("该评论未被移除");
+            }
+
+            String authorName = review.getUser().getUsername();
+            Integer subjectId = review.getSubjectId();
+            String snippet = TextSnippet.of(review.getContent());
+
+            review.setDeletedAt(null);
+            review.setDeletedBy(null);
+            reviewRepository.save(review);
+
+            recordAction(actor, AdminActionLog.REVIEW_RESTORE, AdminActionLog.TARGET_REVIEW, reviewId,
+                    "恢复用户 " + authorName + " 在作品 " + subjectId + " 下的评论"
                             + (snippet == null ? "（无正文）" : "：" + snippet));
             return null;
         });
@@ -853,7 +932,7 @@ public class AdminService {
         data.put("adminUsers", userRepository.countByRole("ADMIN"));
         data.put("activeUsers", userRepository.countByStatus("ACTIVE"));
         data.put("disabledUsers", userRepository.countByStatus("DISABLED"));
-        data.put("totalReviews", reviewRepository.count());
+        data.put("totalReviews", reviewRepository.countByDeletedAtIsNull());
         data.put("totalTrackings", trackingRepository.count());
         return data;
     }

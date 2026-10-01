@@ -132,7 +132,10 @@ const ACTION_LABELS = {
   USER_ROLE: '修改角色',
   USER_UNLOCK: '解除锁定',
   USER_PASSWORD_RESET: '重置密码',
-  REVIEW_DELETE: '删除评论',
+  // 「移除」而不是「删除」: V14 起这个动作是软删、可撤销的, 而撤销它就在下面那一行上。
+  // 一条评论的来龙去脉在这一页上就是一前一后两行, 两个词得对得上。
+  REVIEW_DELETE: '移除评论',
+  REVIEW_RESTORE: '恢复评论',
 }
 
 const TARGET_LABELS = { USER: '用户', REVIEW: '评论' }
@@ -149,6 +152,11 @@ const ACTIONS = Object.keys(ACTION_LABELS)
  */
 const DANGEROUS = ['USER_BAN', 'USER_PASSWORD_RESET', 'REVIEW_DELETE']
 const PRIVILEGE = ['USER_ROLE']
+/* REVIEW_RESTORE 刻意不在上面两档里, 落到中性色。判据还是那一句"这个动作有多该被查":
+   恢复把一条评论放回架上, 它撤销的是 REVIEW_DELETE —— 该查的是那次移除, 不是撤销。
+   给它和移除同色会让账本上"撤销了"与"又移除了"看起来一样重, 而管理员扫这一页时
+   正是在找"哪个动作不对", 两者同色等于把方向搞反。(它仍然会进下拉、仍然能被筛出来,
+   见 ACTIONS 那段: 中性色说的是醒目程度, 不是记不记。) */
 
 const logs = ref([])
 const total = ref(0)

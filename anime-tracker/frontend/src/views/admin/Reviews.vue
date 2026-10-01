@@ -96,9 +96,10 @@
                 <PhCaretDown v-else class="sort-icon" :size="12" aria-hidden="true" />
               </button>
             </th>
-            <!-- 回复数不只是个数字: 一条挂着二十条回复的评论删掉, 带走的是**一整串
-                 对话**(回复靠 ON DELETE CASCADE 跟着走). 所以它既能排序, 也进
-                 删除确认的文案 -->
+            <!-- 回复数不只是个数字: 一条挂着二十条回复的评论被移除, 那些回复也会跟着
+                 从用户侧一起消失(列表按评论走, 没人能再翻到它们). 所以它既能排序,
+                 也进确认的文案 —— 只是 V14 之后措辞从"连带删除"变成了"跟着隐藏",
+                 因为后端的删除已经是软删, 回复行一条都没动 -->
             <th :aria-sort="ariaSortFor('replies')">
               <button
                 class="admin-sort-btn"
@@ -156,8 +157,16 @@
               </button>
               <span v-else class="report-none">—</span>
             </td>
-            <td>
-              <button class="delete-btn" @click="handleDelete(r)">删除</button>
+            <!-- 一行上只有一个动作, 而且是哪一个**由数据说了算**: 已移除的那一行给的是
+                 「恢复」, 没移除的才是「移除」。不做成两个并排的按钮(一个必然是灰的) ——
+                 管理员在这一列上要看的是"这一行现在能做什么", 不是"有几种可能".
+                 `deletedAt` 是服务端发的第三个状态, 与 exists/removed 同一套口径 -->
+            <td class="action-cell">
+              <template v-if="r.deletedAt">
+                <span class="removed-badge">已移除</span>
+                <button class="restore-btn" @click="handleRestore(r)">恢复</button>
+              </template>
+              <button v-else class="delete-btn" @click="handleDelete(r)">移除</button>
             </td>
           </tr>
 
@@ -232,7 +241,7 @@ import PhCaretUp from '@icons/PhCaretUp.vue.mjs'
 import PhCaretDown from '@icons/PhCaretDown.vue.mjs'
 import PhFlag from '@icons/PhFlag.vue.mjs'
 import {
-  getAdminReviews, adminDeleteReview, getReviewReports, dismissReport,
+  getAdminReviews, adminDeleteReview, adminRestoreReview, getReviewReports, dismissReport,
   REVIEW_REPORT_REASONS, ADMIN_PAGE_SIZES, ADMIN_PAGE_SIZE,
 } from '../../api'
 import { useToast } from '../../composables/useToast'
@@ -505,16 +514,34 @@ async function loadReviews() {
  * 确认文案里带上**正文摘要与回复数**.
  *
  * 改前是一句 `确定删除用户 "X" 的评论？` —— 而管理员是在一张列了长正文的表里点的
- * 这一下, 摘要让他确认"删的是这一条"; 回复数则是这件事的**影响面**: 回复靠
- * `ON DELETE CASCADE` 跟着走, 删一条挂着二十条回复的评论带走的是一整串对话,
- * 而改前那句话里一个字都没提.
+ * 这一下, 摘要让他确认"删的是这一条"; 回复数则是这件事的**影响面**: 回复不会再被
+ * 单列出来(列表按评论走), 所以移除一条挂着二十条回复的评论, 那些回复会跟着从
+ * 用户侧一起消失.
+ *
+ * <p><b>V14 起措辞必须改: 这里不再"删除回复", 而且这件事是可以撤销的。</b>
+ * 改前那句「并连带删除其下 N 条回复」描述的是硬删(CASCADE 真的把回复行删掉);
+ * 现在后端是软删, 回复行一条都没动, 只是跟着藏起来了。确认框里留着那句话, 管理员
+ * 会以为自己下手很重 —— 而实际上点错了还能在这一行上恢复。**代价写清楚, 出路也写清楚**:
+ * 少了后半句, 一次误点看起来就是不可挽回的。
  */
 function confirmText(r) {
   const text = (r.content || '').trim()
   const excerpt = text.length > CONFIRM_EXCERPT ? text.slice(0, CONFIRM_EXCERPT) + '…' : text
   const replies = typeof r.replyCount === 'number' ? r.replyCount : 0
-  const tail = replies > 0 ? `，并连带删除其下 ${replies} 条回复` : ''
-  return `确定删除用户 "${r.username}" 的评论「${excerpt || '（无文字）'}」${tail}？`
+  const tail = replies > 0 ? `，其下 ${replies} 条回复也会跟着隐藏` : ''
+  return `确定移除用户 "${r.username}" 的评论「${excerpt || '（无文字）'}」${tail}？移除后可以在这一行恢复。`
+}
+
+/**
+ * 恢复的确认文案**故意问得少**: 它是一个"撤销", 不是一个破坏性动作。
+ *
+ * 与删除同一个形状(带上是谁的、哪一条), 但不提回复数 —— 撤销不是在做决定,
+ * 回复本来就会跟着回来, 报一个数字只会让人以为还要再确认一次别的什么。
+ */
+function restoreText(r) {
+  const text = (r.content || '').trim()
+  const excerpt = text.length > CONFIRM_EXCERPT ? text.slice(0, CONFIRM_EXCERPT) + '…' : text
+  return `确定恢复用户 "${r.username}" 的评论「${excerpt || '（无文字）'}」？`
 }
 
 /**
@@ -531,7 +558,22 @@ async function handleDelete(r) {
   try {
     await adminDeleteReview(r.id)
     await loadReviews()
-  } catch (e) { toast(e.response?.data?.message || '删除失败', 'error') }
+  } catch (e) { toast(e.response?.data?.message || '移除失败', 'error') }
+}
+
+/**
+ * 恢复: 与删除完全对称的一条 —— 一样要确认、一样是重取当前页、一样带上别人说的原因。
+ *
+ * 重取而不是就地改那一行的 `deletedAt`: 与 handleDelete 同一条理由(服务端才知道
+ * 这一行在新条件下还该不该留在这一页); 而且恢复之后这一行会不会**消失**(正在筛
+ * 「只看被举报」, 而恢复让它重新回到队列里? 或者反过来), 那句话由服务端说.
+ */
+async function handleRestore(r) {
+  if (!confirm(restoreText(r))) return
+  try {
+    await adminRestoreReview(r.id)
+    await loadReviews()
+  } catch (e) { toast(e.response?.data?.message || '恢复失败', 'error') }
 }
 
 // ==================== 举报明细 ====================
@@ -752,11 +794,26 @@ onUnmounted(cancelPendingSearch)
 .anime-link:hover { text-decoration: underline; }
 /* 赞数/回复数是可比较的量: 等宽数字让一列数字能对齐着看 */
 .num-cell { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.action-cell { white-space: nowrap; }
 .delete-btn {
   padding: 6px 16px; border: 1px solid var(--badge-red-fg); color: var(--badge-red-fg);
   background: var(--card); border-radius: 6px; cursor: pointer;
   font-size: 13px; white-space: nowrap;
 }
+/* 已移除的那一行: 一个中性色的状态标签 + 一个不带语义色的「恢复」。
+   刻意不用红色 —— 红色在这一页代表"危险动作", 而"已经移除"是**既成事实**,
+   给恢复按钮上红色更错: 它是一个撤销, 不是又一次破坏。 */
+.removed-badge {
+  display: inline-block; margin-right: 8px; padding: 3px 10px; border-radius: 999px;
+  background: var(--tag-bg); color: var(--text-secondary);
+  font-size: 12px; font-weight: 600;
+}
+.restore-btn {
+  padding: 6px 16px; border: 1px solid var(--border); color: var(--text-secondary);
+  background: var(--card); border-radius: 6px; cursor: pointer;
+  font-size: 13px; white-space: nowrap;
+}
+.restore-btn:hover { border-color: var(--primary-line); color: var(--primary); }
 
 /* 举报徽标: 可点(展开明细), 所以必须长得像个能点的东西 —— 底色比周围重一档,
    而不是像一列普通文字. */

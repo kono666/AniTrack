@@ -95,7 +95,10 @@ class ReviewLikeServiceTest {
                 isolatedInsert, notificationService);
         // 默认: 评论存在(带作者), 计数读回来是 1
         when(reviewRepository.findByIdWithUser(any())).thenReturn(Optional.of(reviewWithAuthor()));
+        // 两个"在不在"的桩都要给, 它们是两个不同的问题(V14):
+        // existsById = 那一行还在不在库里(只在冲突分支里问), 带 DeletedAtIsNull 的 = 在不在架上
         when(reviewRepository.existsById(any())).thenReturn(true);
+        when(reviewRepository.existsByIdAndDeletedAtIsNull(any())).thenReturn(true);
         when(reviewRepository.readLikeCount(any())).thenReturn(1L);
     }
 
@@ -237,7 +240,10 @@ class ReviewLikeServiceTest {
     @Test
     @DisplayName("取消一条不存在的评论的赞: 404")
     void unlikingAMissingReviewIsNotFound() {
-        when(reviewRepository.existsById(any())).thenReturn(false);
+        // V14 之后这里问的是"在不在架上"(被管理员移除的评论从用户侧也是不存在, 见
+        // ReviewLikeService.unlike 上的注释) —— 替身答不了这两种"不在"的差别,
+        // 真正区分它们的是 AdminReviewIntegrationTest 里的集成用例。
+        when(reviewRepository.existsByIdAndDeletedAtIsNull(any())).thenReturn(false);
 
         assertThatThrownBy(() -> reviewLikeService.unlike(user(), 7L))
                 .isInstanceOf(BusinessException.class)

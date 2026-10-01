@@ -136,12 +136,19 @@
 
         <!-- My Review -->
         <div v-if="userStore.loggedIn" class="my-review">
-          <div class="mr-stars">
-            <button v-for="n in 10" :key="n" class="mr-star" :class="{ on: n <= myReview.rating }" @click="myReview.rating = n">★</button>
-          </div>
-          <textarea v-model="myReview.content" placeholder="写评论..." rows="2" class="mr-input"></textarea>
-          <button class="d-btn-save" @click="submitReview" style="margin-top:8px;">{{ myReview.id ? '更新' : '提交' }}</button>
-          <button v-if="myReview.id" class="d-btn-ghost" @click="deleteMyReview" style="margin-left:8px;">删除</button>
+          <!-- 被管理员移除的那一条: 给一句说明, 不给表单.
+               `exists` 与 `removed` 是服务端分开给的两个状态(V14): 少了这一支的话,
+               这里会摆出一张空表单 —— 填完点提交, 后端回 400「该作品的评论已被管理员
+               移除」, 而用户完全不知道自己写的那条出了什么事. -->
+          <p v-if="myReview.removed" class="mr-removed">你在这部番下的评论已被管理员移除。</p>
+          <template v-else>
+            <div class="mr-stars">
+              <button v-for="n in 10" :key="n" class="mr-star" :class="{ on: n <= myReview.rating }" @click="myReview.rating = n">★</button>
+            </div>
+            <textarea v-model="myReview.content" placeholder="写评论..." rows="2" class="mr-input"></textarea>
+            <button class="d-btn-save" @click="submitReview" style="margin-top:8px;">{{ myReview.id ? '更新' : '提交' }}</button>
+            <button v-if="myReview.id" class="d-btn-ghost" @click="deleteMyReview" style="margin-left:8px;">删除</button>
+          </template>
         </div>
 
         <!-- Rating bars -->
@@ -524,7 +531,10 @@ const statusOptions = [
   { label: '抛弃', value: 'dropped' },
 ]
 const trackForm = reactive({ id: null, status: 'want_to_watch', progress: 0, score: 0 })
-const myReview = reactive({ id: null, rating: 0, content: '' })
+/* removed 是 V14 起的第三个状态: 写过、但被管理员移除了. 它与"没写过"必须分开 ——
+   前者要给一句说明(见上面的模板), 后者才是那张空表单. 判据是服务端的 exists/removed,
+   不是"这里有没有填上 id"(被移除时 id 不会填, 那样就与没写过混成一样了). */
+const myReview = reactive({ id: null, rating: 0, content: '', removed: false })
 
 function onCoverError(){ coverFailed.value = true }
 function fmt(d){ return d ? new Date(d).toLocaleDateString('zh-CN') : '' }
@@ -567,7 +577,11 @@ async function load(){
     if(userStore.loggedIn){
       const [tk,mr] = await Promise.all([getTrackingStatus(sid),getMyReview(sid)])
       const td=tk.data.data; if(td?.tracked){ trackForm.id=td.id; trackForm.status=td.status; trackForm.progress=td.progress||0; trackForm.score=td.score||0 }
-      const rd=mr.data.data; if(rd?.exists){ myReview.id=rd.id; myReview.rating=rd.rating; myReview.content=rd.content||'' }
+      const rd=mr.data.data
+      // 先落 removed 再判 exists: 被移除的那条**没有** id/rating/content 可用(后端只回
+      // exists=true + removed=true), 把它当成"没写过"就会给出一张能填能提交、提交必 400 的表单
+      myReview.removed = Boolean(rd?.removed)
+      if(rd?.exists && !rd.removed){ myReview.id=rd.id; myReview.rating=rd.rating; myReview.content=rd.content||'' }
       try{ const [w,h] = await Promise.all([getWatchedEpisodes(sid),getAnimeHeat(sid)]); watchedEpisodes.value=w.data.data||[]; heat.value=h.data.data||null }catch(e){}
     }else{ try{ const h=await getAnimeHeat(sid); heat.value=h.data.data||null }catch(e){} }
   }catch(e){
@@ -1038,6 +1052,9 @@ onMounted(load)
 .mr-star.on{ color:var(--star); }
 .mr-input{ width:100%; padding:10px 12px; border:1.5px solid var(--input-border); border-radius:8px; background:var(--input-bg); color:var(--text); font-size:13px; resize:vertical; font-family:inherit; }
 .mr-input:focus{ border-color:var(--primary); outline:none; }
+/* 被移除的那条: 一句说明, 中性色. 不用红色 —— 那是"你出错了"的语气, 而用户除了
+   "知道了"没有任何可做的动作; 也不必提是谁移除的, 那是管理端的信息(见 getUserReview) */
+.mr-removed{ margin:0; font-size:13px; line-height:1.7; color:var(--text-secondary); }
 
 .rate-bars{ display:flex; flex-direction:column; gap:4px; margin-bottom:20px; }
 .rate-bar-row{ display:flex; align-items:center; gap:8px; font-size:12px; }

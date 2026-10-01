@@ -22,8 +22,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -98,11 +100,15 @@ class AdminReviewIntegrationTest {
      * <p>最后三个是 c94 举报补上的. {@code latestReason} 与 {@code latestReportAt}
      * 在**没有被举报的行上也要在**, 值为 {@code null} —— 与 {@code animeTitle} 同一条
      * 理由: 少一个键与"这个值恰好为空"在界面上长得一样, 而前端那一格会走 undefined 分支.
+     *
+     * <p>{@code deletedAt} 是 V14 软删补上的. 它同样"在架上的行也要在, 值为 null",
+     * 而它比前面几个更硬: 界面靠它决定那一行显示「已移除 + 恢复」还是「删除」,
+     * 键一少, 被移除的行看起来就与普通行一模一样 —— 管理员会以为它还活着.
      */
     private static final List<String> ROW_KEYS = List.of(
             "id", "subjectId", "animeTitle", "username", "userId",
             "rating", "content", "likeCount", "replyCount", "createdAt",
-            "reportCount", "latestReason", "latestReportAt");
+            "reportCount", "latestReason", "latestReportAt", "deletedAt");
 
     @Autowired
     private MockMvc mockMvc;
@@ -323,7 +329,7 @@ class AdminReviewIntegrationTest {
      * (别名没声明的话连 Spring 上下文都建不起来)。下面每条用例都带着参数, 只有这条不带。
      */
     @Test
-    @DisplayName("不带任何参数的默认请求: 200 + {list,total,page} 信封, 行里十三个键一个不多一个不少")
+    @DisplayName("不带任何参数的默认请求: 200 + {list,total,page} 信封, 行里十四个键一个不多一个不少")
     void theDefaultRequestIsAWellFormedPage() throws Exception {
         JsonNode data = dataOf();
 
@@ -567,6 +573,64 @@ class AdminReviewIntegrationTest {
         assertThat(afterDismiss.path("latestReason").asText())
                 .as("退回到还待处理的那条")
                 .isEqualTo("SPAM");
+    }
+
+    /**
+     * 被移除的评论与「待处理举报」的关系(V14) —— <b>这条用例同时钉着两个独立的地方</b>:
+     * 队列那半写在 {@code ReviewQueries.FILTER_REPORTED} 里, 角标那半写在
+     * {@code ReviewReportRepository.findPendingSummaries} 里。两者是两份 JPQL, 只改一处
+     * 不会报错, 症状只是「队列里翻不到, 角标却挂着 1」—— 而管理员会一直去点那个角标。
+     *
+     * <p>为什么移除之后举报就算处理完了: 处置本身(把评论撤下来)就是举报想要的结果, 留着
+     * 角标等于这条举报永远排不干净。而**举报行一条都没动** —— 所以恢复之后两样一起回来,
+     * 这一点也在这里钉住(它是"软删"这个选择最值钱的性质)。
+     *
+     * <p>结尾那段走的是真接口({@code DELETE} / {@code PUT .../restore}), 不是直接改库:
+     * 那两个端点的状态码与账本由 {@code AdminReviewDeleteIntegrationTest} 管, 这里要的是
+     * **它们改完之后读路径说了什么**。
+     */
+    @Test
+    @DisplayName("被移除的评论还在列表里(带 deletedAt), 但队列与角标一起归零; 恢复之后一起回来")
+    void aRemovedReviewLeavesTheReportQueueAndItsBadge() throws Exception {
+        long reviewId = reviewIdOf(MARK + "1");
+        seedReport(reviewId, adminId(), "SPAM", "PENDING");
+
+        assertThat(rowOf(dataOf("keyword", MARK), MARK + "1").path("deletedAt").isNull())
+                .as("在架上时这一列是 null")
+                .isTrue();
+        assertThat(contentsOf(dataOf("keyword", MARK, "reported", "true")))
+                .as("前提: 它本来在举报队列里")
+                .containsExactly(MARK + "1");
+
+        mockMvc.perform(delete("/api/admin/reviews/" + reviewId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                .andExpect(status().isOk());
+
+        JsonNode removed = rowOf(dataOf("keyword", MARK), MARK + "1");
+        assertThat(removed.path("deletedAt").isNull())
+                .as("管理端列表里它还在, 而且带着移除时间 —— 这一行要能被恢复")
+                .isFalse();
+        assertThat(removed.path("reportCount").asInt())
+                .as("角标归零")
+                .isZero();
+        assertThat(contentsOf(dataOf("keyword", MARK, "reported", "true")))
+                .as("队列里也不该再有它")
+                .isEmpty();
+
+        mockMvc.perform(put("/api/admin/reviews/" + reviewId + "/restore")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                .andExpect(status().isOk());
+
+        JsonNode restored = rowOf(dataOf("keyword", MARK), MARK + "1");
+        assertThat(restored.path("deletedAt").isNull())
+                .as("恢复之后不再是已移除")
+                .isTrue();
+        assertThat(restored.path("reportCount").asInt())
+                .as("那条举报还原样待处理, 所以角标回来")
+                .isEqualTo(1);
+        assertThat(contentsOf(dataOf("keyword", MARK, "reported", "true")))
+                .as("队列也回来")
+                .containsExactly(MARK + "1");
     }
 
     /**

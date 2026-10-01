@@ -52,8 +52,20 @@ public class AdminActionLog {
      * 滥用它的后果与「封禁」很接近, 所以它必须和其它四个一样留下一条账。
      */
     public static final String USER_PASSWORD_RESET = "USER_PASSWORD_RESET";
-    /** 管理员删除别人的评论 */
+    /** 管理员删除别人的评论 —— V14 起"删除"是软删(置 review.deleted_at), 于是它可以被撤销 */
     public static final String REVIEW_DELETE = "REVIEW_DELETE";
+    /**
+     * 撤销上面那次删除, 把评论放回架上(V14).
+     *
+     * <p>它必须单独占一个取值, 而不是"删掉那条 REVIEW_DELETE": 账本记的是**发生过的事实**,
+     * 撤销是第二件事实。一条评论的来龙去脉读起来就该是这两行 —— 先删后恢复, 各自有时间、
+     * 各有操作人(可能不是同一个管理员)。
+     *
+     * <p>它也不算"破坏性操作"了(撤销怎么会是破坏); 与其它几条放在同一个取值集合里,
+     * 是因为这个集合的用途是**筛选项白名单**, 不是"危险动作清单" —— 危险动作那一个是前端的
+     * {@code Audit.vue} 里的 DANGEROUS 数组。
+     */
+    public static final String REVIEW_RESTORE = "REVIEW_RESTORE";
 
     public static final String TARGET_USER = "USER";
     public static final String TARGET_REVIEW = "REVIEW";
@@ -70,7 +82,7 @@ public class AdminActionLog {
      */
     public static final Set<String> ACTIONS = Collections.unmodifiableSet(
             new LinkedHashSet<>(List.of(USER_BAN, USER_UNBAN, USER_ROLE, USER_UNLOCK,
-                    USER_PASSWORD_RESET, REVIEW_DELETE)));
+                    USER_PASSWORD_RESET, REVIEW_DELETE, REVIEW_RESTORE)));
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

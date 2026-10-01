@@ -330,3 +330,53 @@ describe('谁赞了', () => {
     expect(wrapper.find('.rv-likers').exists()).toBe(false)
   })
 })
+
+/**
+ * 被管理员移除的我那条评论(V14)。
+ *
+ * <p>"我写过、但被移除了"与"我从没写过"在界面上**必须长得不一样**, 否则用户会对着
+ * 一张空表单把自己那条评论重写一遍 —— 而后端会回 400「该作品的评论已被管理员移除」,
+ * 他既不知道自己写过什么, 也不知道这次为什么失败。这条判据只能来自服务端:
+ * 被移除时那个接口回的正是 `exists=true, removed=true`, 且**不带**正文。
+ */
+describe('详情页: 我的评论被管理员移除了', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    getAnimeDetail.mockResolvedValue(ok(SUBJECT))
+    getEpisodes.mockResolvedValue(ok([]))
+    getRatingStats.mockResolvedValue(ok({ count: 1, average: 8, distribution: [] }))
+    getSubjectReviews.mockResolvedValue(ok([review()]))
+    getTrackingStatus.mockResolvedValue(ok({ tracked: false }))
+    getWatchedEpisodes.mockResolvedValue(ok([]))
+    getAnimeHeat.mockResolvedValue(ok(null))
+  })
+
+  it('不给表单, 给一句说明', async () => {
+    getMyReview.mockResolvedValue(ok({ exists: true, removed: true }))
+    const wrapper = await mountDetail()
+
+    expect(wrapper.find('.mr-removed').exists()).toBe(true)
+    // 表单三件套一件都不该在: 留着任何一件, 用户就能编辑一条他看不见的评论
+    expect(wrapper.find('.mr-input').exists()).toBe(false)
+    expect(wrapper.find('.mr-stars').exists()).toBe(false)
+    expect(wrapper.find('.d-btn-save').exists()).toBe(false)
+  })
+
+  it('没写过的那条路照旧是空表单(两副面孔不能混成一个)', async () => {
+    getMyReview.mockResolvedValue(ok({ exists: false, removed: false }))
+    const wrapper = await mountDetail()
+
+    expect(wrapper.find('.mr-input').exists()).toBe(true)
+    expect(wrapper.find('.mr-removed').exists()).toBe(false)
+  })
+
+  it('正常情况下表单照旧, 而且正文是填好的', async () => {
+    getMyReview.mockResolvedValue(ok({ exists: true, removed: false, id: 5, rating: 7, content: '我写的' }))
+    const wrapper = await mountDetail()
+
+    expect(wrapper.find('.mr-removed').exists()).toBe(false)
+    expect(wrapper.find('.mr-input').element.value).toBe('我写的')
+    expect(wrapper.find('.d-btn-save').text()).toBe('更新')
+  })
+})

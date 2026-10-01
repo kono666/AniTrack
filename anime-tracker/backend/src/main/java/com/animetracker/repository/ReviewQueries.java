@@ -45,6 +45,29 @@ final class ReviewQueries {
     }
 
     /**
+     * 「这条评论还在架上」—— V14 给 review 加了软删之后, **每一条读路径都要带上它**。
+     *
+     * <p><b>为什么值得一个常量, 而不是各处直接写 {@code r.deletedAt IS NULL}。</b>
+     * 漏掉一处不会报错, 只会让一条已经被管理员移除的评论在某些界面上继续出现
+     * (评论区、评分统计、个人页的评论数……), 而"少了一处过滤"这件事在代码里长得
+     * 和"这里本来就该显示全部"一模一样。收成一个常量之后, 「哪些读路径带过滤」
+     * 可以用一句 grep 回答, 每一条路径也各有一条用例钉着。
+     *
+     * <p><b>别名固定是 {@code r}。</b> 这是它唯一的形状约束 —— 这个类里所有语句的
+     * review 都叫 {@code r}(包括管理端那条 {@code SELECT r FROM Review r JOIN FETCH
+     * r.user u})。在别的仓储里给别的别名写同一个判断时(比如
+     * {@code ReviewReportRepository.findPendingSummaries} 里的 {@code rr.review}),
+     * 常量拼不进去, 只能照写 —— 那两处必须一起改, 详见各自那行注释。
+     *
+     * <p><b>刻意不加进 {@code WHERE_ADMIN}。</b> 管理端那六条取页与计数是**唯一**
+     * 看得见被移除评论的地方: 管理员要能在列表里找到自己刚删掉的那一条并恢复它。
+     * 所以 {@code ALIVE} 在管理端只出现在「只看被举报」那个开关里(见
+     * {@link #FILTER_REPORTED})—— 队列说的是「还有什么要处理」, 而一条已经被移除的
+     * 评论不需要处理(已经处理过了, 只是方式更重)。
+     */
+    static final String ALIVE = "r.deletedAt IS NULL";
+
+    /**
      * 某部番的短评 + 作者, 一次取回; 取多少条由 Pageable 决定。
      *
      * <p>{@code JOIN FETCH r.user} 的理由写在仓储那个方法上(避免 N+1), 这里只用记住
@@ -56,7 +79,7 @@ final class ReviewQueries {
      * 片段拼成两句不同的完整语句, 而位置参数在两条语句里的含义靠人去数, 命名参数不用。
      */
     static final String SELECT_PAGE =
-            "SELECT r FROM Review r JOIN FETCH r.user WHERE r.subjectId = :subjectId";
+            "SELECT r FROM Review r JOIN FETCH r.user WHERE r.subjectId = :subjectId AND " + ALIVE;
 
     /**
      * 默认序: 最新在前。与改动前的 {@code ORDER BY r.createdAt DESC} 相比只多了一个
@@ -171,6 +194,17 @@ final class ReviewQueries {
      * <p>只认 {@code PENDING}: 被忽略掉的举报不该继续把评论留在队列里, 否则「忽略」
      * 这个动作在界面上的效果是「点了没反应」。
      *
+     * <p><b>再加上半句 {@code ALIVE}, 于是「待处理」= 状态是 PENDING **且这条评论还在
+     * 架上**。</b> 这半句是 V14 补的, 而 V13 那一段注释早就把这条口径写在那儿了 ——
+     * 硬删时代它靠"行都没了"天然成立, 改成软删之后必须明写出来, 否则被移除的评论会
+     * 一直挂在队列里等一个永远不会来的处理。
+     *
+     * <p>⚠️ <b>同一件事还有另一半, 在 {@code ReviewReportRepository.findPendingSummaries}
+     * 里</b> —— 管理端行上那个「被举报 N 次」的徽标走的是那条查询。两处必须一起改:
+     * 只改这里, 队列干净了而列表上仍挂着徽标; 只改那里, 徽标归零了而队列里还留着行。
+     * 钉住它们一致的是 {@code AdminReviewIntegrationTest} 里那条
+     * 「被移除的评论既不在队列里、徽标也归零, 恢复之后两样一起回来」。
+     *
      * <p>⚠️ <b>H2 上这个 {@code OR} 不会被折叠掉。</b> 应用发的是**绑定参数**,
      * H2 无法按参数值把没选中的那一支从计划里摘掉, 于是即使 {@code reported} 是 false,
      * 那半句仍然在计划里(每行一次 {@code review_report} 的索引探针 —— 走
@@ -179,9 +213,9 @@ final class ReviewQueries {
      * 开销, 与 c78 那次「H2 消不掉 OR」是同一回事, 别拿 H2 的计划去推 PG。
      */
     static final String FILTER_REPORTED =
-            "(:reported = FALSE OR EXISTS ("
+            "(:reported = FALSE OR (" + ALIVE + " AND EXISTS ("
                     + " SELECT 1 FROM ReviewReport rr"
-                    + " WHERE rr.review.id = r.id AND rr.status = 'PENDING'))";
+                    + " WHERE rr.review.id = r.id AND rr.status = 'PENDING')))";
 
     /** 三个可选条件的合取. 给值才筛、不给就不筛, 理由同 {@code UserQueries.WHERE} */
     static final String WHERE_ADMIN =

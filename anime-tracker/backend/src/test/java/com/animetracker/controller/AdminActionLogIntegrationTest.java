@@ -216,7 +216,7 @@ class AdminActionLogIntegrationTest {
         assertThat(row.path("action").asText()).isEqualTo("REVIEW_DELETE");
         assertThat(row.path("targetType").asText()).isEqualTo("REVIEW");
         assertThat(row.path("detail").asText())
-                .isEqualTo("删除用户 " + PREFIX + "carol 在作品 " + SUBJECT_ID + " 下的评论：这动画不错");
+                .isEqualTo("移除用户 " + PREFIX + "carol 在作品 " + SUBJECT_ID + " 下的评论：这动画不错");
     }
 
     // ========== 筛选与分页 ==========

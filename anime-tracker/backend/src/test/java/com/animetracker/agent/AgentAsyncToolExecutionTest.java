@@ -84,7 +84,7 @@ class AgentAsyncToolExecutionTest {
         author = userRepository.findByUsername("async-probe").orElseGet(() ->
                 userRepository.save(User.builder()
                         .username("async-probe").password("x").role("USER").build()));
-        if (reviewRepository.findBySubjectIdOrderByCreatedAtDesc(SUBJECT_ID).isEmpty()) {
+        if (reviewRepository.findBySubjectIdAndDeletedAtIsNullOrderByCreatedAtDesc(SUBJECT_ID).isEmpty()) {
             reviewRepository.save(Review.builder()
                     .user(author).subjectId(SUBJECT_ID).rating(8).content("这部真的好看").build());
         }
@@ -92,7 +92,7 @@ class AgentAsyncToolExecutionTest {
 
     /** 一次「事务外读不到、事务内读得到」的访问: 拿到评论再读它的作者名 */
     private String authorNameOutsideAnyTransaction() {
-        return reviewRepository.findBySubjectIdOrderByCreatedAtDesc(SUBJECT_ID)
+        return reviewRepository.findBySubjectIdAndDeletedAtIsNullOrderByCreatedAtDesc(SUBJECT_ID)
                 .get(0).getUser().getUsername();
     }
 

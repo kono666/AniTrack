@@ -98,6 +98,11 @@ public class ReviewLikeService {
             //   · 外键 fk_review_like_review —— 这条评论刚好在这两步之间被别人删了,
             //     那是真的没有了, 该报 404 而不是假装赞成功。
             // 只在冲突这条罕见路径上多花一条查询, 正常路径一次都不花。
+            //
+            // 这里用的是**不过滤删除标记**的 existsById, 与下面 unlike 那处不同: 它回答的是
+            // 「这一行还在不在库里」—— 外键冲突只可能由**物理删除**引起(软删不碰子表,
+            // 作者删自己的评论才是硬删), 所以带上 deletedAt IS NULL 反而会把它变成一个
+            // 答非所问的问题。
             if (!reviewRepository.existsById(reviewId)) {
                 throw BusinessException.notFound("评论不存在");
             }
@@ -114,7 +119,9 @@ public class ReviewLikeService {
      * 没删掉却减一, 计数就永久少一个, 而点赞的人越多、重复取消越频繁, 偏得越远。
      */
     public Map<String, Object> unlike(User user, Long reviewId) {
-        if (!reviewRepository.existsById(reviewId)) {
+        // V14 起判"在架上"而不是"行在不在": 被管理员移除的评论从用户侧就是没有了,
+        // 对一个用户根本看不见的东西取消点赞, 该和 like 一样回 404。
+        if (!reviewRepository.existsByIdAndDeletedAtIsNull(reviewId)) {
             throw BusinessException.notFound("评论不存在");
         }
         isolatedInsert.attempt(() -> {

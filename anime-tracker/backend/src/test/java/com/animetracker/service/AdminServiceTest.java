@@ -37,7 +37,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 管理端那些**写**动作的护栏: 改角色 / 封禁 / 解锁 / 删评论, 以及它们留下的账.
+ * 管理端那些**写**动作的护栏: 改角色 / 封禁 / 解锁 / 删评论(含 V14 的软删与恢复),
+ * 以及它们留下的账.
  *
  * <p>这些规则的价值全在「写错了不会报错」上: 白名单漏了, 库里会多出一个
  * 名字像管理员、权限却不是的账号, 没有任何一处会报错; 少拦一次「改自己」或
@@ -512,9 +513,13 @@ class AdminServiceTest {
      *
      * <p>顺带钉住摘要那 60 字的口径 —— 正文最长 5000 字, 原样记进 detail 就是几十 KB
      * 一行; 而这一点在两处实现(账本、收到的回复)之间漂掉时, 没有任何东西会报错.
+     *
+     * <p>V14 起还要钉住**它没有真的删行**: {@code reviewRepository.delete} 一次都不该被
+     * 调用, 改的是那两个字段. 这条断言看着像实现细节, 其实是整个软删的地基 —— 真删掉之后
+     * 恢复接口会因为找不到行而回 404, 而"删干净了"这件事本身完全静默, 界面照样显示成功.
      */
     @Test
-    @DisplayName("删评论: 记下作者与正文摘要, 摘要封顶 60 字")
+    @DisplayName("删评论: 打的是软删标记, 记下作者与正文摘要, 摘要封顶 60 字")
     void deletingAReviewSnapshotsTheAuthorAndASnippet() {
         Review review = Review.builder()
                 .id(9L).user(user(3L, "carol", "USER")).subjectId(96000201)
@@ -523,13 +528,16 @@ class AdminServiceTest {
 
         adminService.deleteAnyReview(user(1L, "admin", "ADMIN"), 9L);
 
-        verify(reviewRepository).delete(review);
+        assertThat(review.isRemoved()).as("标记打上了").isTrue();
+        assertThat(review.getDeletedBy()).isEqualTo(1L);
+        verify(reviewRepository, never()).delete(any(Review.class));
+        verify(reviewRepository).save(review);
         AdminActionLog log = onlyAuditRow();
         assertThat(log.getAction()).isEqualTo(AdminActionLog.REVIEW_DELETE);
         assertThat(log.getTargetType()).isEqualTo(AdminActionLog.TARGET_REVIEW);
         assertThat(log.getTargetId()).isEqualTo(9L);
         assertThat(log.getDetail())
-                .isEqualTo("删除用户 carol 在作品 96000201 下的评论：" + "甲".repeat(60) + "…");
+                .isEqualTo("移除用户 carol 在作品 96000201 下的评论：" + "甲".repeat(60) + "…");
     }
 
     /** 只打分不写字的评论是合法的, 那种情况下 detail 里不能出现一个空的冒号 */
@@ -543,6 +551,38 @@ class AdminServiceTest {
         adminService.deleteAnyReview(user(1L, "admin", "ADMIN"), 9L);
 
         assertThat(onlyAuditRow().getDetail()).endsWith("（无正文）");
+    }
+
+    /**
+     * 恢复: 两个字段一起清空, 并且**另记一笔** REVIEW_RESTORE.
+     *
+     * <p>为什么不是"把那条 REVIEW_DELETE 删掉": 账本记的是发生过的事实, 撤销是第二件事实.
+     * 一条评论的来龙去脉读起来就该是两行 —— 先删后恢复, 各有时间、各有操作人(可能不是
+     * 同一个管理员). 只留删除记录的话, 事后读账的人看到的是「某年某月被删了」, 而那条
+     * 评论现在明明在列表上, 他会以为账本坏了.
+     *
+     * <p>{@code deletedBy} 也要清掉: 那两个字段的约定是同时有值或同时为空(见 V14),
+     * 而"谁把它撤下来的"已经由这一行账记着了.
+     */
+    @Test
+    @DisplayName("恢复评论: 清掉两个标记, 并另记一笔 REVIEW_RESTORE(不是抹掉原来那条)")
+    void restoringClearsTheMarkerAndRecordsItsOwnAction() {
+        Review review = Review.builder()
+                .id(9L).user(user(3L, "carol", "USER")).subjectId(96000201)
+                .content("说错话了").deletedAt(LocalDateTime.now()).deletedBy(1L).build();
+        when(reviewRepository.findById(9L)).thenReturn(Optional.of(review));
+
+        adminService.restoreAnyReview(user(1L, "admin", "ADMIN"), 9L);
+
+        assertThat(review.isRemoved()).as("放回架上了").isFalse();
+        assertThat(review.getDeletedBy()).isNull();
+        verify(reviewRepository).save(review);
+
+        AdminActionLog log = onlyAuditRow();
+        assertThat(log.getAction()).isEqualTo(AdminActionLog.REVIEW_RESTORE);
+        assertThat(log.getTargetType()).isEqualTo(AdminActionLog.TARGET_REVIEW);
+        assertThat(log.getTargetId()).isEqualTo(9L);
+        assertThat(log.getDetail()).isEqualTo("恢复用户 carol 在作品 96000201 下的评论：说错话了");
     }
 
     /**
@@ -572,6 +612,24 @@ class AdminServiceTest {
         when(reviewRepository.findById(7L)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> adminService.deleteAnyReview(actor, 7L))
                 .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> adminService.restoreAnyReview(actor, 7L))
+                .isInstanceOf(BusinessException.class);
+
+        // V14 的两条"状态不对"(400): 已移除的再删一次、没移除的却要恢复.
+        // 它们尤其不能记账 —— 重复点一下删除就在操作日志页上留下两条 REVIEW_DELETE,
+        // 而那一页读起来就是"删了两次", 没有任何东西会提示这是同一个动作点了两下.
+        when(reviewRepository.findById(8L)).thenReturn(Optional.of(Review.builder()
+                .id(8L).user(user(3L, "carol", "USER")).subjectId(96000201)
+                .deletedAt(LocalDateTime.now()).build()));
+        assertThatThrownBy(() -> adminService.deleteAnyReview(actor, 8L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("该评论已被移除");
+
+        when(reviewRepository.findById(9L)).thenReturn(Optional.of(Review.builder()
+                .id(9L).user(user(3L, "carol", "USER")).subjectId(96000201).build()));
+        assertThatThrownBy(() -> adminService.restoreAnyReview(actor, 9L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("该评论未被移除");
 
         verify(adminActionLogRepository, never()).save(any(AdminActionLog.class));
     }

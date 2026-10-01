@@ -208,12 +208,34 @@ public class AdminController {
         return ApiResponse.success("已忽略", reviewReportService.dismiss(user, reportId));
     }
 
-    /** 删除评论 */
+    /**
+     * 删除评论 —— V14 起是**软删**: 评论从用户侧消失, 但行还在, 可以被下面的接口恢复.
+     * 完整理由(以及为什么这条路径上删的人一定是管理员)见 {@code AdminService.deleteAnyReview}
+     * 与 {@code V14__add_review_soft_delete.sql}.
+     */
     @DeleteMapping("/reviews/{reviewId}")
     public ApiResponse<Void> deleteReview(@CurrentUser User user, @PathVariable Long reviewId) {
         adminService.checkAdmin(user);
         adminService.deleteAnyReview(user, reviewId);
         return ApiResponse.success("评论已删除", null);
+    }
+
+    /**
+     * 恢复一条被移除的评论(V14).
+     *
+     * <p>用 PUT 不用 POST: 与 {@code unlockUser}、{@code dismissReport} 同一条理由 ——
+     * 它把一条评论的状态改成**确定值**(在架上), 幂等地重复执行与执行一次结果相同;
+     * 而"已经移除过的那条再恢复一次"由 service 挡成 400(不记第二笔账), 见
+     * {@code AdminService.restoreAnyReview}。
+     *
+     * <p>路径形状与删除那条对称({@code /reviews/{id}} 上的两个方法), 于是前端的
+     * 「删除 / 恢复」也就是同一个 URL 上的两个动词, 不需要为恢复另想一套命名。
+     */
+    @PutMapping("/reviews/{reviewId}/restore")
+    public ApiResponse<Void> restoreReview(@CurrentUser User user, @PathVariable Long reviewId) {
+        adminService.checkAdmin(user);
+        adminService.restoreAnyReview(user, reviewId);
+        return ApiResponse.success("评论已恢复", null);
     }
 
     /**

@@ -141,9 +141,12 @@ class NotificationWriteTest {
         // 被回复/被赞的那条评论: 作者是 AUTHOR_ID
         when(reviewRepository.findByIdWithUser(REVIEW_ID)).thenReturn(Optional.of(review()));
         when(reviewRepository.readLikeCount(anyLong())).thenReturn(1L);
-        /* 两条 existsById 是取消赞/取消回复的赞的前置判断, 也是幂等路径的 catch 里
-           "这条东西还在不在"那一次复查 —— 默认的 false 会让它们全都变成 404 */
+        /* 三条 existsById 是取消赞/取消回复的赞的前置判断("在架上吗"), 也是幂等路径的
+           catch 里"这条东西还在不在"那一次复查 —— 默认的 false 会让它们全都变成 404。
+           V14 之后评论那两个是**两个不同的方法**(一个带 DeletedAtIsNull 判在不在架上,
+           一个只是问那一行还在不在), 所以两条桩都得给 */
         when(reviewRepository.existsById(anyLong())).thenReturn(true);
+        when(reviewRepository.existsByIdAndDeletedAtIsNull(anyLong())).thenReturn(true);
         when(reviewReplyRepository.existsById(anyLong())).thenReturn(true);
     }
 

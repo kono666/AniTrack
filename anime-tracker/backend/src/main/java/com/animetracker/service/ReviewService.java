@@ -68,7 +68,7 @@ public class ReviewService {
     public Review saveReview(User user, ReviewRequest req) {
         Optional<Review> existing = reviewRepository.findByUserAndSubjectId(user, req.getSubjectId());
         if (existing.isPresent()) {
-            return applyAndSave(existing.get(), req);
+            return applyAndSave(rejectIfRemoved(existing.get()), req);
         }
         try {
             return isolatedInsert.attempt(() -> applyAndSave(Review.builder()
@@ -78,8 +78,28 @@ public class ReviewService {
         } catch (DataIntegrityViolationException e) {
             Review winner = reviewRepository.findByUserAndSubjectId(user, req.getSubjectId())
                     .orElseThrow(() -> e);
-            return applyAndSave(winner, req);
+            return applyAndSave(rejectIfRemoved(winner), req);
         }
+    }
+
+    /**
+     * 被管理员移除的那一条**不能**靠"再发一次"复活(V14)。
+     *
+     * <p>查重那一步是刻意不过滤删除标记的(理由写在
+     * {@link com.animetracker.repository.ReviewRepository#findByUserAndSubjectId} 上),
+     * 于是这里必然撞见一条已移除的旧行, 而它必须被挡住: 放行等于写回 rating/content,
+     * 删掉的评论原地复活, 而**管理员的处置被用户一个保存动作撤销了** —— 账本里那条
+     * REVIEW_DELETE 还在, 界面上那条评论也还在, 只有"移除"这个动作悄悄失效了。
+     *
+     * <p>回 400 而不是静默忽略: 用户点的是"发布", 他必须知道这次没成、以及为什么。
+     * 这条路径同时被 {@code AdminReviewIntegrationTest} 钉着(移除 → 用户重发 → 400,
+     * 且那条评论仍然是被移除的状态)。
+     */
+    private static Review rejectIfRemoved(Review review) {
+        if (review.isRemoved()) {
+            throw BusinessException.badRequest("该作品的评论已被管理员移除");
+        }
+        return review;
     }
 
     /** 落字段并立刻 flush, 让约束冲突必定在 try 块内抛出. 理由同 TrackService. */
@@ -89,9 +109,18 @@ public class ReviewService {
         return reviewRepository.saveAndFlush(review);
     }
 
-    /** 删除评论 */
+    /**
+     * 删除评论 —— 作者删自己的一律**硬删**(V14 起依然如此, 软删只属于管理员).
+     *
+     * <p>所以这里判的是"在不在架上"而不是"行在不在": 一条已被管理员移除的评论, 作者再来
+     * 删一次会拿到 404 而不是把行删掉。这一条是**撤销权的一部分** —— 管理员那条移除是
+     * 可以恢复的, 而作者的一次硬删会让它变得不可恢复(CASCADE 还会把回复与赞一起带走),
+     * 于是"用户点了一下删除"就成了"管理员的处置被永久固化"。从用户侧看他也确实没什么
+     * 可删的: 那条评论他一条也看不到。
+     */
     public void deleteReview(User user, Long reviewId) {
         Review review = reviewRepository.findById(reviewId)
+                .filter(r -> !r.isRemoved())
                 .orElseThrow(() -> BusinessException.notFound("评论不存在"));
         if (!review.getUser().getId().equals(user.getId())) {
             throw BusinessException.forbidden("无权删除他人评论");
@@ -230,11 +259,23 @@ public class ReviewService {
         return stats;
     }
 
-    /** 获取用户自己的评论 */
+    /**
+     * 获取用户自己的评论 —— 详情页那半边"我的评论"表单靠它决定显示什么.
+     *
+     * <p>{@code removed} 是 V14 加的第三个状态: {@code exists=true, removed=true} 表示
+     * "你写过, 但被管理员移除了"。它与 {@code exists=false} 必须分得开 —— 前者不能让用户
+     * 就地重发(会被 {@link #saveReview} 挡回 400, 见那里), 所以界面上要显示的是一句说明,
+     * 不是一个填好了正文、点保存却报错的表单。
+     *
+     * <p>为什么是**布尔**而不是把 {@code deletedAt} 原样给前端: 前端能拿它做的唯一一件事
+     * 就是"显示不显示那个表单", 一个时间戳会诱使下一版界面去显示"移除于 x 月 x 日" ——
+     * 而那是管理端的信息, 不是给作者看的(作者那条评论他已经看不见了)。
+     */
     public Map<String, Object> getUserReview(User user, Integer subjectId) {
         Optional<Review> review = reviewRepository.findByUserAndSubjectId(user, subjectId);
         Map<String, Object> result = new HashMap<>();
         result.put("exists", review.isPresent());
+        result.put("removed", review.map(Review::isRemoved).orElse(false));
         review.ifPresent(r -> {
             result.put("id", r.getId());
             result.put("rating", r.getRating());

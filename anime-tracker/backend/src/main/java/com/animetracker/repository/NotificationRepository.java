@@ -31,11 +31,52 @@ import java.util.List;
  *
  * <p>{@code recipient} 不 fetch: 收件人永远是当前登录的人, 调用方手上就有,
  * 再 JOIN 一次只是白读一行。
+ *
+ * <p>V14 起还多一条: <b>除了写路径, 每条查询都带 {@link #REVIEW_STILL_VISIBLE}</b>
+ * (收件人之外的第二个不变量)。原因与写法都在那个常量上。
  */
 public interface NotificationRepository extends JpaRepository<Notification, Long> {
 
-    /** 与 {@link #findPage} **同一份 WHERE** 的计数。两处的条件必须一起改 */
-    @Query("SELECT COUNT(n) FROM Notification n WHERE n.recipient.id = :recipientId")
+    /**
+     * 「这条通知指向的那条评论还在架上」—— 收件人之外的第二个不变量, 读与写共用。
+     *
+     * <p><b>为什么通知也要跟着评论的软删走。</b> V11 给 {@code review_id} 挂的是
+     * {@code ON DELETE CASCADE}: 评论**硬删**时通知跟着没了。V14 把管理员的删除改成软删,
+     * 那条级联从此不再触发, 于是会留下一批指向"用户看不见的评论"的通知 —— 收件人点进去
+     * 是一条 404, 而这就是软删必须自己带上读过滤的原因(与 {@code ReviewQueries.ALIVE}
+     * 同一条理由)。**恢复评论时它们原样回来**, 因为一行都没删。
+     *
+     * <p><b>为什么写成 {@code NOT EXISTS} 而不是 {@code LEFT JOIN n.review r}。</b>
+     * 写成 join 有两种坏法, 都不报错:
+     * <ul>
+     *   <li>写成本意上的内连接(或者让 Hibernate 把 {@code n.review.deletedAt} 这条路径
+     *       隐式地连成一个内连接): {@code reply_id} 那两类之外还有 {@code REVIEW_LIKE}
+     *       与 {@code REPLY_LIKE}, 前者 {@code review_id} 有值、后者为 null —— 内连接会
+     *       把**整整一类通知**从列表里抹掉。这个坑类注释里已经记过一次;</li>
+     *   <li>{@code markAllRead} 是一条**批量 UPDATE**, 而 JPQL 的 UPDATE 不允许 join
+     *       (UPDATE 的 from 子句只有目标实体本身), 想把条件写在那里就只能靠子查询。</li>
+     * </ul>
+     *
+     * <p><b>{@code review_id} 为 null 那一类不需要单独开一个分支</b>, 这正是写成
+     * {@code NOT EXISTS} 的好处: {@code n.review.id} 是外键列上的访问(不产生 join,
+     * 见 {@code ReviewReportRepository} 里同一句说明), 为空时 {@code r.id = NULL}
+     * 恒不成立 → 子查询查不到 → {@code NOT EXISTS} 为真 → 这一行留下。
+     * 写成 {@code n.review IS NULL OR n.review.deletedAt IS NULL} 也行, 但那要依赖
+     * "Hibernate 会不会为后半句连一个 join", 而那个问题的答案是实现细节。
+     *
+     * <p>{@code r.deletedAt IS NOT NULL} 用否定式而不是 {@code IS NULL}, 是为了让
+     * "null 的外键"与"评论已被移除"两条路合并成同一个判断 —— 反过来说,
+     * 这里数的是**被藏起来的**, 不是"活着的"。
+     */
+    String REVIEW_STILL_VISIBLE =
+            "NOT EXISTS (SELECT 1 FROM Review r WHERE r.id = n.review.id AND r.deletedAt IS NOT NULL)";
+
+    /**
+     * 与 {@link #findPage} **同一份 WHERE** 的计数。两处的条件必须一起改
+     * (两个都带 `recipientId` 与 {@link #REVIEW_STILL_VISIBLE})。
+     */
+    @Query("SELECT COUNT(n) FROM Notification n WHERE n.recipient.id = :recipientId"
+            + " AND " + REVIEW_STILL_VISIBLE)
     long countPage(@Param("recipientId") Long recipientId);
 
     /**
@@ -47,7 +88,7 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
      */
     @Query("SELECT n FROM Notification n JOIN FETCH n.actor "
             + "LEFT JOIN FETCH n.review LEFT JOIN FETCH n.reply "
-            + "WHERE n.recipient.id = :recipientId "
+            + "WHERE n.recipient.id = :recipientId AND " + REVIEW_STILL_VISIBLE + " "
             + "ORDER BY n.createdAt DESC, n.id DESC")
     List<Notification> findPage(@Param("recipientId") Long recipientId, Pageable pageable);
 
@@ -58,9 +99,13 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
      * <p>它没有自己的索引, 靠的是 {@code idx_notification_recipient_created} 的最左前缀
      * (理由写在 V11 的头部): 未读是"每次查看就清零"的小集合, 收件人这一层已经把它
      * 收窄到一个人的几十行。
+     *
+     * <p>它必须与 {@link #findPage} 说同一件事({@link #REVIEW_STILL_VISIBLE} 也要带),
+     * 否则会出现「列表里一条未读都没有, 导航栏红点却挂着 1」—— 而红点点开是空的。
+     * 这个数就是导航栏那个红点的全部依据。
      */
     @Query("SELECT COUNT(n) FROM Notification n "
-            + "WHERE n.recipient.id = :recipientId AND n.readAt IS NULL")
+            + "WHERE n.recipient.id = :recipientId AND n.readAt IS NULL AND " + REVIEW_STILL_VISIBLE)
     long countUnread(@Param("recipientId") Long recipientId);
 
     /**
@@ -77,10 +122,18 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
      * <p>{@code @Transactional} 是批量 UPDATE 的硬要求(缺了它 Spring Data 直接抛
      * {@code TransactionRequiredException}), 与 {@code ReviewRepository} 里那几条
      * 计数器语句同一个写法。
+     *
+     * <p>V14 起也带 {@link #REVIEW_STILL_VISIBLE}, 与它标记的那些行(即 {@link #findPage}
+     * 看得见的那批)严格是同一批。这样选的好处: 被藏起来的那几条**保持未读**,
+     * 于是评论被恢复之后它们以未读的样子回来 —— 用户从没看见过它们, 不该被算成"看过了"。
+     * (若这里不过滤, 恢复之后它们显示成已读, 而用户根本不知道自己错过了什么。)
+     *
+     * <p>返回值里因此会少算被藏起来的那些 —— 这正是要的: 它与 {@link #countUnread}
+     * 配成一对, 两个数都只数用户看得见的。
      */
     @Transactional
     @Modifying
     @Query("UPDATE Notification n SET n.readAt = :now "
-            + "WHERE n.recipient.id = :recipientId AND n.readAt IS NULL")
+            + "WHERE n.recipient.id = :recipientId AND n.readAt IS NULL AND " + REVIEW_STILL_VISIBLE)
     int markAllRead(@Param("recipientId") Long recipientId, @Param("now") LocalDateTime now);
 }

@@ -12,12 +12,65 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 短评的仓储.
+ *
+ * <p><b>V14 起 review 是软删的, 于是这里多了一条纪律: 凡是"读给用户看"的方法都必须带
+ * {@code deletedAt IS NULL}</b>, 而漏掉的表现是「被管理员移除的评论又冒出来」——
+ * 不报错、不掉用例, 只是有人能重新看见它。判定统一收在 {@link ReviewQueries#ALIVE}
+ * 与 {@link #existsByIdAndDeletedAtIsNull} 两处, 每条读路径各有用例钉着;
+ * 名字里带 {@code AndDeletedAtIsNull} 也是这个用途: 让过滤条件出现在调用处。
+ *
+ * <p><b>只有三处刻意不带</b>, 各自都有注释说明, 都别"顺手补齐":
+ * {@link #findByUserAndSubjectId}(查重, 带上会让用户再也发不出评论)、
+ * {@link #findByIdWithUser} 的两个调用方在冲突分支里用的 {@link #existsById}
+ * (问的是"这一行还在不在", 用来分辨外键冲突与唯一冲突)、以及账本自己的读
+ * (账本必须活得比目标久 —— 但它读的是另一张表)。
+ */
 public interface ReviewRepository extends JpaRepository<Review, Long> {
+
+    /**
+     * 一个用户对一部番的那一条短评.
+     *
+     * <p><b>这里刻意不带 {@code deletedAt IS NULL}, 别"顺手补齐"。</b> 它是
+     * {@code ReviewService.saveReview} 那条「一个人对一部番只有一条」的查重路径:
+     * 带上过滤之后, 被移除过短评的用户再发同一部番, 这里查不到旧行, 于是直接 INSERT,
+     * 撞上 {@code uk_review_user_subject}; 冲突重试分支里再查一次还是查不到, 最后抛出去。
+     * 用户看到的是「这部番我再也发不了评论」, 而日志里只有一句唯一约束冲突。
+     *
+     * <p>不过滤之后, 查到一条已移除的行该怎么处理由调用方定: {@code saveReview}
+     * 回 400「该作品的评论已被管理员移除」, <b>而不是把旧行复活</b> —— 复活等于
+     * 用户自己点一下发布就撤销了管理员的处置。
+     */
     Optional<Review> findByUserAndSubjectId(User user, Integer subjectId);
-    List<Review> findBySubjectIdOrderByCreatedAtDesc(Integer subjectId);
-    List<Review> findByUserOrderByCreatedAtDesc(User user);
-    long countBySubjectId(Integer subjectId);
-    long count();
+
+    /**
+     * 某部番的全部短评, 按时间倒序. <b>生产代码里没有调用方</b>: 唯一的调用者是
+     * {@code AgentAsyncToolExecutionTest}(它要的只是"把那部番的短评取回来"当探针),
+     * 以及 {@code ReviewServiceTest} 里一条「评分统计不该走这条路」的哨兵。
+     *
+     * <p>不过滤的名字里也带着 {@code AndDeletedAtIsNull}: 它是一条公开读路径,
+     * 将来谁拿它去渲染列表, 过滤条件已经写在他眼前了。
+     */
+    List<Review> findBySubjectIdAndDeletedAtIsNullOrderByCreatedAtDesc(Integer subjectId);
+
+    /**
+     * 某个用户的全部短评, 按时间倒序. 调用方只有 {@code StatsService.getOverallStats},
+     * 在那里是为了数出「我写了几条」。
+     *
+     * <p>必须过滤: 不过滤的话, 个人中心会显示一个用户自己怎么数都数不出来的数字
+     * (被移除的那条他一条也看不到)。
+     */
+    List<Review> findByUserAndDeletedAtIsNullOrderByCreatedAtDesc(User user);
+
+    /**
+     * 在架短评总数 —— 管理端仪表盘上那个数字.
+     *
+     * <p>为什么不是继承来的 {@code count()}: 那个把被移除的也算进去, 于是仪表盘上
+     * 「总评论数」比评论管理页翻得到的行数还多, 而差在哪没有任何地方会说明。
+     * 与上面那些读路径是同一条规矩。
+     */
+    long countByDeletedAtIsNull();
 
     /**
      * 每个分数各有几条 —— 评分统计用, 返回的每行是 {@code [分数, 条数]}, 最多十行.
@@ -30,8 +83,12 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
      *
      * <p>换成 GROUP BY 之后, 数据库只回十行以内的计数, 读进来的实体是 0 个
      * (投影不是实体), 与评论条数无关. 用例数着这两个数(见 QueryCountIntegrationTest).
+     *
+     * <p>V14 起多一个 {@code deletedAt IS NULL}: 评分统计与评论列表必须说同一件事,
+     * 否则会出现「列表里一条评论都没有, 均分却有 8.5」—— 被移除的短评还在给作品打分。
      */
-    @Query("SELECT r.rating, COUNT(r) FROM Review r WHERE r.subjectId = ?1 GROUP BY r.rating")
+    @Query("SELECT r.rating, COUNT(r) FROM Review r WHERE r.subjectId = ?1 AND "
+            + ReviewQueries.ALIVE + " GROUP BY r.rating")
     List<Object[]> countByRating(Integer subjectId);
 
     /**
@@ -164,9 +221,33 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
      * 而是把"取回整行"这件事一次做完。
      *
      * <p>写通知要收件人的 id(评论作者), 这是它唯一的调用方。
+     *
+     * <p>V14 起带 {@code deletedAt IS NULL}: 三个调用方(点赞、回复、举报)都是**写路径**,
+     * 对一条已被移除的短评动手应该回 404「评论不存在」—— 从用户侧看它确实不存在了。
+     * 点赞那条尤其要守: 一条被移除的短评还能涨赞数, 恢复之后赞数就比赞的条数多。
      */
-    @Query("SELECT r FROM Review r JOIN FETCH r.user WHERE r.id = :id")
+    @Query("SELECT r FROM Review r JOIN FETCH r.user WHERE r.id = :id AND " + ReviewQueries.ALIVE)
     Optional<Review> findByIdWithUser(@Param("id") Long id);
+
+    /**
+     * 这条短评**在架上**吗 —— 写路径的守门人.
+     *
+     * <p>与继承来的 {@code existsById} 只差一个 {@code deletedAt IS NULL}, 但两者要问的
+     * 是两个不同的问题, 别当成重复:
+     * <ul>
+     *   <li>这个(带过滤): 「这条评论还该被操作吗」—— 取消点赞、看回复列表、举报、看举报明细
+     *       都问这个;</li>
+     *   <li>{@code existsById}(不带): 「这一行还在不在库里」—— 只在冲突分支里用, 用来
+     *       分辨「撞了外键(评论没了)」和「撞了唯一约束(本来就举报过)」, 那是个关于
+     *       **物理行**的问题, 见 {@code ReviewLikeService.like} 与
+     *       {@code ReviewReportService.report} 的 catch 里那两处。</li>
+     * </ul>
+     *
+     * <p>派生方法名里的 {@code DeletedAtIsNull} 跟着字段名走, 与
+     * {@link ReviewQueries#ALIVE} 表达同一件事 —— 两条写法的存在只是因为
+     * 「JPQL 里拼字符串」和「派生查询」用的不是同一套语法。
+     */
+    boolean existsByIdAndDeletedAtIsNull(Long id);
 
     // ==================== 管理端评论列表 ====================
     //

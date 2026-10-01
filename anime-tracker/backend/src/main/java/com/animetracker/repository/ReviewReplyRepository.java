@@ -53,8 +53,19 @@ public interface ReviewReplyRepository extends JpaRepository<ReviewReply, Long> 
      * 同样只是外键列. 但它同时要用 {@code review.id} 去减 reply_count —— 也只是外键列.
      * fetch 它是因为**没有环境事务**时(这个 service 刻意不带类级 @Transactional)访问
      * 懒加载会炸, 而多读一行评论比在这里赌"用不到"便宜。
+     *
+     * <p>V14 起多一个 {@code rr.review.deletedAt IS NULL}: 三个调用方(赞回复、编辑回复、
+     * 删回复)都是用户侧动作, 而**评论被移除之后它下面的回复跟着一起看不见** ——
+     * 回复行本身一条没动(软删碰的是 review 那一行), 所以恢复评论时它们原样回来。
+     * 不带这个条件的话, 拿一个猜到的 replyId 仍然能对着一条谁都看不见的回复点赞、
+     * 编辑、删除。
+     *
+     * <p>列表那条 {@link #findReplies} 没有加同样的条件, 因为它的调用方
+     * {@code ReviewReplyService.getReplies} 在进门处就问了"这条评论在架上吗" ——
+     * 把条件写进那条语句只会给热路径多一个 join, 而那个 join 的每一行都已经判过了。
      */
-    @Query("SELECT rr FROM ReviewReply rr JOIN FETCH rr.user JOIN FETCH rr.review WHERE rr.id = :id")
+    @Query("SELECT rr FROM ReviewReply rr JOIN FETCH rr.user JOIN FETCH rr.review"
+            + " WHERE rr.id = :id AND rr.review.deletedAt IS NULL")
     Optional<ReviewReply> findByIdWithUser(@Param("id") Long id);
 
     /** 回复的赞数 +1 / -1, 形状与理由与 {@code ReviewRepository} 那两条赞数逐字相同 */

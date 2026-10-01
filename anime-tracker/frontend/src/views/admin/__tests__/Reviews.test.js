@@ -5,6 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 vi.mock('../../../api', () => ({
   getAdminReviews: vi.fn(),
   adminDeleteReview: vi.fn(),
+  adminRestoreReview: vi.fn(),
   // 举报那一组: 漏了 REVIEW_REPORT_REASONS 组件在 setup 里就 .map 一个 undefined,
   // 整页直接抛, 下面每条断言都会变成"找不到元素"
   getReviewReports: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock('../../../composables/useToast', () => ({
 }))
 
 import Reviews from '../Reviews.vue'
-import { getAdminReviews, adminDeleteReview } from '../../../api'
+import { getAdminReviews, adminDeleteReview, adminRestoreReview } from '../../../api'
 
 /**
  * 后台评论页: 一行的各个格子、删除, 以及三种空态.
@@ -165,12 +166,16 @@ describe('后台评论页: 删除', () => {
     const text = confirmSpy.mock.calls[0][0]
     expect(text).toContain('bob')
     expect(text).toContain('这部剧的作画崩得很有诚意')
-    // 回复靠 ON DELETE CASCADE 跟着走: 删一条挂着三条回复的评论, 带走的是一整串对话,
-    // 而改前那句话里一个字都没提
+    // 回复数说的是**影响面**: 列表按评论走, 一条挂着三条回复的评论被移除之后,
+    // 那些回复也跟着从用户侧看不见了 —— 而改前那句话里一个字都没提。
+    // (V14 起措辞从"连带删除"改成了"跟着隐藏": 回复行一条都没动, 是软删.)
     expect(text).toContain('3 条回复')
+    // 出口也要写清楚: 管理员点错了还能在这一行上恢复, 而确认框里不说,
+    // 一次误点看起来就是不可挽回的
+    expect(text).toContain('恢复')
   })
 
-  it('没有回复时不说「并连带删除其下 0 条回复」', async () => {
+  it('没有回复时不说「其下 0 条回复也会跟着隐藏」', async () => {
     const confirmSpy = vi.fn(() => true)
     vi.stubGlobal('confirm', confirmSpy)
     const wrapper = await mountReviews([review(1, { replyCount: 0 })])
@@ -235,6 +240,95 @@ describe('后台评论页: 删除', () => {
     expect(rows(wrapper)).toHaveLength(1)
     // 说的服务端给的原因, 不是一句笼统的「删除失败」
     expect(toastSpy).toHaveBeenCalledWith('评论不存在', 'error')
+  })
+})
+
+/**
+ * 已移除的那一行(V14)。
+ *
+ * <p>软删给这一页添了**第二个状态**, 而它的难点全在"两副面孔必须对得上": 列表行上
+ * 该显示什么、能点什么, 由服务端发的 `deletedAt` 说了算。写错的话, 管理员会对一条
+ * 已经移除的评论再点一次「移除」—— 后端回 400「该评论已被移除」, 而他看不懂这个
+ * 答复里说的"已移除"是什么意思: 界面上那一行看起来和别的行一模一样。
+ */
+describe('后台评论页: 已移除的行', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('confirm', () => true)
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('带 deletedAt 的行标「已移除」, 而且给的是「恢复」而不是「移除」', async () => {
+    const wrapper = await mountReviews([review(1, { deletedAt: '2026-01-01T00:00:00' })])
+
+    expect(wrapper.find('.removed-badge').text()).toBe('已移除')
+    expect(wrapper.find('.restore-btn').text()).toBe('恢复')
+    // 这一格上只有一个动作, 而且是哪一个**由数据说了算**
+    expect(wrapper.find('.delete-btn').exists()).toBe(false)
+  })
+
+  it('没带 deletedAt 的行照旧只有「移除」, 不该凭空多出一个「恢复」', async () => {
+    const wrapper = await mountReviews([review(1)])
+
+    expect(wrapper.find('.delete-btn').text()).toBe('移除')
+    expect(wrapper.find('.restore-btn').exists()).toBe(false)
+    expect(wrapper.find('.removed-badge').exists()).toBe(false)
+  })
+
+  it('点「恢复」会调恢复接口, 并重取当前页', async () => {
+    adminRestoreReview.mockResolvedValue({ data: { code: 200, data: null } })
+    const wrapper = await mountReviews([review(1, { deletedAt: '2026-01-01T00:00:00' })])
+    expect(getAdminReviews).toHaveBeenCalledTimes(1)
+
+    // 重取这一句与删除那条同一个理由, 而且这里还多一层: 恢复之后这一行会不会**消失**
+    // (比如正筛着「只看被举报」而它从此回到队列里), 那句话只有服务端说了算
+    getAdminReviews.mockResolvedValue(pageResult([review(2)]))
+
+    await wrapper.find('.restore-btn').trigger('click')
+    await flushPromises()
+
+    expect(adminRestoreReview).toHaveBeenCalledWith(1)
+    expect(getAdminReviews).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('u2')
+  })
+
+  it('恢复的确认文案也要点名是谁的评论(点错一行同样要看得出来)', async () => {
+    const confirmSpy = vi.fn(() => true)
+    vi.stubGlobal('confirm', confirmSpy)
+    adminRestoreReview.mockResolvedValue({ data: { code: 200, data: null } })
+    const wrapper = await mountReviews([
+      review(1, { username: 'bob', content: '这条被误删了', deletedAt: '2026-01-01T00:00:00' }),
+    ])
+
+    await wrapper.find('.restore-btn').trigger('click')
+    await flushPromises()
+
+    const text = confirmSpy.mock.calls[0][0]
+    expect(text).toContain('bob')
+    expect(text).toContain('这条被误删了')
+    expect(text).toContain('恢复')
+  })
+
+  it('点「取消」一个请求都不发', async () => {
+    vi.stubGlobal('confirm', () => false)
+    const wrapper = await mountReviews([review(1, { deletedAt: '2026-01-01T00:00:00' })])
+
+    await wrapper.find('.restore-btn').trigger('click')
+    await flushPromises()
+
+    expect(adminRestoreReview).not.toHaveBeenCalled()
+    expect(rows(wrapper)).toHaveLength(1)
+  })
+
+  it('恢复失败: 那一行留着, 而且给出服务端说的原因', async () => {
+    adminRestoreReview.mockRejectedValue({ response: { data: { message: '该评论未被移除' } } })
+    const wrapper = await mountReviews([review(1, { deletedAt: '2026-01-01T00:00:00' })])
+
+    await wrapper.find('.restore-btn').trigger('click')
+    await flushPromises()
+
+    expect(rows(wrapper)).toHaveLength(1)
+    expect(toastSpy).toHaveBeenCalledWith('该评论未被移除', 'error')
   })
 })
 

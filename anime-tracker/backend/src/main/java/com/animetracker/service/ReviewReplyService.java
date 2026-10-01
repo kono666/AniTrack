@@ -73,7 +73,9 @@ public class ReviewReplyService {
      * 没有合法写法(见 {@code AnimeQueries} 里那个哨兵参数)。
      */
     public List<Map<String, Object>> getReplies(Long userId, Long reviewId) {
-        if (!reviewRepository.existsById(reviewId)) {
+        // V14 起判"在架上": 被移除的评论在用户侧已经不存在, 它下面那些回复也不该还能被翻出来
+        // —— 评论列表里找不到这条评论, 却能用它的 id 把回复列出来, 那是同一份数据的两副面孔。
+        if (!reviewRepository.existsByIdAndDeletedAtIsNull(reviewId)) {
             throw BusinessException.notFound("评论不存在");
         }
         List<ReviewReply> replies = reviewReplyRepository.findReplies(
@@ -246,7 +248,8 @@ public class ReviewReplyService {
 
     // ==================== 私有 ====================
 
-    /** 按 id 取一条带作者的回复, 没有就 404 */
+    /** 按 id 取一条带作者的回复, 没有就 404. 挂在一条已被移除的评论下的回复也归入"没有"
+     *  (条件写在 {@code findByIdWithUser} 里, 见那条语句上的注释) */
     private ReviewReply load(Long replyId) {
         return reviewReplyRepository.findByIdWithUser(replyId)
                 .orElseThrow(() -> BusinessException.notFound("回复不存在"));

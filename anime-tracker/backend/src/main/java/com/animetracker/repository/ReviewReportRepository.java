@@ -31,10 +31,26 @@ public interface ReviewReportRepository extends JpaRepository<ReviewReport, Long
      *
      * <p>只数 {@code PENDING}: 被忽略掉的举报不该继续在列表上显示成一个待办标记.
      *
+     * <p>V14 起还多一个 {@code rr.review.deletedAt IS NULL}. <b>它和
+     * {@code ReviewQueries.FILTER_REPORTED} 是同一条口径的两半, 必须一起改</b>:
+     * 那边管的是「举报队列里有没有它」, 这边管的是「列表上那个角标显示几条」.
+     * 只改一边的表现是「排队列里翻不到, 角标却挂着 3 条」—— 管理员会一直点一个
+     * 点不开的角标. 钉住两者的用例在 {@code AdminReviewIntegrationTest} 里
+     * (「被移除的评论既不在队列里、徽标也归零, 恢复之后两样一起回来」).
+     *
+     * <p>为什么移除之后就不算待办: 这条评论已经处理过了(处置就是移除), 举报它的人
+     * 想表达的"这条有问题"已经落地; 留着角标会让队列永远排不干净. 恢复之后它照旧回来
+     * —— 举报行一条都没动.
+     *
+     * <p>⚠️ 这里的 {@code rr.review.deletedAt} 是**外键列所在的关联**, 会多一个 join
+     * (不像 {@code rr.review.id} 只读外键列). 这一条是批量聚合, 每次调用一次,
+     * 多一个 join 换掉的是"每行一次懒加载"那个更坏的选项.
+     *
      * <p>调用方必须自己挡掉空集合 —— 理由同 {@link ReviewLikeRepository#findLikedReviewIds}.
      */
     @Query("SELECT rr.review.id, rr.reason, rr.createdAt FROM ReviewReport rr"
-            + " WHERE rr.review.id IN :reviewIds AND rr.status = 'PENDING'"
+            + " WHERE rr.review.id IN :reviewIds AND rr.review.deletedAt IS NULL"
+            + " AND rr.status = 'PENDING'"
             + " ORDER BY rr.id DESC")
     List<Object[]> findPendingSummaries(@Param("reviewIds") Collection<Long> reviewIds);
 

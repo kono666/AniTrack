@@ -326,7 +326,7 @@ class ReviewReportServiceTest {
     @Test
     @DisplayName("评论不存在 → 404, 不是空列表")
     void detailsOfAMissingReviewAreNotFound() {
-        when(reviewRepository.existsById(REVIEW_ID)).thenReturn(false);
+        when(reviewRepository.existsByIdAndDeletedAtIsNull(REVIEW_ID)).thenReturn(false);
 
         assertThatThrownBy(() -> reviewReportService.getDetails(REVIEW_ID))
                 .isInstanceOf(BusinessException.class)
@@ -411,7 +411,8 @@ class ReviewReportServiceTest {
 
     /** 评论存在 + 明细查询返回给定几行 —— 明细那几条用例的公共前半段 */
     private void givenDetails(List<ReviewReport> rows, long total) {
-        when(reviewRepository.existsById(REVIEW_ID)).thenReturn(true);
+        // getDetails 问的是"在不在架上"(V14) —— 与 report 冲突分支里那个 existsById 不是一回事
+        when(reviewRepository.existsByIdAndDeletedAtIsNull(REVIEW_ID)).thenReturn(true);
         when(reviewReportRepository.findDetails(eq(REVIEW_ID), any(Pageable.class)))
                 .thenReturn(rows);
         when(reviewReportRepository.countByReviewId(REVIEW_ID)).thenReturn(total);

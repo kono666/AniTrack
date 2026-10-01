@@ -321,8 +321,15 @@ export const getAdminActions = (params) => api.get('/admin/actions', { params })
  * 改前这个函数**一个参数都没有**, 后端也是 —— 一次拿回整张评论表.
  */
 export const getAdminReviews = (params) => api.get('/admin/reviews', { params })
+/**
+ * 移除一条评论. V14 起后端是**软删** —— 评论从用户侧消失, 行还在, 可以被下面那一条恢复.
+ * 所以这里的前端语义也变了: 同一个列表行上, 移除与恢复是两个按钮的两次点击, 不是一次.
+ */
 export const adminDeleteReview = (reviewId) =>
   api.delete(`/admin/reviews/${reviewId}`)
+/** 撤销上面那一次移除. 与删除对称: 同一个 URL 上的另一个动词 */
+export const adminRestoreReview = (reviewId) =>
+  api.put(`/admin/reviews/${reviewId}/restore`)
 
 // ========== 筛选 ==========
 export const getFilterMeta = () => api.get('/bangumi/filter-meta')

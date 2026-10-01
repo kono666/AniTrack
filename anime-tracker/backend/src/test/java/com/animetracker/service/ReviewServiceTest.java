@@ -3,6 +3,7 @@ package com.animetracker.service;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
+import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.ReviewLikeRepository;
 import com.animetracker.repository.ReviewRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -245,7 +246,7 @@ class ReviewServiceTest {
     void neverLoadsTheReviewsThemselves() {
         statsOf(group(8, 3));
 
-        verify(reviewRepository, never()).findBySubjectIdOrderByCreatedAtDesc(any());
+        verify(reviewRepository, never()).findBySubjectIdAndDeletedAtIsNullOrderByCreatedAtDesc(any());
         verify(reviewRepository).countByRating(200);
     }
 
@@ -285,5 +286,101 @@ class ReviewServiceTest {
         int[] distribution = (int[]) stats.get("distribution");
         assertThat(distribution[7]).isEqualTo(2);
         assertThat(Arrays.stream(distribution).sum()).as("只有 1~10 分进直方图").isEqualTo(2);
+    }
+
+    // ========== 管理员移除之后(V14 的软删) ==========
+
+    /** 一条被管理员移除过的评论: 行还在, {@code deletedAt} 有值 */
+    private static Review removed(Long id) {
+        return Review.builder().id(id).subjectId(200).rating(8).content("被移除的")
+                .user(User.builder().id(1L).username("alice").role("USER").status("ACTIVE").build())
+                .deletedAt(java.time.LocalDateTime.now())
+                .build();
+    }
+
+    /**
+     * <b>被移除的那一条不能被"再发一次"复活。</b>
+     *
+     * <p>查重那一步刻意不过滤删除标记(理由在仓储那一侧), 所以这条路必然撞上一条已移除的
+     * 旧行。放行的后果是: 管理员的处置被用户一个保存动作悄悄撤销, 而账本里那条
+     * REVIEW_DELETE 还写着 —— 这类"两边都还在、事情却已经失效"的错最难被发现。
+     *
+     * <p>{@code never().saveAndFlush} 是必须的: 只断言状态码的话, 一个"先写库再抛异常"
+     * 的实现照样绿, 而那条评论已经活过来了。
+     */
+    @Test
+    @DisplayName("重发一条已被管理员移除的评论: 400, 而且一个字都没写进库")
+    void refusesToSaveOverARemovedReview() {
+        when(reviewRepository.findByUserAndSubjectId(any(), any()))
+                .thenReturn(Optional.of(removed(7L)));
+
+        assertThatThrownBy(() -> reviewService.saveReview(user(), req(200, 10, "我改主意了")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("该作品的评论已被管理员移除");
+        verify(reviewRepository, never()).saveAndFlush(any(Review.class));
+    }
+
+    /**
+     * 同一条规矩的另一半: 并发落败后回头改**对手那行**时也要判一次。
+     *
+     * <p>两条路各写了一遍 {@code rejectIfRemoved}, 所以各要一条用例 —— 只测上面那条的话,
+     * 漏掉这一个调用点的实现是绿的, 而它正好是最不常走到、也最难在真机上复现的那条。
+     */
+    @Test
+    @DisplayName("并发落败后回头改对手那行, 那行也已被移除: 同样 400")
+    void refusesWhenTheConflictWinnerIsRemoved() {
+        when(reviewRepository.findByUserAndSubjectId(any(), any()))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(removed(7L)));
+        when(reviewRepository.saveAndFlush(any(Review.class)))
+                .thenThrow(new DataIntegrityViolationException("uk_review_user_subject"));
+
+        assertThatThrownBy(() -> reviewService.saveReview(user(), req(200, 10, "我写的")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("该作品的评论已被管理员移除");
+    }
+
+    /**
+     * <b>作者自己那条删除是硬删, 所以对一条已被移除的评论必须回 404。</b>
+     *
+     * <p>放行的话, "用户点了一下删除"就把管理员的处置**永久固化**了 —— 那行真的没了,
+     * 恢复接口再也恢复不出来, CASCADE 还会把底下的回复与赞一起带走。而管理员之所以改成
+     * 软删, 图的就是"这一步是可撤销的"。
+     *
+     * <p>{@code never().delete} 是骨干: 404 很容易被一个"先删再抛"的实现凑出来。
+     */
+    @Test
+    @DisplayName("作者删一条已被移除的评论: 404, 而且没有真的删行")
+    void authorCannotHardDeleteARemovedReview() {
+        when(reviewRepository.findById(7L)).thenReturn(Optional.of(removed(7L)));
+
+        assertThatThrownBy(() -> reviewService.deleteReview(user(), 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("评论不存在");
+        verify(reviewRepository, never()).delete(any(Review.class));
+    }
+
+    /**
+     * {@code removed} 这个旗标存在的全部意义: 让「写过但被移除了」与「从没写过」分得开。
+     *
+     * <p>两者都回 404 或者都回 {@code exists=false} 的话, 详情页会给一个被移除过的用户
+     * 摆出一张填好的表单 —— 他点保存, 拿到 400, 而他完全不知道为什么。
+     */
+    @Test
+    @DisplayName("我的评论: 被移除时 exists 与 removed 都是 true; 没写过时 removed 是 false")
+    void getUserReviewDistinguishesRemovedFromAbsent() {
+        when(reviewRepository.findByUserAndSubjectId(any(), any()))
+                .thenReturn(Optional.of(removed(7L)));
+        Map<String, Object> mine = reviewService.getUserReview(user(), 200);
+        assertThat(mine.get("exists")).isEqualTo(true);
+        assertThat(mine.get("removed"))
+                .as("这一条不能省 —— 少了它, 前端只能看到一个 exists=true 的正常评论")
+                .isEqualTo(true);
+
+        when(reviewRepository.findByUserAndSubjectId(any(), any())).thenReturn(Optional.empty());
+        Map<String, Object> none = reviewService.getUserReview(user(), 201);
+        assertThat(none.get("exists")).isEqualTo(false);
+        assertThat(none.get("removed")).isEqualTo(false);
+        assertThat(none).doesNotContainKey("content");
     }
 }
