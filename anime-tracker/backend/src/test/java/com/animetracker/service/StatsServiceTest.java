@@ -17,6 +17,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -26,6 +27,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -70,13 +72,17 @@ class StatsServiceTest {
     }
 
     @Test
-    @DisplayName("看过: 取消打勾, 返回 false")
+    @DisplayName("看过: 取消打勾, 返回 false, 且一个字都不碰追番记录")
     void unmarksEpisodeWhenAlreadyWatched() {
         when(epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(any(), any(), any()))
                 .thenReturn(true);
 
         assertThat(statsService.toggleEpisode(user(), 300, 1)).isFalse();
         verify(epWatchedRepo).deleteByUserAndAnimeIdAndEpisodeNum(any(), anyInt(), anyInt());
+        // 取消打勾**不动**进度: 水位线式语义, 把最后一集取消掉不该让它退回去.
+        // 用 verifyNoInteractions 而不是逐个 never(): 这条要钉的是"整个追番仓储
+        // 都没被碰过", 将来谁在取消路径上多加一次查询也会红.
+        verifyNoInteractions(trackingRepo);
     }
 
     @Test
@@ -104,6 +110,104 @@ class StatsServiceTest {
 
         assertThatThrownBy(() -> statsService.toggleEpisode(user(), 300, 1))
                 .isSameAs(foreign);
+    }
+
+    // ========== 打勾顺带同步追番进度 ==========
+
+    private static AnimeTracking tracking(String status, int progress) {
+        return AnimeTracking.builder().subjectId(300).status(status).progress(progress).build();
+    }
+
+    @Test
+    @DisplayName("打勾: 还没有追番记录就自动建一条「在看」, 进度就是这一集")
+    void togglingCreatesAWatchingRowAtThatEpisode() {
+        when(epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(any(), any(), any()))
+                .thenReturn(false);
+        when(trackingRepo.findByUserAndSubjectId(any(), any())).thenReturn(Optional.empty());
+
+        assertThat(statsService.toggleEpisode(user(), 300, 4)).isTrue();
+
+        ArgumentCaptor<AnimeTracking> created = ArgumentCaptor.forClass(AnimeTracking.class);
+        verify(trackingRepo).saveAndFlush(created.capture());
+        assertThat(created.getValue().getSubjectId()).isEqualTo(300);
+        assertThat(created.getValue().getStatus()).isEqualTo("watching");
+        assertThat(created.getValue().getProgress()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("只往前推: 进度已经到 5 了, 回头打第 3 集不动它")
+    void togglingAnEarlierEpisodeDoesNotMoveProgressBack() {
+        when(epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(any(), any(), any()))
+                .thenReturn(false);
+        when(trackingRepo.findByUserAndSubjectId(any(), any()))
+                .thenReturn(Optional.of(tracking("watching", 5)));
+
+        statsService.toggleEpisode(user(), 300, 3);
+
+        verify(trackingRepo, never()).save(any(AnimeTracking.class));
+        verify(trackingRepo, never()).saveAndFlush(any(AnimeTracking.class));
+    }
+
+    @Test
+    @DisplayName("往后打勾把进度推到这一集, 且是更新不是插新行")
+    void togglingALaterEpisodeAdvancesProgress() {
+        AnimeTracking existing = tracking("watching", 3);
+        when(epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(any(), any(), any()))
+                .thenReturn(false);
+        when(trackingRepo.findByUserAndSubjectId(any(), any())).thenReturn(Optional.of(existing));
+
+        statsService.toggleEpisode(user(), 300, 5);
+
+        assertThat(existing.getProgress()).isEqualTo(5);
+        verify(trackingRepo).save(existing);
+        verify(trackingRepo, never()).saveAndFlush(any(AnimeTracking.class));
+    }
+
+    @Test
+    @DisplayName("已有记录时只动进度, 不改用户自己设过的状态")
+    void togglingDoesNotRewriteTheStatusTheUserChose() {
+        AnimeTracking existing = tracking("want_to_watch", 0);
+        when(epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(any(), any(), any()))
+                .thenReturn(false);
+        when(trackingRepo.findByUserAndSubjectId(any(), any())).thenReturn(Optional.of(existing));
+
+        statsService.toggleEpisode(user(), 300, 2);
+
+        assertThat(existing.getStatus()).as("状态是用户显式设的, 打卡不该覆盖它")
+                .isEqualTo("want_to_watch");
+        assertThat(existing.getProgress()).isEqualTo(2);
+    }
+
+    /**
+     * 并发落败那一侧的去向.
+     *
+     * <p>catch 里「复查到了」这条分支最容易被写成 {@code return true;} 了事 —— 那样
+     * 进度推不推得上看谁先提交, 而且网页上几乎撞不出来, 只有这条用例盯着.
+     */
+    @Test
+    @DisplayName("并发落败的那一侧同样要推进度, 不能只回一句「已看过」就完事")
+    void theConcurrentLoserAlsoSyncsProgress() {
+        when(epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(any(), any(), any()))
+                .thenReturn(false)      // 第一次查: 对手还没提交
+                .thenReturn(true);      // 撞了约束之后复查: 那一行在了
+        when(epWatchedRepo.saveAndFlush(any(EpisodeWatched.class)))
+                .thenThrow(new DataIntegrityViolationException("uk_episode_watched_user_anime_episode"));
+        when(trackingRepo.findByUserAndSubjectId(any(), any())).thenReturn(Optional.empty());
+
+        assertThat(statsService.toggleEpisode(user(), 300, 7)).isTrue();
+
+        verify(trackingRepo).saveAndFlush(any(AnimeTracking.class));
+    }
+
+    @Test
+    @DisplayName("特番的集号 0 不建记录: 它不代表看到了哪里")
+    void episodeNumberZeroDoesNotCreateATrackingRow() {
+        when(epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(any(), any(), any()))
+                .thenReturn(false);
+
+        assertThat(statsService.toggleEpisode(user(), 300, 0)).isTrue();
+
+        verifyNoInteractions(trackingRepo);
     }
 
     // ========== 统计接口的取数方式 ==========

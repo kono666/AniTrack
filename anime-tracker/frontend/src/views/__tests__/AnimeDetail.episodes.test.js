@@ -3,6 +3,15 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
+// 打勾失败必须弹一句提示(改前是空 catch). 真实的 useToast 只往模块作用域的
+// ref 里塞, 组件单独挂载时没有任何 DOM 能看到 —— 不打桩就断言不了「说出来了」,
+// 而这一条正是 c98 从静默改成会提示的全部意义
+const { toastSpy } = vi.hoisted(() => ({ toastSpy: vi.fn() }))
+vi.mock('../../composables/useToast', () => ({
+  useToast: () => ({ show: toastSpy, remove: vi.fn(), items: { value: [] } }),
+  showToast: toastSpy,
+}))
+
 vi.mock('../../api', () => ({
   getAnimeDetail: vi.fn(),
   getEpisodes: vi.fn(),
@@ -46,7 +55,7 @@ vi.mock('../../api', () => ({
 import AnimeDetail from '../AnimeDetail.vue'
 import {
   getAnimeDetail, getEpisodes, getRatingStats, getSubjectReviews, getFiltered,
-  getWatchedEpisodes, getAnimeHeat, getTrackingStatus, getMyReview,
+  getWatchedEpisodes, getAnimeHeat, getTrackingStatus, getMyReview, toggleEpisode,
 } from '../../api'
 
 /**
@@ -77,7 +86,7 @@ const eps = n => Array.from({ length: n }, (_, i) => ({
   id: 10000 + i, sort: i + 1, name: `Episode ${i + 1}`, nameCn: `第${i + 1}集`,
 }))
 
-async function mountWith(episodes, watched = []) {
+async function mountWith(episodes, watched = [], tracking = { tracked: false }) {
   localStorage.setItem('anime_user', JSON.stringify({ id: 1, username: 'alice', token: 'jwt', role: 'USER' }))
   setActivePinia(createPinia())
 
@@ -86,7 +95,7 @@ async function mountWith(episodes, watched = []) {
   getRatingStats.mockResolvedValue({ data: { code: 200, data: { average: 0, count: 0, distribution: Array(10).fill(0) } } })
   getSubjectReviews.mockResolvedValue({ data: { code: 200, data: [] } })
   getFiltered.mockResolvedValue({ data: { code: 200, data: { list: [], total: 0 } } })
-  getTrackingStatus.mockResolvedValue({ data: { code: 200, data: { tracked: false } } })
+  getTrackingStatus.mockResolvedValue({ data: { code: 200, data: tracking } })
   getMyReview.mockResolvedValue({ data: { code: 200, data: { exists: false } } })
   getWatchedEpisodes.mockResolvedValue({ data: { code: 200, data: watched } })
   getAnimeHeat.mockResolvedValue({ data: { code: 200, data: null } })
@@ -206,5 +215,115 @@ describe('详情页剧集: 超过阈值才分页', () => {
     expect(w.find('.pagination').exists()).toBe(false)
     expect(w.findAll('.ep-tile')).toHaveLength(0)
     expect(w.text()).toContain('暂无剧集数据')
+  })
+})
+
+/**
+ * c98: 点格子(打卡)之后, 界面上的进度要跟服务端那一份对得上.
+ *
+ * 服务端在打勾成功时顺手把 progress 推到这一集, 本来没有追番记录还会建一条
+ * (StatsService#syncProgressOnWatched). 前端不跟的话, 用户看到的数字与服务端
+ * 存的是两回事, 而两边单独看都"成功". 这里钉的就是这个跟手的动作.
+ *
+ * 数字从 `.track-input-row` 那个框里读 —— 它是界面上 progress 唯一的显示处.
+ * 追番栏本身是 `v-if="loggedIn && trackForm.id"`, 所以这些用例必须给一个
+ * `tracked: true` 的追番状态, 否则框根本不渲染, 断言会退化成"找不到元素".
+ */
+describe('详情页剧集: 打勾联动进度', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  afterEach(() => {
+    localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  /** 追番栏里那个进度数字框(第 0 个是进度, 第 1 个是评分) */
+  const progressBox = w => w.findAll('.track-input-row input[type="number"]')[0]
+
+  it('打上勾: 进度立刻推到这一集(不再需要手动改数字框)', async () => {
+    const w = await mountWith(eps(12), [], { tracked: true, id: 55, status: 'watching', progress: 2, score: 0 })
+    toggleEpisode.mockResolvedValue({ data: { code: 200, data: { watched: true, episodeNum: 7 } } })
+
+    await w.findAll('.ep-tile')[6].trigger('click')
+    await flushPromises()
+
+    expect(progressBox(w).element.value).toBe('7')
+    expect(w.findAll('.ep-tile')[6].classes()).toContain('watched')
+  })
+
+  it('往回的集号不动进度: 已经到 7 了, 补点第 3 集仍停在 7', async () => {
+    // 与服务端同一个 max 口径 —— 直接赋值的话这里会变成 3
+    const w = await mountWith(eps(12), [], { tracked: true, id: 55, status: 'watching', progress: 7, score: 0 })
+    toggleEpisode.mockResolvedValue({ data: { code: 200, data: { watched: true, episodeNum: 3 } } })
+
+    await w.findAll('.ep-tile')[2].trigger('click')
+    await flushPromises()
+
+    expect(progressBox(w).element.value).toBe('7')
+    expect(w.findAll('.ep-tile')[2].classes()).toContain('watched')
+  })
+
+  it('取消打勾: 勾没了, 进度不许跟着退回去', async () => {
+    const w = await mountWith(eps(12), [5], { tracked: true, id: 55, status: 'watching', progress: 5, score: 0 })
+    toggleEpisode.mockResolvedValue({ data: { code: 200, data: { watched: false, episodeNum: 5 } } })
+
+    expect(w.findAll('.ep-tile')[4].classes()).toContain('watched')
+    await w.findAll('.ep-tile')[4].trigger('click')
+    await flushPromises()
+
+    expect(w.findAll('.ep-tile')[4].classes()).not.toContain('watched')
+    expect(progressBox(w).element.value).toBe('5')
+  })
+
+  it('本来没追番: 打勾后重拉一次状态, 追番栏跟着出现并对齐到服务端那一份', async () => {
+    // 这条是 c98 里最要紧的一格: 服务端刚替我们建了一条 watching 行, 而本地
+    // trackForm 的 id 还是 null. 不重拉的话用户接着点「保存」, 那个陈旧的
+    // status('want_to_watch')就把新记录覆盖掉, 那部番当场从首页「继续看」里消失.
+    const w = await mountWith(eps(12), [], { tracked: false })
+    expect(w.find('.d-track-bar').exists()).toBe(false)
+    expect(getTrackingStatus).toHaveBeenCalledTimes(1)   // 挂载时那一次
+
+    toggleEpisode.mockResolvedValue({ data: { code: 200, data: { watched: true, episodeNum: 3 } } })
+    getTrackingStatus.mockResolvedValueOnce({
+      data: { code: 200, data: { tracked: true, id: 66, status: 'watching', progress: 3, score: 0 } },
+    })
+
+    await w.findAll('.ep-tile')[2].trigger('click')
+    await flushPromises()
+
+    expect(getTrackingStatus).toHaveBeenCalledTimes(2)
+    expect(w.find('.d-track-bar').exists()).toBe(true)
+    expect(progressBox(w).element.value).toBe('3')
+    // 状态也取自服务端, 不是本地那个初值 —— 保存时才不会把它改回「想看」
+    expect(w.find('.track-status-btn.active').text()).toContain('在看')
+  })
+
+  it('已经追番的番不再多跑一次往返: 打勾只发 toggle 一个请求', async () => {
+    const w = await mountWith(eps(12), [], { tracked: true, id: 55, status: 'watching', progress: 2, score: 0 })
+    toggleEpisode.mockResolvedValue({ data: { code: 200, data: { watched: true, episodeNum: 4 } } })
+
+    await w.findAll('.ep-tile')[3].trigger('click')
+    await flushPromises()
+
+    expect(getTrackingStatus).toHaveBeenCalledTimes(1)
+    expect(getWatchedEpisodes).toHaveBeenCalledTimes(1)
+  })
+
+  it('打勾失败: 说出来, 而不是静默吞掉(改前是空 catch)', async () => {
+    const w = await mountWith(eps(12), [], { tracked: true, id: 55, status: 'watching', progress: 2, score: 0 })
+    const err = new Error('boom')
+    err.response = { status: 500 }
+    toggleEpisode.mockRejectedValue(err)
+
+    await w.findAll('.ep-tile')[5].trigger('click')
+    await flushPromises()
+
+    expect(toastSpy).toHaveBeenCalledWith('标记失败：服务端返回 500')
+    // 勾也不该留在界面上 —— 服务端没接下来
+    expect(w.findAll('.ep-tile')[5].classes()).not.toContain('watched')
+    expect(progressBox(w).element.value).toBe('2')
   })
 })

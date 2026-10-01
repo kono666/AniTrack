@@ -148,23 +148,93 @@ public class StatsService {
      *
      * 代价是「查 + 写」不再原子: 两个请求可能同时看到「未看过」. 但唯一约束保证最多插进
      * 一行, 落败的那个返回 true(已看过) —— 与「两个都点了打勾」该有的结果一致.
+     *
+     * <p>打勾成功之后还会顺带把追番进度往前推(没有追番记录就建一条), 见
+     * {@link #syncProgressOnWatched}. 那一步也有它自己的代价, 写在那个方法的注释里.
      */
     public boolean toggleEpisode(User user, Integer animeId, Integer episodeNum) {
         if (epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(user, animeId, episodeNum)) {
             epWatchedRepo.deleteByUserAndAnimeIdAndEpisodeNum(user, animeId, episodeNum);
+            // 取消打勾**不动**追番进度 —— 理由见 syncProgressOnWatched 的「只往前推」一节.
             return false;
         }
         try {
             isolatedInsert.attempt(() -> epWatchedRepo.saveAndFlush(EpisodeWatched.builder()
                     .user(user).animeId(animeId).episodeNum(episodeNum).build()));
-            return true;
         } catch (DataIntegrityViolationException e) {
             // 只认「确实已经有一行」这一种情况; 查不到说明炸的是别的约束(比如 user_id 外键),
             // 那就不是并发落败, 原样抛出, 别把真问题吞成一次「打勾成功」
-            if (epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(user, animeId, episodeNum)) {
-                return true;
+            if (!epWatchedRepo.existsByUserAndAnimeIdAndEpisodeNum(user, animeId, episodeNum)) {
+                throw e;
             }
-            throw e;
+            // 并发落败(对手刚插进同一行)也要**落到下面那一句**去同步进度, 不能在这里
+            // return true 了事: 两边都推, 进度才与「谁先提交」无关. 抽方法时最容易漏这里.
+        }
+        syncProgressOnWatched(user, animeId, episodeNum);
+        return true;
+    }
+
+    /**
+     * 打勾之后把追番进度往前推; 这个用户对这部番还没有追番记录, 就顺手建一条.
+     *
+     * <b>只往前推, 不后退</b>
+     *
+     * <p>progress 是「看到第几集」的水位线, 所以取 {@code max(现值, 这一集)}. 做成
+     * 「progress = 打过勾的最大集号」看着更「派生」, 却会吃掉历史数据: 一个进度 12 集、
+     * 却一集都没点过勾的人(进度是详情页那个数字框手输的), 第一次打勾就会从 12 掉到 3,
+     * 界面上像是丢了数据. 取 max 还顺带解决两件事 —— 取消打勾不需要重算「剩下最大的
+     * 集号」, 乱序打勾(先点 5 再点 3)也不会把进度拽回去.
+     *
+     * <b>没有记录就建一条 watching</b>
+     *
+     * <p>打卡是这个站上「我在看这部番」最直接的表达. 不建记录的话, 用户点完 12 个格子
+     * 回首页仍然看不到这部番 —— 而首页那块「继续看」正是靠 watching 行撑起来的.
+     * status 只在**本来没有记录**时才写: 一个已经把某番标成「想看」的人打了勾, 它仍然
+     * 是「想看」. 替用户改掉他显式设过的状态, 比留一个看着别扭的组合更糟.
+     *
+     * <b>插入套 IsolatedInsert, 更新刻意不套</b>
+     *
+     * <p>插入那条路会撞 (user_id, subject_id) 唯一约束, 与上面插 episode_watched 是同一个
+     * 理由, 所以同样要在独立事务里做, 失败了才能安全地重查. <b>更新那条路留在外层事务</b>:
+     * Agent 工具调用那条路上外层就是本方法所在的事务, 给同一个实体的写再套一层
+     * REQUIRES_NEW 就是自己等自己. 「为了对称把两个分支包成一样」正是这里最容易犯的错.
+     *
+     * <b>代价: 打勾与推进度是两次写, 不是一次</b>
+     *
+     * <p>本方法与 {@link #toggleEpisode} 都没有 {@code @Transactional}, 于是
+     * episode_watched 的插入在独立事务里先提交, 而这里的更新跟着外层走. 中间任何一步
+     * 失败都会留下「勾打上了、进度没推」—— 反过来的情况不可能, 是顺序决定的. 网页上
+     * 用户看到失败会再点一次, 而第二次点是**取消**, 所以前端必须把失败说出来(见
+     * AnimeDetail.vue 的 toggleEp); Agent 那条路上外层回滚会让两者分叉. 要做成原子的
+     * 就得把两次写绑进同一个事务, 而那与上面「更新不能独立事务」直接冲突 —— 这一轮
+     * 接受这个中间态.
+     */
+    private void syncProgressOnWatched(User user, Integer animeId, Integer episodeNum) {
+        // 特番的集号会被归一成 0(见 AnimeService#toEpisodeEntity: dto.getEp() 为空即 0),
+        // 而「第 0 集」不代表看到了哪里. 没有记录时替它建一条 progress=0 的 watching, 只会在
+        // 首页继续看里多出一条永远停在「第 0 集」的假条目; 有记录时 max(progress, 0) 本来就是
+        // 空操作, 所以整个跳过即可.
+        if (episodeNum == null || episodeNum <= 0) return;
+
+        AnimeTracking track = trackingRepo.findByUserAndSubjectId(user, animeId).orElse(null);
+        if (track == null) {
+            try {
+                isolatedInsert.attempt(() -> trackingRepo.saveAndFlush(AnimeTracking.builder()
+                        .user(user).subjectId(animeId).status("watching").progress(episodeNum)
+                        .build()));
+                // 新建的那一行 progress 已经是这一集, 没有要推的东西
+                return;
+            } catch (DataIntegrityViolationException e) {
+                // 并发对手抢先建了同一条. 重查回来接着往下推, 不把异常抛给用户.
+                track = trackingRepo.findByUserAndSubjectId(user, animeId).orElse(null);
+                // 仍查不到, 说明这次冲突与 (user_id, subject_id) 无关, 原样抛出别掩盖
+                if (track == null) throw e;
+            }
+        }
+        // progress 在库里是 NOT NULL(见 AnimeTracking), 不需要判空
+        if (track.getProgress() < episodeNum) {
+            track.setProgress(episodeNum);
+            trackingRepo.save(track);
         }
     }
 

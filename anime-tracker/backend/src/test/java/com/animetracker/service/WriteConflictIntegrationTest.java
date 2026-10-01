@@ -208,6 +208,69 @@ class WriteConflictIntegrationTest {
         assertThat(rows("episode_watched")).isZero();
     }
 
+    // ========== 打勾顺带同步追番进度 ==========
+
+    /**
+     * c98 的**主要守卫**.
+     *
+     * <p>「打勾会顺手建一条在看记录」这件事, 单元用例只能验到「调用了哪个方法传了什么
+     * 参数」; 真正要钉的是**库里最后剩下什么**——尤其是「只往前推」这条: 取消打勾之后
+     * 进度**不许**退回去. 实现里把取消分支也接上 sync 是最容易犯的错, 而它在网页上
+     * 看起来完全正常(勾没了, 进度也跟着退一格, 像是"一致"的).
+     */
+    @Test
+    @DisplayName("打勾建一条「在看」并把进度推到这一集; 取消打勾只删勾, 记录和进度都留着")
+    void togglingAnEpisodeSyncsTheTrackingProgress() {
+        User user = freshUser();
+
+        assertThat(statsService.toggleEpisode(user, 300, 1)).isTrue();
+        assertThat(rows("anime_tracking")).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM anime_tracking WHERE subject_id = 300", String.class))
+                .isEqualTo("watching");
+        assertThat(jdbc.queryForObject(
+                "SELECT progress FROM anime_tracking WHERE subject_id = 300", Integer.class))
+                .isEqualTo(1);
+
+        assertThat(statsService.toggleEpisode(user, 300, 1)).isFalse();
+        assertThat(rows("episode_watched")).isZero();
+        assertThat(rows("anime_tracking")).as("取消打勾不该把追番记录一起删掉").isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT progress FROM anime_tracking WHERE subject_id = 300", Integer.class))
+                .as("进度是水位线, 取消打勾不该让它退回去").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("进度是水位线: 打到第 5 集之后回头点第 3 集, 仍然停在 5")
+    void progressNeverMovesBackwards() {
+        User user = freshUser();
+
+        statsService.toggleEpisode(user, 301, 5);
+        statsService.toggleEpisode(user, 301, 3);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT progress FROM anime_tracking WHERE subject_id = 301", Integer.class))
+                .isEqualTo(5);
+        assertThat(rows("episode_watched")).as("两个勾都算数").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("已经有追番记录时只推进度, 不动用户自己设过的状态")
+    void togglingKeepsTheStatusTheUserAlreadySet() {
+        User user = freshUser();
+        trackService.saveTracking(user, trackReq(302, "on_hold", 0));
+
+        statsService.toggleEpisode(user, 302, 2);
+
+        assertThat(rows("anime_tracking")).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM anime_tracking WHERE subject_id = 302", String.class))
+                .isEqualTo("on_hold");
+        assertThat(jdbc.queryForObject(
+                "SELECT progress FROM anime_tracking WHERE subject_id = 302", Integer.class))
+                .isEqualTo(2);
+    }
+
     // ========== 登录失败计数: 自增发生在数据库里 ==========
 
     /**

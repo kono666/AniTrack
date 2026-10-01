@@ -61,11 +61,15 @@
             class="track-status-btn" :class="{ active: trackForm.status === s.value }"
             @click="trackForm.status = s.value">{{ s.label }}</button>
         </div>
+        <!-- 进度现在的**主入口是下面那一排剧集格子**(点一下就是一次打卡, 服务端顺手把
+             进度推到这一集). 这个数字框留着当次要入口, 因为追番的人常一次看好几集、
+             或者先看完后补记 —— 逼着一集集点五次很难受. 文案因此从「进度」改成
+             「直接改进度」, 不再暗示它是唯一的路; 除此之外这个框一个字没动. -->
         <!-- min="0" 与 :max 只是浏览器给的护栏(拖动步进箭头时用), 提交时不算数 ——
              手打一个 999 照样能提交, 所以 saveTrack 里还有一道 clamp. 两道都要:
              只有前者的话手打能绕过去, 只有后者的话用户得先提交才知道自己填错了 -->
         <div class="track-input-row">
-          <label>进度</label><input type="number" v-model.number="trackForm.progress" min="0" :max="maxProgress" />
+          <label>直接改进度</label><input type="number" v-model.number="trackForm.progress" min="0" :max="maxProgress" />
           <span>/ {{ subject.totalEpisodes || '?' }}</span>
           <label style="margin-left:16px;">评分</label><input type="number" v-model.number="trackForm.score" min="1" max="10" />
         </div>
@@ -591,9 +595,48 @@ async function load(){
   loading.value=false
 }
 
+/**
+ * 打勾 / 取消打勾**这一集**.
+ *
+ * 服务端在打勾成功时会顺手把追番进度往前推, 本来没有追番记录还会替我们建一条
+ * (见 StatsService#syncProgressOnWatched). 所以这里要跟上两件事, 否则界面与服务端
+ * 当场分叉:
+ *
+ * 1. 进度数字用**与服务端同一个口径**(max)跟着走, 不等重拉;
+ * 2. 如果这部番本来没有追番记录(trackForm.id 为空), 说明服务端刚建了一条 ——
+ *    此刻 trackForm 里的 id/status 还是空的, 用户接着点「保存」就会拿一个陈旧的
+ *    status 覆盖上去, 那条新记录被改成「想看」并**从首页「继续看」里消失**,
+ *    而"打勾"和"保存"两步单独看都是成功的. 所以只在这一种情况下重拉一次, 把
+ *    id / status / 进度一起对齐; 已经追番的番不必每次往返.
+ *
+ * 取消打勾**不动进度**: 进度是"看到第几集"的水位线, 把最后一集取消掉不该让它退回去.
+ */
 async function toggleEp(n){
   if(!userStore.loggedIn) return
-  try{ await toggleEpisode(sid,n); const i=watchedEpisodes.value.indexOf(n); if(i>=0) watchedEpisodes.value.splice(i,1); else watchedEpisodes.value.push(n) }catch(e){}
+  try{
+    const r = await toggleEpisode(sid, n)
+    if(r?.data?.data?.watched){
+      if(!watchedEpisodes.value.includes(n)) watchedEpisodes.value.push(n)
+      trackForm.progress = Math.max(trackForm.progress || 0, n)
+    }else{
+      const i = watchedEpisodes.value.indexOf(n); if(i>=0) watchedEpisodes.value.splice(i,1)
+    }
+    if(!trackForm.id) await refreshTrackForm()
+  }catch(e){
+    // 改前这里是空 catch. 服务端没接下这个勾, 而界面上一个字都不说 —— 用户以为打上了,
+    // 再点一次却变成了"取消". 打勾失败和保存失败一样, 必须说出来.
+    // 传的是"标记"不是"标记失败": loadErrorMessage 自己会补「失败：」(同「加载番剧」).
+    toast(loadErrorMessage(e, '标记'))
+  }
+}
+
+/** 重拉这部番的追番状态, 把 trackForm 的 id / status / 进度对齐到服务端那一份 */
+async function refreshTrackForm(){
+  try{
+    const tk = await getTrackingStatus(sid)
+    const td = tk.data?.data
+    if(td?.tracked){ trackForm.id=td.id; trackForm.status=td.status; trackForm.progress=td.progress||0; trackForm.score=td.score||0 }
+  }catch(e){ /* 对齐失败不影响"这个勾已经打上了"这件事本身, 不打扰用户 */ }
 }
 
 /**
