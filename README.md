@@ -390,7 +390,7 @@ docker compose start nginx backend
 
 | job | 跑什么 | 它能回答的问题 |
 | --- | --- | --- |
-| `backend` | JDK 17 + `mvn -B test`（1010 个用例） | 代码逻辑还对吗？ |
+| `backend` | JDK 17 + `mvn -B test`（1012 个用例） | 代码逻辑还对吗？ |
 | `frontend` | `npm ci` + `npm test`（606 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
 | `image` | 构建后端与前端镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
 
@@ -451,7 +451,7 @@ docker compose start nginx backend
 ## 测试
 
 ```bash
-# 后端：单元测试 + 集成测试（1010 个，98 个测试类）
+# 后端：单元测试 + 集成测试（1012 个，98 个测试类）
 cd anime-tracker/backend
 mvn test
 
