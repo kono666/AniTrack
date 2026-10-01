@@ -149,6 +149,57 @@ describe('个人页的统计口径与 +1 封顶', () => {
  * 断言写的是**精确对象**而不是 objectContaining: 多带一个字段正是这个 bug 本身,
  * 用 objectContaining 的话它永远绿.
  */
+/**
+ * 按钮上那三个字说清了吗.
+ *
+ * 改前按钮上只有「+1」, 用户问过一次「+1 啥意思」—— 它字面上答不出最要紧的
+ * 那半句: 加的是**你的进度**, 不是番剧的集数. 现在按钮写「+1 集」, 悬停提示
+ * 把结果用具体数字说出来(点完会变成第几集), 列表上方还有一句总说明.
+ */
+describe('「+1 集」这句文案', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    stubApis()
+  })
+
+  it('按钮上写的是「+1 集」, 不是含混的「+1」', async () => {
+    const wrapper = await mountProfile()
+
+    expect(plusOneOf(wrapper, 'A').text()).toBe('+1 集')
+  })
+
+  it('提示说的是点完会变成第几集, 而不是重复一遍「加一集」', async () => {
+    const wrapper = await mountProfile()
+
+    // A 是 3/12
+    expect(plusOneOf(wrapper, 'A').attributes('title')).toContain('第 4 集')
+  })
+
+  it('已经看到最后一集的番, 提示不承诺一件做不到的事', async () => {
+    const wrapper = await mountProfile()
+
+    // B 是 12/12, 按钮是禁用的 —— 禁用的按钮在浏览器里不弹 title, 但这条文案
+    // 同时是 aria-label, 屏幕阅读器会读它(否则读出来只有一句「按钮, 不可用」)
+    const hint = plusOneOf(wrapper, 'B').attributes('title')
+    expect(hint).toContain('最后一集')
+    expect(hint).not.toContain('第 13 集')
+  })
+
+  it('列表上方有一句总说明', async () => {
+    const wrapper = await mountProfile()
+
+    expect(wrapper.find('.p-hint').text()).toContain('进度往前推一格')
+  })
+
+  it('没有追番记录时不出这句说明(它说的是上面那个列表)', async () => {
+    getTrackingList.mockResolvedValue({ data: { code: 200, data: [] } })
+    const wrapper = await mountProfile()
+
+    expect(wrapper.find('.p-hint').exists()).toBe(false)
+  })
+})
+
 describe('个人页只提交动过的那个字段', () => {
   beforeEach(() => {
     localStorage.clear()

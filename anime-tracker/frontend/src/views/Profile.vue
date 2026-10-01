@@ -103,48 +103,54 @@
       action-label="重试"
       @action="loadProfile"
     />
-    <div v-else-if="filtered.length > 0" class="p-list">
-      <div
-        v-for="item in filtered"
-        :key="item.id"
-        class="p-card"
-        @click="$router.push(`/anime/${item.subjectId}`)"
-      >
-        <div class="pc-cover">
-          <img :src="item.animeCover || fallbackImg" :alt="item.animeTitle" @error="e => e.target.src = fallbackImg" />
-        </div>
-        <div class="pc-body">
-          <div class="pc-top">
-            <div class="pc-title">{{ item.animeTitle || '番剧 #' + item.subjectId }}</div>
-            <div class="pc-score" v-if="item.score"><PhStar :size="11" weight="fill" /> {{ item.score }}</div>
+    <template v-else-if="filtered.length > 0">
+      <!-- 这一行只在有记录时出现, 而且只出现一次 —— 每张卡片都挂一句的话,
+           列表一滚就变成噪音. 它回答的是「+1 集」这个按钮字面上答不出的那件事:
+           加的是**你的进度**, 不是番剧的集数. -->
+      <p class="p-hint">点「+1 集」= 这一集看完了，进度往前推一格；详情页里也能按集打卡或直接输数字</p>
+      <div class="p-list">
+        <div
+          v-for="item in filtered"
+          :key="item.id"
+          class="p-card"
+          @click="$router.push(`/anime/${item.subjectId}`)"
+        >
+          <div class="pc-cover">
+            <img :src="item.animeCover || fallbackImg" :alt="item.animeTitle" @error="e => e.target.src = fallbackImg" />
           </div>
-          <div class="pc-meta">
-            <span class="pc-status-badge" :class="'st-' + item.status">{{ statusLabel[item.status] }}</span>
-            <span class="pc-type" v-if="item.animeType">{{ item.animeType }}</span>
-            <span class="pc-year" v-if="item.animeYear">{{ item.animeYear }}</span>
+          <div class="pc-body">
+            <div class="pc-top">
+              <div class="pc-title">{{ item.animeTitle || '番剧 #' + item.subjectId }}</div>
+              <div class="pc-score" v-if="item.score"><PhStar :size="11" weight="fill" /> {{ item.score }}</div>
+            </div>
+            <div class="pc-meta">
+              <span class="pc-status-badge" :class="'st-' + item.status">{{ statusLabel[item.status] }}</span>
+              <span class="pc-type" v-if="item.animeType">{{ item.animeType }}</span>
+              <span class="pc-year" v-if="item.animeYear">{{ item.animeYear }}</span>
+            </div>
+            <div class="pc-progress" v-if="item.totalEpisodes">
+              <div class="pc-bar"><div class="pc-fill" :style="{ width: pct(item) + '%' }"></div></div>
+              <span class="pc-prog-text">{{ item.progress || 0 }}/{{ item.totalEpisodes }}</span>
+            </div>
           </div>
-          <div class="pc-progress" v-if="item.totalEpisodes">
-            <div class="pc-bar"><div class="pc-fill" :style="{ width: pct(item) + '%' }"></div></div>
-            <span class="pc-prog-text">{{ item.progress || 0 }}/{{ item.totalEpisodes }}</span>
+          <div class="pc-actions" @click.stop>
+            <!-- 到顶就禁用. 改前是无限 +1: 一部 12 集的番能被点成 13/12,
+                 进度条按 pct() 卡在 100% 所以看不出来, 但数字就摆在那儿;
+                 而且这个值会原样进数据库, 之后每一处「已看 N 集」的统计都带着它 -->
+            <button
+              class="pca-btn"
+              :disabled="atLastEpisode(item)"
+              :title="plusOneHint(item)"
+              :aria-label="plusOneHint(item)"
+              @click="quickUpdate(item, 'progress', nextProgress(item))"
+            >+1 集</button>
+            <select class="pca-select" :value="item.status" @change="e => updateStatus(item, e.target.value)">
+              <option v-for="s in statusOptions" :key="s.value" :value="s.value">{{ s.short }}</option>
+            </select>
           </div>
-        </div>
-        <div class="pc-actions" @click.stop>
-          <!-- 到顶就禁用. 改前是无限 +1: 一部 12 集的番能被点成 13/12,
-               进度条按 pct() 卡在 100% 所以看不出来, 但数字就摆在那儿;
-               而且这个值会原样进数据库, 之后每一处「已看 N 集」的统计都带着它 -->
-          <button
-            class="pca-btn"
-            :disabled="atLastEpisode(item)"
-            title="+1集"
-            aria-label="进度加一集"
-            @click="quickUpdate(item, 'progress', nextProgress(item))"
-          >+1</button>
-          <select class="pca-select" :value="item.status" @change="e => updateStatus(item, e.target.value)">
-            <option v-for="s in statusOptions" :key="s.value" :value="s.value">{{ s.short }}</option>
-          </select>
         </div>
       </div>
-    </div>
+    </template>
 
     <EmptyState v-else type="tracking" message="还没有追番记录">
       <router-link to="/" style="color:var(--primary);">去发现动漫</router-link>
@@ -363,6 +369,22 @@ function nextProgress(item) {
 /** 已经看到最后一集(或超过). 总集数未知时返回 false, 与 nextProgress 一致 */
 function atLastEpisode(item) {
   return !!item.totalEpisodes && (item.progress || 0) >= item.totalEpisodes
+}
+
+/**
+ * 按钮上那句提示.
+ *
+ * 按钮只有「+1 集」三个字, 而它答不出最要紧的那半句: 加的是**你的进度**,
+ * 不是番剧的集数 —— 用户问过一次「+1啥意思」, 就是被这三个字绊住的.
+ * 与其解释语义, 不如把结果直接写出来: 点完会变成第几集, 用具体数字说话.
+ *
+ * 「到顶了」那条文案也要写, 哪怕禁用的按钮在浏览器里不弹 title:
+ * 它同时是 aria-label, 屏幕阅读器读得到, 而禁用按钮读出来只有「按钮, 不可用」
+ * 是一句不说清原因的话.
+ */
+function plusOneHint(item) {
+  if (atLastEpisode(item)) return '已经看到最后一集了'
+  return `这一集看完了：进度记成第 ${nextProgress(item)} 集`
 }
 
 /**
@@ -664,6 +686,9 @@ async function loadProfile() {
 .p-tab-sort { font-size: 12px; color: var(--text-muted); }
 
 /* ── List ── */
+/* 列表上方那句说明. 与 .p-list 共用一套宽度与边距, 于是标题、说明、卡片
+   三条左边缘对得齐 —— 差几个像素看起来就像两页拼起来的(通知那块记过同一条) */
+.p-hint { max-width: 1000px; margin: 14px auto 0; padding: 0 32px; font-size: 12px; color: var(--text-muted); }
 .p-list { max-width: 1000px; margin: 20px auto 0; padding: 0 32px; display: flex; flex-direction: column; gap: 8px; }
 .p-card { display: flex; gap: 16px; padding: 16px; background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); cursor: pointer; transition: all var(--transition); align-items: center; }
 .p-card:hover { border-color: var(--primary-line); background: var(--card-hover); }
@@ -690,7 +715,10 @@ async function loadProfile() {
 .pc-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width .3s; }
 .pc-prog-text { font-size: 11px; color: var(--text-muted); }
 .pc-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
-.pca-btn { width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 700; cursor: pointer; transition: all var(--transition); font-family: inherit; }
+/* 宽度从写死的 30px 改成 min-width + 内边距: 按钮上是「+1 集」三个字,
+   30px 装不下(文字会溢出或者被压扁). 高度不动 —— 30px 那一档本来就不是
+   触控目标, 窄屏那档另有 40px 的规则. */
+.pca-btn { min-width: 30px; height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 700; cursor: pointer; transition: all var(--transition); font-family: inherit; white-space: nowrap; }
 .pca-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
 .pca-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pca-select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text); font-size: 11px; cursor: pointer; font-family: inherit; }
@@ -780,6 +808,7 @@ async function loadProfile() {
   .p-tabs { padding: 0 16px; overflow-x: auto; }
   .p-tab { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
   .p-list { padding: 0 16px; }
+  .p-hint { padding: 0 16px; }
   .pc-cover { width: 48px; }
 
   /* 操作区在窄屏下从「藏起来」改成「单独占一行」.
@@ -793,7 +822,7 @@ async function loadProfile() {
     padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--border);
   }
   /* 手指不是鼠标: 两个控件都按 40px 的触控目标放大, 下拉框吃掉剩下的宽度 */
-  .pca-btn { width: 40px; height: 40px; font-size: 14px; }
+  .pca-btn { min-width: 40px; height: 40px; padding: 0 12px; font-size: 14px; }
   .pca-select { flex: 1; min-height: 40px; padding: 8px 10px; font-size: 13px; }
 }
 </style>
