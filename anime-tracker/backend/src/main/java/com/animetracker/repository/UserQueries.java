@@ -127,15 +127,41 @@ final class UserQueries {
     /** 同上, 倒序 */
     static final String ORDER_USERNAME_DESC = " ORDER BY u.username DESC, u.id ASC";
 
+    /**
+     * 最近登录倒序(最近登录过的在前), 从未登录过的排最后.
+     *
+     * <p>{@code last_login_at} 可空(V15 加列时就允许为空, NULL 读作「注册后从未登录过」),
+     * 所以走与 {@link #ORDER_CREATED_DESC} 同一套三段式。这里多一句解释, 因为**这一列
+     * 空值的比例和别的列不是一个量级** —— 存量用户全是空的, 而 created_at 同为空只是理论
+     * 上的可能。
+     *
+     * <p><b>第一键固定 ASC(「有值的在前」), 无论整体是升序还是降序。</b> 它回答的是
+     * 「这一行有没有值」, 与「值是早还是晚」无关。反过来写成 DESC(即「空值在前」)的话,
+     * 降序列表的头一屏会全是「从未登录」的僵尸号, 而管理员点这一列恰恰是想看最近来过的人。
+     *
+     * <p>{@code :epoch} 的值无所谓(理由见 {@link #ORDER_CREATED_DESC}), 写它只是为了让
+     * 「ORDER BY 里没有 NULL」这句话字面成立。
+     */
+    static final String ORDER_LAST_LOGIN_DESC =
+            " ORDER BY CASE WHEN u.lastLoginAt IS NULL THEN 1 ELSE 0 END ASC,"
+                    + " COALESCE(u.lastLoginAt, :epoch) DESC, u.id ASC";
+
+    /** 同上, 正序(最久没登录的在前). 第一键仍然是 ASC, 见上 */
+    static final String ORDER_LAST_LOGIN_ASC =
+            " ORDER BY CASE WHEN u.lastLoginAt IS NULL THEN 1 ELSE 0 END ASC,"
+                    + " COALESCE(u.lastLoginAt, :epoch) ASC, u.id ASC";
+
     // ==================== 拼好的完整语句 ====================
 
     static final String PAGE_CREATED_DESC = SELECT_USER + WHERE + ORDER_CREATED_DESC;
     static final String PAGE_CREATED_ASC = SELECT_USER + WHERE + ORDER_CREATED_ASC;
     static final String PAGE_USERNAME_ASC = SELECT_USER + WHERE + ORDER_USERNAME_ASC;
     static final String PAGE_USERNAME_DESC = SELECT_USER + WHERE + ORDER_USERNAME_DESC;
+    static final String PAGE_LAST_LOGIN_DESC = SELECT_USER + WHERE + ORDER_LAST_LOGIN_DESC;
+    static final String PAGE_LAST_LOGIN_ASC = SELECT_USER + WHERE + ORDER_LAST_LOGIN_ASC;
 
     /**
-     * 计数. 与上面四条共用同一份 {@link #WHERE} —— 这是分页与 total 不会各自漂移的原因.
+     * 计数. 与上面六条共用同一份 {@link #WHERE} —— 这是分页与 total 不会各自漂移的原因.
      *
      * <p>它比取页少一个 {@code :epoch}: 计数不需要排序. 参数名的差异由
      * {@code UserRepository} 那两个方法签名各自声明, 不是漏写.

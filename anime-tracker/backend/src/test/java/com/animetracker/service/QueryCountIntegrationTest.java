@@ -1765,6 +1765,39 @@ class QueryCountIntegrationTest {
     }
 
     /**
+     * 「最近登录」那一列的 SQL: ORDER BY 里显式处理 NULL.
+     *
+     * <p><b>为什么这一条非有不可, 而上面那两条语义断言不算数.</b> {@code last_login_at}
+     * 是 V15 新加的列, 存量用户**全是 NULL**, 而 H2 在 DESC 下本来就把 NULL 排最后 ——
+     * 也就是说把 {@code ORDER BY CASE WHEN u.lastLoginAt IS NULL …} 整段抹掉、只留
+     * {@code ORDER BY COALESCE(u.lastLoginAt, :epoch) DESC}, 在 H2 上**一条语义用例都不会红**
+     * (本仓在 {@code ReviewQueries} 的热度序上实测过同一件事, 见那里的长注释).
+     * 真正有差别的是 PostgreSQL, 而线上 PG 不在本机验证射程内. 所以这个坑唯一的哨兵
+     * 就是 SQL 文本.
+     *
+     * <p>断言切在 {@code order by} **之后**那一段, 而不是整条 SQL 里找 {@code last_login_at}:
+     * 后者在 SELECT 列表里本来就有(这一列被投影出来了), 于是"排序里带不带它"根本验不出来 ——
+     * 一条恒真的断言比没有断言更糟.
+     */
+    @Test
+    @DisplayName("最近登录序的 SQL: ORDER BY 里 CASE 分组 + COALESCE, 缺值的行不会插到前面")
+    void lastLoginOrderSqlIsPushedDownWithNullSafeOrdering() {
+        seedUsersForPaging(3);
+
+        adminService.getUserPage(null, null, null, "lastLoginAt", null, 1, 2);
+        String sql = lastSqlNormalized();
+        String orderBy = sql.substring(sql.toLowerCase(Locale.ROOT).lastIndexOf("order by"));
+
+        assertThat(orderBy)
+                .as("缺值的行要显式分组, 否则 NULL 排哪随库变(H2 排最后、PG 在 DESC 下排最前), "
+                        + "第 2 页就会混进第 1 页的行")
+                .containsIgnoringCase("case when")
+                .as("第二键要换成常量, 让 'ORDER BY 里没有 NULL' 字面成立")
+                .containsIgnoringCase("coalesce")
+                .containsIgnoringCase("last_login_at");
+    }
+
+    /**
      * 越界页只发 count 一条, 但报出来的 total 仍然是真实的用户总数.
      *
      * <p>两条路都很容易写错而看不出来: 把 total 报成 0 的话, 前端按

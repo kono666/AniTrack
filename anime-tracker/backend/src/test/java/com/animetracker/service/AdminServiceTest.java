@@ -279,6 +279,10 @@ class AdminServiceTest {
                 any(), any(), any(), any(), any(), any())).thenReturn(List.of());
         when(userRepository.findUserPageByUsernameDesc(
                 any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(userRepository.findUserPageByLastLoginDesc(
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(userRepository.findUserPageByLastLoginAsc(
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(List.of());
     }
 
     @Test
@@ -376,6 +380,51 @@ class AdminServiceTest {
         adminService.getUserPage(null, null, null, "username", "desc", 1, 20);
         verify(userRepository).findUserPageByUsernameDesc(
                 any(), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * 「最近登录」那一列: 不带 order 时必须落进**倒序**(最近来过的在前).
+     *
+     * <p>这一条是「{@code isAscending} 不用改」的哨兵. 它的实现是
+     * {@code SORT_USERNAME.equals(sort)} —— 于是除 username 外一律默认倒序, 新加的时间列
+     * 天然落对. 若哪天有人「顺手」把它改成显式枚举、又把这一列的自然首向写成 asc,
+     * 排出来的是「最久没登录的在最前」, 而表头的 caret 指着向下 —— 表头和数据说的不是
+     * 一回事, 且只在分享链接/刷新时才出现.
+     */
+    @Test
+    @DisplayName("最近登录: 不带 order 时是倒序(最近来过的在前), desc / asc 各走各的")
+    void lastLoginSortDefaultsToNewestFirst() {
+        stubUserPage(500);
+
+        adminService.getUserPage(null, null, null, "lastLoginAt", null, 1, 20);
+        verify(userRepository).findUserPageByLastLoginDesc(
+                any(), any(), any(), any(), any(), any(), any());
+
+        adminService.getUserPage(null, null, null, "lastLoginAt", "asc", 1, 20);
+        verify(userRepository).findUserPageByLastLoginAsc(
+                any(), any(), any(), any(), any(), any(), any());
+
+        adminService.getUserPage(null, null, null, "lastLoginAt", "desc", 1, 20);
+        verify(userRepository, times(2)).findUserPageByLastLoginDesc(
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * 两列时间可空, 所以取页那两条多一个 {@code :epoch} —— 这里顺带钉住它**真的传了值**
+     * 而不是 null: 传 null 的话 JPQL 里 {@code COALESCE(u.lastLoginAt, :epoch)} 整句恒为
+     * NULL, 「ORDER BY 里没有 NULL」那句话就不成立了(H2 与 PG 会把空值排在相反两端).
+     */
+    @Test
+    @DisplayName("最近登录排序把 :epoch 传下去, 不让 ORDER BY 里出现 NULL")
+    void lastLoginSortPassesEpoch() {
+        stubUserPage(500);
+
+        adminService.getUserPage(null, null, null, "lastLoginAt", null, 1, 20);
+
+        ArgumentCaptor<LocalDateTime> epoch = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(userRepository).findUserPageByLastLoginDesc(
+                any(), any(), any(), any(), any(), epoch.capture(), any());
+        assertThat(epoch.getValue()).isNotNull();
     }
 
     @Test

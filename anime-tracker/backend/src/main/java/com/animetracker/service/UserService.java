@@ -136,7 +136,7 @@ public class UserService {
             throw BusinessException.forbidden("账号已被禁用，请联系管理员");
         }
 
-        clearFailures(user);
+        markLoginSuccess(user);
         return buildAuthPayload(user);
     }
 
@@ -191,22 +191,29 @@ public class UserService {
     }
 
     /**
-     * 登录成功时清空失败痕迹.
+     * 登录成功时: 清空失败痕迹 + 记下这次登录的时刻.
      *
-     * <p>这里仍然走「改实体 + save」, 与 recordFailure 刻意不同 —— 不是因为这条路更安全,
+     * <p><b>这里仍然走「改实体 + save」, 与 recordFailure 刻意不同</b> —— 不是因为这条路更安全,
      * 而是因为它**不需要**更安全: 它写的是 0, 而 0 正是「连续失败」这个语义在成功后应有的
      * 值. 极端时序下(成功与一次并发失败撞上)最多抹掉那一次失败, 而按「连续」的定义, 中间
      * 成功过一次本来就该重新计数. 失败路径不一样: 它写回的是**过期的旧计数**, 那是纯粹
      * 的数据丢失, 所以那条必须交给数据库自增.
+     *
+     * <p>{@code lastLoginAt} 也走同一次 save, 理由更硬: 它只能这么写. 若照 recordFailure
+     * 写一条 {@code @Modifying} 批量 UPDATE, 那条语句会**绕过持久化上下文** —— 同一请求里
+     * 手里这个 User 仍是受管实体、内存里的 lastLoginAt 还是 null, 紧接着任何一次
+     * {@code save(user)} 都会把 last_login_at 写回 NULL. 那正是 recordFailure 注释警告的
+     * 同一类陈旧写, 只是受害列不同. (丢更新在这里本来也不是问题: 这一列是「最新一次赢」.)
+     *
+     * <p><b>为什么去掉了曾经的「干净账号直接 return」早退</b>: 留着它, 只有「之前失败过或
+     * 被锁过」的账号才会被写, 于是 last_login_at 对绝大多数账号永远是 NULL —— 后台那一列
+     * 整片是「-」, 而不报任何错、没有任何用例会红. 这是一处**按设计反转的既有行为**,
+     * 提交说明里点了名: 代价是每次登录多一条 UPDATE.
      */
-    private void clearFailures(User user) {
-        boolean clean = user.failedAttemptsOrZero() == 0 && user.getLockedUntil() == null;
-        if (clean) {
-            // 绝大多数登录都属于这种情况, 省掉一次没必要的写库
-            return;
-        }
+    private void markLoginSuccess(User user) {
         user.setFailedAttempts(0);
         user.setLockedUntil(null);
+        user.setLastLoginAt(LocalDateTime.now());
         userRepository.save(user);
     }
 

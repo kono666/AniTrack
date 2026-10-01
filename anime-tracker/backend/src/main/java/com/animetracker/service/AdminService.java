@@ -73,6 +73,12 @@ public class AdminService {
     private static final String SORT_CREATED = "createdAt";
     private static final String SORT_USERNAME = "username";
 
+    /**
+     * 最近登录. {@code last_login_at} 可空 —— 为空读作「注册后从未登录过」,
+     * 排序里这些行恒定排在最后(见 {@code UserQueries.ORDER_LAST_LOGIN_DESC}).
+     */
+    private static final String SORT_LAST_LOGIN = "lastLoginAt";
+
     private static final String ORDER_ASC = "asc";
     private static final String ORDER_DESC = "desc";
 
@@ -191,7 +197,7 @@ public class AdminService {
      * @param keyword 关键词, 命中用户名或邮箱; 空白等于不筛
      * @param role    {@code USER} / {@code ADMIN}, 其他值等于不筛
      * @param status  {@code ACTIVE} / {@code DISABLED} / {@code LOCKED}(伪值), 其他值等于不筛
-     * @param sort    {@code createdAt}(默认) / {@code username}
+     * @param sort    {@code createdAt}(默认) / {@code username} / {@code lastLoginAt}
      * @param order   {@code asc} / {@code desc}; 不认识或没给时按该列的**自然首向**
      *                (时间给最新在前, 名字给 A→Z). 这一条不能简化成"不是 asc 就是 desc"
      *                —— 那样 {@code ?sort=username} 会变成倒序, 而前端正是把这个组合
@@ -235,6 +241,14 @@ public class AdminService {
                     : userRepository.findUserPageByUsernameDesc(
                             keywordPattern, roleKey, statusFilter.status(), statusFilter.locked(),
                             now, pageable);
+        } else if (SORT_LAST_LOGIN.equals(sort)) {
+            rows = ascending
+                    ? userRepository.findUserPageByLastLoginAsc(
+                            keywordPattern, roleKey, statusFilter.status(), statusFilter.locked(),
+                            now, EPOCH, pageable)
+                    : userRepository.findUserPageByLastLoginDesc(
+                            keywordPattern, roleKey, statusFilter.status(), statusFilter.locked(),
+                            now, EPOCH, pageable);
         } else {
             rows = ascending
                     ? userRepository.findUserPageByCreatedAsc(
@@ -250,10 +264,17 @@ public class AdminService {
     /**
      * {@code order} 是否升序.
      *
-     * <p>没给(或给了不认识的值)时用**该列的自然首向**: 注册时间给最新在前, 用户名给
-     * A→Z. 不能简化成"不是 asc 就是 desc": 前端把 {@code sort=username&order=asc}
-     * 当作默认组合、**不写进 URL**, 于是分享出去的链接就是光秃秃的 {@code ?sort=username}
-     * —— 那条规则会让它翻成倒序, 而点表头点出来的却是正序.
+     * <p>没给(或给了不认识的值)时用**该列的自然首向**: 两列时间(注册、最近登录)都给
+     * 最新在前, 用户名给 A→Z. 不能简化成"不是 asc 就是 desc": 前端把
+     * {@code sort=username&order=asc} 当作默认组合、**不写进 URL**, 于是分享出去的链接
+     * 就是光秃秃的 {@code ?sort=username} —— 那条规则会让它翻成倒序, 而点表头点出来的
+     * 却是正序.
+     *
+     * <p>实现刻意是"只有 username 才算升序"这一句, 而不是一张 sort → 首向的表:
+     * 加一列排序键时**默认就落进"最新在前"**, 而那正是所有时间列该有的自然首向;
+     * 真出现一个自然首向是 A→Z 的新列, 那一句会显式地摆在这里让人看见. 反过来写成表,
+     * 漏一行的表现是"点一次列头写出的 URL(不带 order)与表头 caret 指的方向不一致",
+     * 而那只在分享链接/刷新时才出现.
      */
     private static boolean isAscending(String sort, String order) {
         if (ORDER_ASC.equals(order)) {
@@ -317,7 +338,12 @@ public class AdminService {
      * {@code User} → 给管理端看的行.
      *
      * <p>抽出来是因为它现在有**两个**调用点({@link #getUserList} 与
-     * {@link #getUserPage}), 而八个键里有一个是有讲究的, 见下面 {@code locked}.
+     * {@link #getUserPage}), 而九个键里有两个是有讲究的, 见下面 {@code locked} 与
+     * {@code lastLoginAt}.
+     *
+     * <p>键集本身是对外契约的一部分: {@code AdminUserListIntegrationTest} 有一条
+     * {@code containsExactlyInAnyOrder} 钉着它, 加键必须连那条一起改 —— 它是「这个接口
+     * 到底发出去什么」唯一的守卫.
      */
     private static List<Map<String, Object>> toAdminUserRows(List<User> users) {
         List<Map<String, Object>> result = new ArrayList<>(users.size());
@@ -343,6 +369,9 @@ public class AdminService {
         // 那边写的是 lockedUntil > :now, 也就是这里的 isLocked().
         map.put("locked", u.isLocked());
         map.put("lockedUntil", u.isLocked() ? u.getLockedUntil() : null);
+        // 原样发出去, **不在服务端把 null 换成「从未登录」之类的文案**: 换掉之后就分不清
+        // 「这个账号没登录过」和「服务端没发这个键」, 而前端要按前者渲染成「-」.
+        map.put("lastLoginAt", u.getLastLoginAt());
         return map;
     }
 

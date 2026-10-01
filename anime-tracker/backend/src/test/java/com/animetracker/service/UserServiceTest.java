@@ -351,16 +351,73 @@ class UserServiceTest {
         assertThat(savedUser().getFailedAttempts()).isZero();
     }
 
-    /** 干净的账号登录成功时不该产生一次多余的写库 */
+    /**
+     * 干净的账号登录成功时也要写一次库 —— 这一次写的不只是失败痕迹, 还有「最近登录」.
+     *
+     * <p><b>这一条按设计反转了旧行为.</b> 改动前它断言的是
+     * {@code verify(userRepository, never()).save(any())}: 那次写库只为清失败痕迹, 而干净账号
+     * 没有什么可清的, 省掉一次写. 留着那个早退, {@code last_login_at} 对绝大多数账号永远
+     * 是 NULL —— 后台那一列整片是「-」, 不报错、没有任何用例会红, 功能等于没做.
+     */
     @Test
-    @DisplayName("无失败记录时登录成功不写库")
-    void doesNotWriteWhenNothingToClear() {
+    @DisplayName("无失败记录时登录成功也要记下最近登录时间")
+    void recordsLastLoginOnCleanSuccess() {
         User user = existingUser("alice", "a@x.com", DUMMY_HASH);
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
+        LocalDateTime before = LocalDateTime.now();
         userService.login(loginReq("alice", "abcd1234"));
 
+        assertThat(savedUser().getLastLoginAt()).isNotNull().isAfterOrEqualTo(before);
+    }
+
+    // ========== 「最近登录」只记成功那一条路 ==========
+    //
+    // 下面三条问的是同一个问题: 被拒的登录**一个字都不能写**. 少了它们, 这一列会静默漂成
+    // 「最近尝试登录」—— 界面上看不出区别, 而管理员据此判断「这个号还活着吗」时拿到的是
+    // 攻击者反复试密码留下的时间戳.
+
+    @Test
+    @DisplayName("密码错误的登录不记最近登录时间")
+    void wrongPasswordDoesNotRecordLastLogin() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
+                .isInstanceOf(BusinessException.class);
+
+        assertThat(user.getLastLoginAt()).isNull();
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("被禁用的账号不记最近登录时间")
+    void disabledAccountDoesNotRecordLastLogin() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        user.setStatus("DISABLED");
+        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
+
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234")))
+                .isInstanceOf(BusinessException.class);
+
+        assertThat(user.getLastLoginAt()).isNull();
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("锁定期内的账号不记最近登录时间")
+    void lockedAccountDoesNotRecordLastLogin() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        user.setLockedUntil(LocalDateTime.now().plusMinutes(10));
+        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234")))
+                .isInstanceOf(BusinessException.class);
+
+        assertThat(user.getLastLoginAt()).isNull();
         verify(userRepository, never()).save(any());
     }
 

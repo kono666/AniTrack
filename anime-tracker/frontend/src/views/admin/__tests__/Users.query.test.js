@@ -60,6 +60,9 @@ function user(id, extra = {}) {
     createdAt: '2026-01-01T00:00:00',
     locked: false,
     lockedUntil: null,
+    // 服务端每一行都给这个键(值为 null 表示"注册后从未登录过"), 桩里也要给 ——
+    // 少了它, "空值渲染成 -"那类断言会因为 undefined 而不是 null 而侥幸通过
+    lastLoginAt: null,
     ...extra,
   }
 }
@@ -252,6 +255,51 @@ describe('用户管理: 筛选 / 排序 / 分页', () => {
     // 看起来"特意选了正序", 而它本来就是默认
     expect(lastParams().order).toBeUndefined()
     expect(router.currentRoute.value.query.order).toBeUndefined()
+  })
+
+  it('点「最近登录」列头: 不带 order 时按该列的自然首向(最新在前)', async () => {
+    const wrapper = await mountAt('/admin/users')
+    expect(thAriaSort(wrapper, '最近登录')).toBe('none')
+
+    await sortButton(wrapper, '最近登录').trigger('click')
+    await flushPromises()
+
+    // order 必须**省略**: 这一列的自然首向就是 desc, 写进 URL 只会让分享出去的
+    // 链接看起来"特意选了倒序". 顺带钉住 NATURAL_ORDER 里有这一列 —— 漏掉它的话
+    // order 会变成 undefined(碰巧也是 desc), 功能"看起来是对的", 但 order 这个 ref
+    // 的值不再落在白名单里, 下次加一个自然首向不同的键时这一列会静默翻向.
+    expect(lastParams()).toEqual({
+      keyword: undefined, role: undefined, status: undefined,
+      sort: 'lastLoginAt', order: undefined, page: 1, limit: 20,
+    })
+    expect(thAriaSort(wrapper, '最近登录')).toBe('descending')
+    expect(thAriaSort(wrapper, '注册时间')).toBe('none')
+    expect(router.currentRoute.value.query).toMatchObject({ sort: 'lastLoginAt' })
+  })
+
+  it('URL 上的 sort=lastLoginAt 认得出, 不是当成未知值落回默认', async () => {
+    await mountAt('/admin/users?sort=lastLoginAt')
+
+    // 白名单漏了这一列的表现是: 地址栏写着 lastLoginAt, 发出去的是默认排序 ——
+    // 而表头 caret 会跟着 sort ref 走, 于是表头和结果说的不是同一件事
+    expect(lastParams().sort).toBe('lastLoginAt')
+    expect(lastParams().order).toBeUndefined()
+  })
+
+  it('「最近登录」空值渲染成 -, 有值时到时分(不是只到日)', async () => {
+    getAdminUsers.mockResolvedValue(
+      pageResult([user(1, { lastLoginAt: '2026-03-04T15:37:00' }), user(2)], 2),
+    )
+    const wrapper = await mountAt('/admin/users')
+
+    // 行里两个时间列的先后: 注册时间, 最近登录
+    const cells = wrapper.findAll('.time-cell')
+    // 第一行: 注册时间(只到日) + 最近登录(到时分)
+    expect(cells[0].text()).not.toContain(':')
+    expect(cells[1].text()).toContain(':')
+    expect(cells[1].text()).toContain('37')
+    // 第二行从未登录过
+    expect(cells[3].text()).toBe('-')
   })
 
   it('改条件不往历史里堆层', async () => {

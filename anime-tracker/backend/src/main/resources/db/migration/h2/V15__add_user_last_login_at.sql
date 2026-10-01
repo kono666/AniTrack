@@ -1,0 +1,44 @@
+-- ============================================================================
+--  AniTrack · V15 记录「最后一次登录成功的时刻」（H2）
+--
+--  背景：管理端用户列表此前答不了「这个号还活着吗」—— 它给的是
+--  id / username / email / role / status / createdAt / locked / lockedUntil，
+--  没有一行与「上次出现」有关。一个 2024 年注册、注册完再没登录过的账号，
+--  和一个昨天刚登录过的账号，在管理员眼里长得一模一样。
+--
+--  为什么需要这一列，而不是拿 createdAt 凑合：
+--
+--  · created_at 是「注册」，不是「活着」。批量注册的僵尸号与天天来的老用户，
+--    在那一列上恰好是反着排的。
+--  · 也不拿 password_changed_at 或 locked_until 顶替：前者的语义是「作废旧 token」，
+--    绝大多数用户从不为空；后者为空才是常态。这三列各自回答不同的问题。
+--
+--  为什么可空、无默认值：
+--
+--  · 与 email / failed_attempts / password_changed_at 同一条理由 —— 给已有表加
+--    NOT NULL 列，H2 与 PostgreSQL 都会因为没有 DEFAULT 子句而拒绝执行
+--    （见 V1 的注释与 README「已知限制」）。
+--  · 语义上也正好：NULL 读作「注册后从未登录过」，存量用户一个都不用回填就是对的。
+--    **不要给它 DEFAULT CURRENT_TIMESTAMP** —— 那会让存量用户全部读成「刚刚登录过」，
+--    是一个不报错、不用例会红的静默错（加 NOT NULL 反而会红，那是好的那一种）。
+--
+--  为什么不加索引：
+--
+--  · 管理端按这一列排序时，ORDER BY 的第一键是**表达式**
+--    「CASE WHEN u.lastLoginAt IS NULL THEN 1 ELSE 0 END」（空值必须恒定排在最后，
+--    否则 H2 与 PG 在 DESC 下会把 NULL 放在相反两端，翻页就会漏行）。
+--    普通 B-tree 索引对这个表达式无效，能给 DatabaseMetaData 看见、
+--    却一条计划都改不动 —— 那是纯粹的写放大。
+--  · 真要有用得建表达式索引，而 H2 与 PG 的写法不同，本版要守「两方言语句逐字相同」。
+--  · 顺带也回避了 HotPathIndexMigrationTest 那套 IDX_ 白名单（它硬断言四张热点表上
+--    恰好只有某几个索引，加一个就红）。代价是用户量很大时按最近登录排序要全表扫 +
+--    排序；在只有几百到几万行的库上不成立。
+--
+--  为什么是 TIMESTAMP(6)：与 created_at / password_changed_at 同一个口径，微秒精度。
+--
+--  为什么用 ADD COLUMN IF NOT EXISTS：V2 立下的规矩 —— 每一步都必须可重复执行。
+--
+--  与 postgres/V15__add_user_last_login_at.sql 一一对应（语句逐字相同，用例守着这一点）。
+-- ============================================================================
+
+ALTER TABLE "user" ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP(6);

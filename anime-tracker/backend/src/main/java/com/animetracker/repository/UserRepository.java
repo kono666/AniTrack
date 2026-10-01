@@ -33,6 +33,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
     //
     // createdAt 那两条多一个 :epoch, 只为让 ORDER BY 里不出现 NULL(见
     // UserQueries.ORDER_CREATED_DESC); 计数那条不需要排序, 所以没有它.
+    // lastLoginAt 那两条同理 —— 那一列**可空**, 而且存量用户全是空的(见
+    // UserQueries.ORDER_LAST_LOGIN_DESC).
 
     @Query(UserQueries.PAGE_CREATED_DESC)
     List<User> findUserPageByCreatedDesc(@Param("keywordPattern") String keywordPattern,
@@ -67,6 +69,28 @@ public interface UserRepository extends JpaRepository<User, Long> {
                                           @Param("status") String status,
                                           @Param("locked") Boolean locked,
                                           @Param("now") LocalDateTime now,
+                                          Pageable pageable);
+
+    /**
+     * 最近登录两条. 参数表与 {@link #findUserPageByCreatedDesc} **逐字相同**(含
+     * {@code :epoch}) —— 两列都是可空时间戳, 排序形状也一样是三段式.
+     */
+    @Query(UserQueries.PAGE_LAST_LOGIN_DESC)
+    List<User> findUserPageByLastLoginDesc(@Param("keywordPattern") String keywordPattern,
+                                           @Param("role") String role,
+                                           @Param("status") String status,
+                                           @Param("locked") Boolean locked,
+                                           @Param("now") LocalDateTime now,
+                                           @Param("epoch") LocalDateTime epoch,
+                                           Pageable pageable);
+
+    @Query(UserQueries.PAGE_LAST_LOGIN_ASC)
+    List<User> findUserPageByLastLoginAsc(@Param("keywordPattern") String keywordPattern,
+                                          @Param("role") String role,
+                                          @Param("status") String status,
+                                          @Param("locked") Boolean locked,
+                                          @Param("now") LocalDateTime now,
+                                          @Param("epoch") LocalDateTime epoch,
                                           Pageable pageable);
 
     @Query(UserQueries.COUNT_USERS)

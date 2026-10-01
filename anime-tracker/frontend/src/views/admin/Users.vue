@@ -115,6 +115,20 @@
                 <PhCaretDown v-else class="sort-icon" :size="12" aria-hidden="true" />
               </button>
             </th>
+            <th :aria-sort="ariaSortFor('lastLoginAt')">
+              <button
+                class="admin-sort-btn"
+                :class="{ 'is-active': sort === 'lastLoginAt' }"
+                @click="toggleSort('lastLoginAt')"
+              >
+                最近登录
+                <PhCaretUp
+                  v-if="sort === 'lastLoginAt' && order === 'asc'"
+                  class="sort-icon" :size="12" aria-hidden="true"
+                />
+                <PhCaretDown v-else class="sort-icon" :size="12" aria-hidden="true" />
+              </button>
+            </th>
             <th>操作</th>
           </tr>
         </thead>
@@ -135,6 +149,7 @@
               <span v-if="u.locked" class="status-badge status-locked">已锁定</span>
             </td>
             <td class="time-cell">{{ formatTime(u.createdAt) }}</td>
+            <td class="time-cell">{{ formatDateTime(u.lastLoginAt) }}</td>
             <td>
               <button
                 v-if="u.locked"
@@ -240,10 +255,11 @@ const request = useLatestOnly()
  */
 const myId = useUserStore().user?.id
 
-/** 排序口径的白名单, 与后端 AdminService 那两个常量同源 */
+/** 排序口径的白名单, 与后端 AdminService 那几个常量同源 */
 const SORT_CREATED = 'createdAt'
 const SORT_USERNAME = 'username'
-const SORTS = [SORT_CREATED, SORT_USERNAME]
+const SORT_LAST_LOGIN = 'lastLoginAt'
+const SORTS = [SORT_CREATED, SORT_USERNAME, SORT_LAST_LOGIN]
 const DEFAULT_SORT = SORT_CREATED
 
 const ORDERS = ['asc', 'desc']
@@ -256,7 +272,7 @@ const ORDERS = ['asc', 'desc']
  * 链接是光秃秃的 `?sort=username` —— 后端的"不是 asc 就是 desc"会让它翻成倒序,
  * 而界面上显示的却是正序.
  */
-const NATURAL_ORDER = { [SORT_CREATED]: 'desc', [SORT_USERNAME]: 'asc' }
+const NATURAL_ORDER = { [SORT_CREATED]: 'desc', [SORT_USERNAME]: 'asc', [SORT_LAST_LOGIN]: 'desc' }
 
 const USER_ROLES = ['ADMIN', 'USER']
 const USER_STATUSES = ['ACTIVE', 'DISABLED', 'LOCKED']
@@ -297,6 +313,15 @@ const hasFilter = computed(
 )
 
 function formatTime(d) { return d ? new Date(d).toLocaleDateString('zh-CN') : '-' }
+
+/**
+ * 「最近登录」专用的格式: 到**时:分**, 不用上面那个只到日的.
+ *
+ * 这一列的价值全在"今天上午"与"上周"的区别上 —— 只给日期就把这个区别抹平了,
+ * 而管理员看这一列正是要判断"这号现在还在用吗", 抹平之后他得逐个点开看。
+ * 注册时间不一样: 那是"什么时候来的", 到日就够了, 两列各用各的。
+ */
+function formatDateTime(d) { return d ? new Date(d).toLocaleString('zh-CN') : '-' }
 
 /** 白名单挑选: 认不出来的一律当"没有这个值". 只可能来自被手改过的 URL */
 function pick(allowed, value) {

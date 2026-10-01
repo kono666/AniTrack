@@ -91,6 +91,27 @@ public class User {
      */
     private LocalDateTime passwordChangedAt;
 
+    /**
+     * 最后一次**登录成功**的时刻; 为空表示注册后从未登录过.
+     *
+     * <p><b>唯一的写入点是 {@code UserService.markLoginSuccess}</b> —— 也就是「密码校验通过、
+     * 账号未被禁用」之后那一步。四条失败路径(用户名不存在 / 锁定中 / 密码错 / 已禁用)都在
+     * 它之前就抛出了，所以这一列记的是「真的进来过」，不是「试过」。
+     * 注册、刷新 token、读 {@code /api/user/me} 一概不写它 —— 那会让这一列的语义悄悄漂成
+     * 「最近活动」，而没有任何东西会提示这个变化。
+     *
+     * <p><b>它只给管理端看。</b> 不进 JWT payload，也不进 {@code GET /api/user/info/{id}} ——
+     * 那等于告诉别人你什么时候在线。两个响应体都是手拼 Map，将来若有人图省事改成直接序列化
+     * 这个实体，泄漏是静默的。
+     *
+     * <p><b>为什么可空、无默认值。</b> 与 {@code failedAttempts} / {@code passwordChangedAt}
+     * 同一条理由：给已有表加 NOT NULL 列会因为没有 DEFAULT 而迁移失败。语义上也正好 ——
+     * NULL 读作「从未登录过」，存量用户一个都不用回填。反过来，给它加
+     * {@code DEFAULT CURRENT_TIMESTAMP} 会把存量用户全读成「刚刚登录过」，那是一个不报错的
+     * 静默错（见 V15 脚本注释）。
+     */
+    private LocalDateTime lastLoginAt;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 

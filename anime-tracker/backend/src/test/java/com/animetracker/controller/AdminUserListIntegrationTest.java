@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -98,6 +99,16 @@ class AdminUserListIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    /**
+     * 只给"最近登录"那条端到端用例用: 种子里 51 行的密码哈希是占位串, 登录不了,
+     * 而那一条必须走一次**真登录**才谈得上"写路径有没有接上".
+     *
+     * <p>用的是容器里那一个, 不是 {@code new BCryptPasswordEncoder()} —— 登录比对走的是
+     * 装配出来的这个 bean, 自己造一个就等于假设两者算法与强度永远一致.
+     */
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     /**
      * 管理员 token, **整个类共用一次**.
@@ -233,7 +244,7 @@ class AdminUserListIntegrationTest {
      * {@code res.data.data.list} 会拿到 undefined, 而它不会报错 —— 列表静悄悄地空掉.
      */
     @Test
-    @DisplayName("data 是 {list,total,page} 信封, 不是裸数组; 每行八把键")
+    @DisplayName("data 是 {list,total,page} 信封, 不是裸数组; 每行九把键")
     void responseIsAPagedEnvelope() throws Exception {
         JsonNode data = dataOf("keyword", "tu_");
 
@@ -246,8 +257,9 @@ class AdminUserListIntegrationTest {
         JsonNode row = data.path("list").get(0);
         List<String> keys = new ArrayList<>();
         row.fieldNames().forEachRemaining(keys::add);
+        // 这一个键集是**对外契约**. 加键必须走到这里来改, 别用 containsAll 把它放松掉
         assertThat(keys).containsExactlyInAnyOrder("id", "username", "email", "role",
-                "status", "createdAt", "locked", "lockedUntil");
+                "status", "createdAt", "locked", "lockedUntil", "lastLoginAt");
     }
 
     // ========== 分页 ==========
@@ -466,6 +478,62 @@ class AdminUserListIntegrationTest {
         // 认不出来就当没给, 不抛异常 —— 手改过的 URL 不该把页面变成错误屏
         assertThat(onlyUsernameOf("keyword", "tu_", "limit", "1", "sort", "bogus"))
                 .isEqualTo("tu_admin");
+        // 最近登录: 种子里这 51 行**全是 NULL**(灌数据时没写这一列), 所以两种方向下都按
+        // u.id 升序 —— 三段式的第一键"有没有值"与兜底的 u.id 都是 ASC, 中间那键组内全相等.
+        // 值本身不说明什么, 但它证明**这一支真的接上了**: 落回注册时间那支的话这里会是
+        // tu_admin(created_at 最大的那个). 有值的行如何排在最前, 见下面那条端到端用例.
+        assertThat(onlyUsernameOf("keyword", "tu_", "limit", "1", "sort", "lastLoginAt"))
+                .isEqualTo("tu_001");
+        assertThat(onlyUsernameOf("keyword", "tu_", "limit", "1", "sort", "lastLoginAt", "order", "asc"))
+                .isEqualTo("tu_001");
+    }
+
+    /**
+     * 端到端: 一次**真登录**之后, 那个账号在按最近登录排序的列表里排在最前, 且这一列非空.
+     *
+     * <p>这一条同时钉住两件失效方式完全不同的性质:
+     *
+     * <ul>
+     *   <li><b>写路径真的接上了。</b> {@code UserService.markLoginSuccess} 若还留着"账号没失败
+     *       记录就直接 return"的早退, 下面那句非空断言会红 —— 而**只有这一条会红**:
+     *       全站绝大多数账号都是"干净"的, 其余任何用例都不问这一列, 后台那一列会静默地
+     *       整片是「-」。</li>
+     *   <li><b>从未登录过的行不会排在登录过的行前面。</b> 那 51 个 {@code tu_} 账号这一列
+     *       全是 NULL, 一个都不能越过刚登录的这一个。⚠️ 这半句在 H2 上其实由
+     *       {@code QueryCountIntegrationTest} 的 SQL 文本断言守着(H2 的 NULL 排序恰好与
+     *       CASE 分组一致, 语义用例在这里证明不了那段代码存在), 本用例只是顺带看一眼。</li>
+     * </ul>
+     */
+    @Test
+    @DisplayName("真登录一次之后: 这一列有值, 且按最近登录排序时它压过所有从未登录的账号")
+    void loginIsVisibleThroughTheLastLoginColumn() throws Exception {
+        // 自己造一个能登录的账号: 种子里那 51 行的密码哈希是占位串, 从不拿它登录
+        jdbc.update("INSERT INTO \"user\" (username, password, email, role, status, created_at) "
+                        + "VALUES ('tu_never', ?, 'tu_never@example.com', 'USER', 'ACTIVE', ?)",
+                passwordEncoder.encode("tu-login-pw"), Timestamp.valueOf(BASE.plusMinutes(999)));
+
+        assertThat(rowOf(dataOf("keyword", "tu_never"), "tu_never").path("lastLoginAt").isNull())
+                .as("灌进去时这一列是空的 —— 这是「从未登录过」的基准")
+                .isTrue();
+
+        login("tu_never", "tu-login-pw");
+
+        assertThat(rowOf(dataOf("keyword", "tu_never"), "tu_never").path("lastLoginAt").isNull())
+                .as("登录成功必须写这一列; 早退还在的话干净账号永远不会被记上")
+                .isFalse();
+        assertThat(onlyUsernameOf("keyword", "tu_", "limit", "1", "sort", "lastLoginAt"))
+                .as("刚登录过的那个必须排在 51 个从未登录的账号前面")
+                .isEqualTo("tu_never");
+    }
+
+    /** 从一页结果里挑出某个用户名的行 */
+    private static JsonNode rowOf(JsonNode data, String username) {
+        for (JsonNode row : data.path("list")) {
+            if (username.equals(row.path("username").asText())) {
+                return row;
+            }
+        }
+        throw new AssertionError("列表里没有 " + username);
     }
 
     // ========== total 与 list 同源 ==========
