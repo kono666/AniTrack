@@ -79,6 +79,16 @@ const routes = [
         component: () => import('../views/admin/Reviews.vue'),
         meta: { title: '评论管理' },
       },
+      {
+        path: 'actions',
+        name: 'AdminActions',
+        component: () => import('../views/admin/Audit.vue'),
+        // 与 users 同一条理由, 只是这里的条件更少: action / page / limit 三个也
+        // 全写在 query 上, 而改筛选、翻页都不是"到了另一个地方". 加上
+        // scrollOnQueryChange:false 之后, 越界那一页点「回到第 1 页」才不会
+        // 把人从分页条那里扔回页面最顶上.
+        meta: { title: '操作日志', scrollOnQueryChange: false },
+      },
     ],
   },
 

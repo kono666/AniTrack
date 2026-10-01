@@ -182,14 +182,17 @@ export const getReceivedReplies = () => api.get('/user/received-replies')
 export const getDashboard = () => api.get('/admin/dashboard')
 
 /**
- * 用户列表可选的每页条数. 后端 limit 的上限是 100(AdminController 的 @Max), 20 是本页默认.
+ * 后台表格可选的每页条数. 后端 limit 的上限是 100(AdminController 的 @Max), 20 是默认.
  *
  * 导出它是为了让算「共几页」的地方用的是**同一个数** —— 请求里发 limit=50 而分页控件
  * 按 20 算, 两边对 totalPages 各说各话, 用户点到"最后一页"会发现是空的.
  * 与 SEARCH_PAGE_SIZE 是同一条理由.
+ *
+ * 名字里没有 "USER": 用户管理与操作日志两页共用同一份取值. 抄第二份的代价与
+ * PageResults/TextSnippet 被抽出来是同一条 —— 两处一旦漂掉, 没有任何测试会抓得到.
  */
-export const ADMIN_USER_PAGE_SIZES = [20, 50, 100]
-export const ADMIN_USER_PAGE_SIZE = ADMIN_USER_PAGE_SIZES[0]
+export const ADMIN_PAGE_SIZES = [20, 50, 100]
+export const ADMIN_PAGE_SIZE = ADMIN_PAGE_SIZES[0]
 
 /**
  * 用户列表.
@@ -205,6 +208,15 @@ export const unlockUser = (targetUserId) =>
   api.put(`/admin/users/${targetUserId}/unlock`)
 export const setUserRole = (targetUserId, role) =>
   api.put(`/admin/users/${targetUserId}/role`, null, { params: { role } })
+
+/**
+ * 管理端的操作日志(账本).
+ *
+ * 只有一个 action 精确筛, **没有排序参数** —— 账本只有"最新的在最上面"这一种读法,
+ * 与后端 getActionPage 一一对应。action 认不出来时后端当"不筛", 所以这里不需要
+ * 在前端做白名单校验。
+ */
+export const getAdminActions = (params) => api.get('/admin/actions', { params })
 export const getAdminReviews = () => api.get('/admin/reviews')
 export const adminDeleteReview = (reviewId) =>
   api.delete(`/admin/reviews/${reviewId}`)

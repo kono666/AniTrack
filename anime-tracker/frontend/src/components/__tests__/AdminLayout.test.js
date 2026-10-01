@@ -98,15 +98,19 @@ describe('后台外壳', () => {
     localStorage.clear()
   })
 
-  it('三条导航各自指向一条后台路由', async () => {
+  it('四条导航各自指向一条后台路由', async () => {
     const wrapper = await mountAt('/admin')
     const links = navLinks(wrapper)
 
+    // 这一条是**全等**而不是"包含": 侧栏多一项少一项都该在这里被看见.
+    // 加「操作日志」时它红过一次, 那是应该的 —— 一个没有入口的页面
+    // 与一个入口指向 404 的页面, 症状都是"管理端少了一页".
     expect(links.map(l => l.attributes('href')))
-      .toEqual(['/admin', '/admin/users', '/admin/reviews'])
+      .toEqual(['/admin', '/admin/users', '/admin/reviews', '/admin/actions'])
     expect(links[0].text()).toContain('仪表盘')
     expect(links[1].text()).toContain('用户管理')
     expect(links[2].text()).toContain('评论管理')
+    expect(links[3].text()).toContain('操作日志')
   })
 
   it('在 /admin/users 上只有「用户管理」是选中态', async () => {

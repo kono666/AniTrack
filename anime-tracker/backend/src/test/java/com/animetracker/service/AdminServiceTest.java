@@ -1,7 +1,10 @@
 package com.animetracker.service;
 
+import com.animetracker.entity.AdminActionLog;
+import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
+import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.TrackingRepository;
@@ -16,6 +19,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -29,32 +34,77 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 改角色这个动作的护栏.
+ * 管理端那些**写**动作的护栏: 改角色 / 封禁 / 解锁 / 删评论, 以及它们留下的账.
  *
- * <p>这一组规则的价值全在「写错了不会报错」上: 白名单漏了, 库里会多出一个
+ * <p>这些规则的价值全在「写错了不会报错」上: 白名单漏了, 库里会多出一个
  * 名字像管理员、权限却不是的账号, 没有任何一处会报错; 少拦一次「改自己」或
  * 「降级最后一个管理员」, 系统会在某一次点击之后突然**再也没有人能进管理端**,
  * 而那次点击看起来和平时任何一次成功操作一模一样.
  *
- * <p>所以每个用例都同时断言两件事: 抛出的是 400(而不是 500, 也不是静默通过),
- * 以及**什么都没写进库** —— 只在抛异常之前先 save 了一下, 异常照样抛,
+ * <p>所以「角色白名单」那一组里每个用例都同时断言两件事: 抛出的是 400(而不是 500,
+ * 也不是静默通过), 以及**什么都没写进库** —— 只在抛异常之前先 save 了一下, 异常照样抛,
  * 但数据已经坏了.
+ *
+ * <p>「账本」那一组的失效方式与上面那组不同, 更安静: 漏记一条账, 动作照样生效、
+ * 接口照样 200、界面上一模一样, 只是事后再也查不到是谁按的那一下.
  */
 class AdminServiceTest {
 
     private UserRepository userRepository;
+    private ReviewRepository reviewRepository;
+    private AdminActionLogRepository adminActionLogRepository;
+    private TrackingIsolatedInsert isolatedInsert;
     private AdminService adminService;
 
     @BeforeEach
     void setUp() {
         userRepository = mock(UserRepository.class);
-        adminService = new AdminService(userRepository, mock(ReviewRepository.class),
-                mock(TrackingRepository.class), mock(AnimeRepository.class));
+        reviewRepository = mock(ReviewRepository.class);
+        adminActionLogRepository = mock(AdminActionLogRepository.class);
+        // 用真的那个, 不用 mock: IsolatedInsert.attempt 的语义就是「把回调跑一遍」,
+        // 换成 mock 之后四个动作会一起变成空操作, 而那一组用例的断言全都还在,
+        // 于是它们会以「什么都没发生」的形式静默失真. 子类只是多记一个「回调开着呢」.
+        isolatedInsert = new TrackingIsolatedInsert();
+        adminService = new AdminService(userRepository, reviewRepository,
+                mock(TrackingRepository.class), mock(AnimeRepository.class),
+                adminActionLogRepository, isolatedInsert);
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    /**
+     * 能回答「记账那一刻, 我们是不是还在 {@code attempt} 里面」的那个 {@link IsolatedInsert}.
+     *
+     * <p>单元测试里没有真正的事务管理器(注解在这条路径上本来也不生效), 所以「同一个事务」
+     * 这件事在这一层唯一观察得到的形状就是「回调跑到哪儿了」。真正的回滚由
+     * {@code AdminActionLogRollbackTest} 在真库上验 —— 那个才是这条约定最终的证伪点。
+     */
+    private static final class TrackingIsolatedInsert extends IsolatedInsert {
+        private boolean inside;
+
+        @Override
+        public <T> T attempt(Supplier<T> insert) {
+            inside = true;
+            try {
+                return insert.get();
+            } finally {
+                inside = false;
+            }
+        }
+
+        boolean isInside() {
+            return inside;
+        }
     }
 
     private static User user(Long id, String username, String role) {
         return User.builder().id(id).username(username).role(role).status("ACTIVE").build();
+    }
+
+    /** 取出这次唯一写下的那条账. 多于一条会在这里直接报出来, 而不是悄悄取第一条 */
+    private AdminActionLog onlyAuditRow() {
+        ArgumentCaptor<AdminActionLog> captor = ArgumentCaptor.forClass(AdminActionLog.class);
+        verify(adminActionLogRepository).save(captor.capture());
+        return captor.getValue();
     }
 
     // ========== 角色值白名单 ==========
@@ -352,5 +402,327 @@ class AdminServiceTest {
         // 助手侧的 list_users 与周报的构成统计要的是**全量**: 指到分页那条上,
         // 周报的 byRole / byStatus 会静默变成"前 20 个人的构成"
         assertThat(pageable.getValue().isUnpaged()).isTrue();
+    }
+
+    // ========== 账本: 四个动作各留一条 ==========
+    //
+    // 这一组钉的是「有动作、没账本」在结构上不可能出现. 它不会以异常的形式表现出来:
+    // 漏记一条账, 接口照样 200、动作照样生效、界面上一模一样, 只是事后再也查不到是
+    // 谁按的那一下 —— 而账本一旦漏记就再也补不回来.
+
+    @Test
+    @DisplayName("禁用用户: 动作生效, 并记下一条 USER_BAN")
+    void banningWritesOneAuditRow() {
+        User actor = user(1L, "admin", "ADMIN");
+        User target = user(2L, "bob", "USER");
+        when(userRepository.findById(2L)).thenReturn(Optional.of(target));
+
+        adminService.toggleUserStatus(actor, 2L);
+
+        assertThat(target.getStatus()).isEqualTo("DISABLED");
+        AdminActionLog log = onlyAuditRow();
+        assertThat(log.getActorId()).isEqualTo(1L);
+        assertThat(log.getActorName()).isEqualTo("admin");
+        assertThat(log.getAction()).isEqualTo(AdminActionLog.USER_BAN);
+        assertThat(log.getTargetType()).isEqualTo(AdminActionLog.TARGET_USER);
+        assertThat(log.getTargetId()).isEqualTo(2L);
+        assertThat(log.getDetail()).isEqualTo("禁用用户 bob");
+    }
+
+    /**
+     * 封与解是**两个** action 而不是一个带参数的: 「这个人被封过」与「这个人被解封过」
+     * 是两条不同的历史, 合成一个之后按 action 筛只能筛出"被封或被解过"这一团.
+     */
+    @Test
+    @DisplayName("启用一个已禁用的用户: 记的是 USER_UNBAN")
+    void unbanningWritesUnban() {
+        User target = user(2L, "bob", "USER");
+        target.setStatus("DISABLED");
+        when(userRepository.findById(2L)).thenReturn(Optional.of(target));
+
+        adminService.toggleUserStatus(user(1L, "admin", "ADMIN"), 2L);
+
+        assertThat(target.getStatus()).isEqualTo("ACTIVE");
+        AdminActionLog log = onlyAuditRow();
+        assertThat(log.getAction()).isEqualTo(AdminActionLog.USER_UNBAN);
+        assertThat(log.getDetail()).isEqualTo("启用用户 bob");
+    }
+
+    /**
+     * 解锁要记下**解锁之前**的失败次数.
+     *
+     * <p>写的是 0(解锁之后的值)的话, 这条账就成了「管理员解锁了一个没有任何异常的用户」——
+     * 而「这个人为什么老是被锁」正是事后唯一想从这条记录里看出来的一件事.
+     */
+    @Test
+    @DisplayName("解锁: 记下解锁之前的失败次数, 而不是清完之后的 0")
+    void unlockingRecordsTheFailureCountFromBefore() {
+        User target = user(2L, "bob", "USER");
+        target.setFailedAttempts(5);
+        target.setLockedUntil(LocalDateTime.now().plusMinutes(10));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(target));
+
+        adminService.unlockUser(user(1L, "admin", "ADMIN"), 2L);
+
+        assertThat(target.isLocked()).isFalse();
+        assertThat(target.failedAttemptsOrZero()).isZero();
+        AdminActionLog log = onlyAuditRow();
+        assertThat(log.getAction()).isEqualTo(AdminActionLog.USER_UNLOCK);
+        assertThat(log.getDetail()).contains("5 次");
+    }
+
+    /**
+     * 改角色的账里**两端都要在**.
+     *
+     * <p>只记「改成了 ADMIN」的话, 事后分不清这是把谁提上来的、还是把谁降下去之后又提回来
+     * —— 而提权恰恰是这四个动作里最该被查的一个.
+     */
+    @Test
+    @DisplayName("改角色: 记下从哪个角色改到哪个角色")
+    void roleChangeRecordsBothEnds() {
+        User target = user(2L, "bob", "USER");
+        when(userRepository.findById(2L)).thenReturn(Optional.of(target));
+
+        adminService.setUserRole(user(1L, "admin", "ADMIN"), 2L, "ADMIN");
+
+        AdminActionLog log = onlyAuditRow();
+        assertThat(log.getAction()).isEqualTo(AdminActionLog.USER_ROLE);
+        assertThat(log.getTargetType()).isEqualTo(AdminActionLog.TARGET_USER);
+        assertThat(log.getDetail()).isEqualTo("把用户 bob 的角色从 USER 改为 ADMIN");
+    }
+
+    /**
+     * 删评论的账里要带**作者名与正文摘要**: 评论已经删了, 事后想弄清"删的是哪条"
+     * 就只能靠这一行字, 而 reviewId 本身什么也说明不了.
+     *
+     * <p>顺带钉住摘要那 60 字的口径 —— 正文最长 5000 字, 原样记进 detail 就是几十 KB
+     * 一行; 而这一点在两处实现(账本、收到的回复)之间漂掉时, 没有任何东西会报错.
+     */
+    @Test
+    @DisplayName("删评论: 记下作者与正文摘要, 摘要封顶 60 字")
+    void deletingAReviewSnapshotsTheAuthorAndASnippet() {
+        Review review = Review.builder()
+                .id(9L).user(user(3L, "carol", "USER")).subjectId(96000201)
+                .content("甲".repeat(200)).build();
+        when(reviewRepository.findById(9L)).thenReturn(Optional.of(review));
+
+        adminService.deleteAnyReview(user(1L, "admin", "ADMIN"), 9L);
+
+        verify(reviewRepository).delete(review);
+        AdminActionLog log = onlyAuditRow();
+        assertThat(log.getAction()).isEqualTo(AdminActionLog.REVIEW_DELETE);
+        assertThat(log.getTargetType()).isEqualTo(AdminActionLog.TARGET_REVIEW);
+        assertThat(log.getTargetId()).isEqualTo(9L);
+        assertThat(log.getDetail())
+                .isEqualTo("删除用户 carol 在作品 96000201 下的评论：" + "甲".repeat(60) + "…");
+    }
+
+    /** 只打分不写字的评论是合法的, 那种情况下 detail 里不能出现一个空的冒号 */
+    @Test
+    @DisplayName("删一条没有正文的评论: detail 里是「（无正文）」而不是一个空冒号")
+    void deletingAReviewWithoutContentSaysSo() {
+        Review review = Review.builder()
+                .id(9L).user(user(3L, "carol", "USER")).subjectId(96000201).content(null).build();
+        when(reviewRepository.findById(9L)).thenReturn(Optional.of(review));
+
+        adminService.deleteAnyReview(user(1L, "admin", "ADMIN"), 9L);
+
+        assertThat(onlyAuditRow().getDetail()).endsWith("（无正文）");
+    }
+
+    /**
+     * 动作失败时**一条账都不该留下**.
+     *
+     * <p>四种失败路径各来一次. 校验全部在 {@code save} 之前、也就是在记账之前, 所以它们
+     * 天然不产生账 —— 但"天然"是会被人挪走的: 只要有人把某句校验挪到记账后面,
+     * 账本里就会出现一条「封了一个不存在的用户」.
+     */
+    @Test
+    @DisplayName("动作失败(404/400)时不产生任何账本行")
+    void failedActionsLeaveNoAuditRow() {
+        User actor = user(1L, "admin", "ADMIN");
+
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "boss", "ADMIN")));
+        assertThatThrownBy(() -> adminService.toggleUserStatus(actor, 2L))
+                .isInstanceOf(BusinessException.class);
+
+        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> adminService.unlockUser(actor, 99L))
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> adminService.setUserRole(actor, 99L, "USER"))
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> adminService.setUserRole(actor, 99L, "SUPER"))
+                .isInstanceOf(BusinessException.class);
+
+        when(reviewRepository.findById(7L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> adminService.deleteAnyReview(actor, 7L))
+                .isInstanceOf(BusinessException.class);
+
+        verify(adminActionLogRepository, never()).save(any(AdminActionLog.class));
+    }
+
+    /**
+     * {@code actorName} 是**写入那一刻**的快照, 不是指回 {@code user} 表的一根指针.
+     *
+     * <p>账本要活到那个账号改名或消失之后 —— 只有 id 的话, 一次改名就把历史记录
+     * 变成了几个认不出来的数字.
+     */
+    @Test
+    @DisplayName("actorName 是快照: 操作者之后改名, 旧记录仍是旧名")
+    void actorNameIsASnapshot() {
+        User actor = user(1L, "admin", "ADMIN");
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "bob", "USER")));
+
+        adminService.toggleUserStatus(actor, 2L);
+        actor.setUsername("renamed");
+
+        assertThat(onlyAuditRow().getActorName()).isEqualTo("admin");
+    }
+
+    /**
+     * 记账必须发生在 {@code attempt} 的**回调之内**.
+     *
+     * <p>挪到外面两次写就分属两个事务, 于是"人封了、账没记"和反过来都能发生, 而两种
+     * 都不报错. 这一层能观察到的是"回调跑到哪儿了"; 真库上的回滚由
+     * {@code AdminActionLogRollbackTest} 验.
+     */
+    @Test
+    @DisplayName("记账发生在事务边界之内 —— 挪出去就成了「人封了、账没记」")
+    void auditRowIsWrittenInsideTheTransaction() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "bob", "USER")));
+        AtomicBoolean insideWhenLogged = new AtomicBoolean();
+        when(adminActionLogRepository.save(any(AdminActionLog.class))).thenAnswer(inv -> {
+            insideWhenLogged.set(isolatedInsert.isInside());
+            return inv.getArgument(0);
+        });
+
+        adminService.toggleUserStatus(user(1L, "admin", "ADMIN"), 2L);
+
+        assertThat(insideWhenLogged).isTrue();
+    }
+
+    /** 账写不进去时, 整个动作跟着失败 —— 不允许出现一次「成功但无痕」的封禁 */
+    @Test
+    @DisplayName("记账失败时整个动作失败, 不静默通过")
+    void whenTheLedgerWriteFailsTheActionFailsToo() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "bob", "USER")));
+        when(adminActionLogRepository.save(any(AdminActionLog.class)))
+                .thenThrow(new IllegalStateException("账本写不进去"));
+
+        assertThatThrownBy(() -> adminService.toggleUserStatus(user(1L, "admin", "ADMIN"), 2L))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    /**
+     * 操作者没有 id 时抛 403, 而不是写一行 {@code actor_id} 为空的账(那一列是 NOT NULL).
+     *
+     * <p>异常从 {@code attempt} 里抛出去会把整个动作一起回滚, 所以这里连"用户已经被改过"
+     * 那半截也不会留下 —— 这正是记不住账时宁可什么都不做的意思.
+     */
+    @Test
+    @DisplayName("没有 id 的操作者: 403, 而不是写一行没有操作者的账")
+    void anActorWithoutIdIsRejected() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "bob", "USER")));
+
+        assertThatThrownBy(() -> adminService.toggleUserStatus(
+                User.builder().username("ghost").role("ADMIN").build(), 2L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+
+        verify(adminActionLogRepository, never()).save(any(AdminActionLog.class));
+    }
+
+    // ========== 操作日志: 参数夹取与筛选 ==========
+
+    /** 默认桩: 计数给个非零值, 否则取页那一段会因为"越界"而根本不执行 */
+    private void stubActionPage(long matched) {
+        when(adminActionLogRepository.countPage(any())).thenReturn(matched);
+        when(adminActionLogRepository.findPage(any(), any())).thenReturn(List.of());
+    }
+
+    @Test
+    @DisplayName("认不出来的 action 当作「不筛」, 而不是把那个字符串发给数据库")
+    void unknownActionBecomesNoFilter() {
+        stubActionPage(1);
+
+        adminService.getActionPage("BOGUS", 1, 20);
+
+        // 原样下发的话 WHERE action = 'BOGUS' 匹配零行 —— 界面上是"没有操作记录",
+        // 而接口 200, 没有任何东西报错. 与用户列表对未知 role 的口径一致.
+        verify(adminActionLogRepository).countPage(isNull());
+    }
+
+    @Test
+    @DisplayName("认识的 action 原样下发, 大小写不归一化")
+    void knownActionIsPassedThrough() {
+        stubActionPage(1);
+
+        adminService.getActionPage(AdminActionLog.USER_BAN, 1, 20);
+
+        // 这五个值是**我们自己写进库的字面量**, 不是用户输入 —— 归一化只会让
+        // "user_ban 也认"这种宽容反过来掩盖一次拼错
+        verify(adminActionLogRepository).countPage(AdminActionLog.USER_BAN);
+    }
+
+    @Test
+    @DisplayName("页码小于 1 当作第 1 页; 每页条数 0 回到默认、超过上限夹到 100")
+    void actionPageParamsAreClamped() {
+        stubActionPage(500);
+
+        adminService.getActionPage(null, 0, 0);
+        ArgumentCaptor<Pageable> first = ArgumentCaptor.forClass(Pageable.class);
+        verify(adminActionLogRepository).findPage(isNull(), first.capture());
+        assertThat(first.getValue().getPageNumber()).isZero();
+        assertThat(first.getValue().getPageSize()).isEqualTo(20);
+
+        adminService.getActionPage(null, 1, 100000);
+        ArgumentCaptor<Pageable> second = ArgumentCaptor.forClass(Pageable.class);
+        verify(adminActionLogRepository, times(2)).findPage(isNull(), second.capture());
+        assertThat(second.getValue().getPageSize()).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("越界页: 报真实的 total, 一行都不取")
+    void outOfRangeActionPageStillReportsTheRealTotal() {
+        stubActionPage(30);
+
+        Map<String, Object> result = adminService.getActionPage(null, 5, 20);
+
+        assertThat(result.get("total")).isEqualTo(30);
+        assertThat((List<?>) result.get("list")).isEmpty();
+        verify(adminActionLogRepository, never()).findPage(any(), any());
+    }
+
+    /**
+     * 行里给的是账本自己的字段, 一个键都不回表去查.
+     *
+     * <p>把 {@code targetId} 解析成用户名的写法看着更友好, 但它把账本"不依赖目标还在不在"
+     * 这个前提推翻了 —— 而可读的那部分本就在 {@code actorName} 与 {@code detail} 里
+     * (detail 在写的时候就带上了目标的名字快照).
+     */
+    @Test
+    @DisplayName("日志行的七个键来自账本本身, 不回表查目标名字")
+    void actionRowsCarryTheLedgerFields() {
+        when(adminActionLogRepository.countPage(any())).thenReturn(1L);
+        when(adminActionLogRepository.findPage(any(), any())).thenReturn(List.of(
+                AdminActionLog.builder().id(7L).actorId(1L).actorName("admin")
+                        .action(AdminActionLog.USER_BAN).targetType(AdminActionLog.TARGET_USER)
+                        .targetId(2L).detail("禁用用户 bob")
+                        .createdAt(LocalDateTime.of(2030, 1, 1, 0, 0)).build()));
+
+        Map<String, Object> result = adminService.getActionPage(null, 1, 20);
+
+        assertThat(result.get("total")).isEqualTo(1);
+        assertThat(result.get("page")).isEqualTo(1);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> list = (List<Map<String, Object>>) result.get("list");
+        assertThat(list).hasSize(1);
+        assertThat(list.get(0))
+                .containsEntry("id", 7L)
+                .containsEntry("action", AdminActionLog.USER_BAN)
+                .containsEntry("actorName", "admin")
+                .containsEntry("targetType", AdminActionLog.TARGET_USER)
+                .containsEntry("targetId", 2L)
+                .containsEntry("detail", "禁用用户 bob");
     }
 }

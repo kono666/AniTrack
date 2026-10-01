@@ -1,15 +1,18 @@
 package com.animetracker.service;
 
+import com.animetracker.entity.AdminActionLog;
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.User;
 import com.animetracker.entity.Review;
 import com.animetracker.exception.BusinessException;
+import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.UserRepository;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.TrackingRepository;
 import com.animetracker.util.PageResults;
 import com.animetracker.util.SearchPatterns;
+import com.animetracker.util.TextSnippet;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -18,6 +21,24 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * 管理端的所有动作.
+ *
+ * <p><b>这个类刻意不带类级 {@code @Transactional}。</b> 两个原因:
+ * <ul>
+ *   <li>Agent 的工具链上, {@code ToolTransactionRunner} 已经给每次工具执行开了
+ *       {@code REQUIRES_NEW}; 这里再加一层就是嵌套, 而且会让「工具失败了网页接口
+ *       还能自愈」这条性质消失;</li>
+ *   <li>读路径({@link #getUserPage} / {@link #getDashboard} 等)本来就不需要事务.</li>
+ * </ul>
+ * 需要「多个写同生共死」的地方, 用 {@link IsolatedInsert#attempt} 显式圈出那一段 ——
+ * 本类的四个破坏性动作都是这个形状(动作 + 记账)。
+ *
+ * <p><b>四个破坏性动作都必须留下一条账。</b> 这条不变式的落点是 {@link #recordAction}:
+ * 它没有 actor 就抛 403, 于是「有动作、没账本」在结构上不可能出现。别把记账挪到
+ * controller 去 —— 那样「service 成功了、记账抛了」就变成一次无痕的封禁, 而且将来
+ * 从 Agent 工具或别的入口调这四个方法时, 那条路径会绕过账本。
+ */
 @Service
 public class AdminService {
 
@@ -70,15 +91,21 @@ public class AdminService {
     private final ReviewRepository reviewRepository;
     private final TrackingRepository trackingRepository;
     private final AnimeRepository animeRepository;
+    private final AdminActionLogRepository adminActionLogRepository;
+    private final IsolatedInsert isolatedInsert;
 
     public AdminService(UserRepository userRepository,
                         ReviewRepository reviewRepository,
                         TrackingRepository trackingRepository,
-                        AnimeRepository animeRepository) {
+                        AnimeRepository animeRepository,
+                        AdminActionLogRepository adminActionLogRepository,
+                        IsolatedInsert isolatedInsert) {
         this.userRepository = userRepository;
         this.reviewRepository = reviewRepository;
         this.trackingRepository = trackingRepository;
         this.animeRepository = animeRepository;
+        this.adminActionLogRepository = adminActionLogRepository;
+        this.isolatedInsert = isolatedInsert;
     }
 
     /** 校验管理员身份 */
@@ -278,15 +305,34 @@ public class AdminService {
         return map;
     }
 
-    /** 禁用/启用用户 */
-    public void toggleUserStatus(Long targetUserId) {
-        User user = userRepository.findById(targetUserId)
-                .orElseThrow(() -> BusinessException.notFound("用户不存在"));
-        if ("ADMIN".equals(user.getRole())) {
-            throw BusinessException.badRequest("不能操作管理员账号");
-        }
-        user.setStatus("ACTIVE".equals(user.getStatus()) ? "DISABLED" : "ACTIVE");
-        userRepository.save(user);
+    /**
+     * 禁用/启用用户.
+     *
+     * <p>{@code actor} 由 controller 递进来(同 {@link #setUserRole} 的理由: service 里
+     * 拿不到登录态), 而账本必须记下是谁按的。
+     *
+     * <p>整个动作包在 {@link IsolatedInsert#attempt} 里, 与那条账**同一个事务**。
+     * 拆成两段会出现「人封了、账没记」或反过来, 而且两种都不报错 —— 账本一旦漏记就再也
+     * 补不回来, 所以让它们同生共死。
+     *
+     * <p>校验(找不到就 404、管理员账号不能动)在 {@code save} **之前**, 所以失败路径天然
+     * 不产生账本行; 异常从 {@code attempt} 里抛出去时, 那个独立事务连带回滚。
+     */
+    public void toggleUserStatus(User actor, Long targetUserId) {
+        isolatedInsert.attempt(() -> {
+            User user = userRepository.findById(targetUserId)
+                    .orElseThrow(() -> BusinessException.notFound("用户不存在"));
+            if ("ADMIN".equals(user.getRole())) {
+                throw BusinessException.badRequest("不能操作管理员账号");
+            }
+            boolean disabling = "ACTIVE".equals(user.getStatus());
+            user.setStatus(disabling ? "DISABLED" : "ACTIVE");
+            userRepository.save(user);
+            recordAction(actor, disabling ? AdminActionLog.USER_BAN : AdminActionLog.USER_UNBAN,
+                    AdminActionLog.TARGET_USER, user.getId(),
+                    (disabling ? "禁用用户 " : "启用用户 ") + user.getUsername());
+            return null;
+        });
     }
 
     /**
@@ -297,12 +343,21 @@ public class AdminService {
      * 把某个账号锁上, 那 15 分钟里这个用户是完全无法自助恢复的.
      * 管理员需要一个能立刻解开的手动出口.
      */
-    public void unlockUser(Long targetUserId) {
-        User user = userRepository.findById(targetUserId)
-                .orElseThrow(() -> BusinessException.notFound("用户不存在"));
-        user.setFailedAttempts(0);
-        user.setLockedUntil(null);
-        userRepository.save(user);
+    public void unlockUser(User actor, Long targetUserId) {
+        isolatedInsert.attempt(() -> {
+            User user = userRepository.findById(targetUserId)
+                    .orElseThrow(() -> BusinessException.notFound("用户不存在"));
+            int wasFailed = user.failedAttemptsOrZero();
+            user.setFailedAttempts(0);
+            user.setLockedUntil(null);
+            userRepository.save(user);
+            // 记下解锁**之前**的失败次数: 「解了几次锁」是管理员行为的画像, 而
+            // 「为什么这个人总被锁」是另一件事 —— 后者只看解了几次是看不出来的,
+            // 但如果连次数都不记, 事后连这条路都断了
+            recordAction(actor, AdminActionLog.USER_UNLOCK, AdminActionLog.TARGET_USER, user.getId(),
+                    "解除用户 " + user.getUsername() + " 的登录锁定（此前连续失败 " + wasFailed + " 次）");
+            return null;
+        });
     }
 
     /**
@@ -334,21 +389,29 @@ public class AdminService {
                     "角色只能是 " + String.join(" / ", ROLES) + " 之一");
         }
 
-        User target = userRepository.findById(targetUserId)
-                .orElseThrow(() -> BusinessException.notFound("用户不存在"));
+        isolatedInsert.attempt(() -> {
+            User target = userRepository.findById(targetUserId)
+                    .orElseThrow(() -> BusinessException.notFound("用户不存在"));
 
-        if (actor != null && actor.getId().equals(target.getId())) {
-            throw BusinessException.badRequest("不能修改自己的角色");
-        }
+            if (actor != null && actor.getId().equals(target.getId())) {
+                throw BusinessException.badRequest("不能修改自己的角色");
+            }
 
-        // 不变式: 这次操作之后, 系统里至少还得剩下一个管理员
-        if ("ADMIN".equals(target.getRole()) && !"ADMIN".equals(role)
-                && userRepository.countByRole("ADMIN") <= 1) {
-            throw BusinessException.badRequest("这是最后一个管理员, 不能降级");
-        }
+            // 不变式: 这次操作之后, 系统里至少还得剩下一个管理员
+            if ("ADMIN".equals(target.getRole()) && !"ADMIN".equals(role)
+                    && userRepository.countByRole("ADMIN") <= 1) {
+                throw BusinessException.badRequest("这是最后一个管理员, 不能降级");
+            }
 
-        target.setRole(role);
-        userRepository.save(target);
+            // 改之前那一侧也要记: 只记「改成了 ADMIN」的话, 事后分不清这是把谁提上来的,
+            // 还是把谁降下去之后又提回来
+            String from = target.getRole();
+            target.setRole(role);
+            userRepository.save(target);
+            recordAction(actor, AdminActionLog.USER_ROLE, AdminActionLog.TARGET_USER, target.getId(),
+                    "把用户 " + target.getUsername() + " 的角色从 " + from + " 改为 " + role);
+            return null;
+        });
     }
 
     // ========== 评论管理 ==========
@@ -399,14 +462,115 @@ public class AdminService {
      * 另一条路(把删除做成幂等, 不存在也回 200)也说得通, 但那样这两个接口对同一件事
      * 会给出不同答复, 所以没选.
      *
-     * <p>残留的窗口: existsById 与 deleteById 之间目标被删掉的话, 这次会回 200 而实际
-     * 什么都没删 —— 终态(那条评论不在了)仍然是对的, 不值得为它加锁.
+     * <p><b>这一段以前写的是 existsById + deleteById</b>, 上面那句「残留的窗口」就是在说
+     * 那两句话之间的空隙。加了账本之后它顺带被关掉了: 账里要写被删评论的作者和正文摘要,
+     * 于是这里必须把那一行**读出来**, 变成 findById + delete, 而两句在同一个事务里 ——
+     * 中间再没有可以让别人插进来的地方。
      */
-    public void deleteAnyReview(Long reviewId) {
-        if (!reviewRepository.existsById(reviewId)) {
-            throw BusinessException.notFound("评论不存在");
+    public void deleteAnyReview(User actor, Long reviewId) {
+        isolatedInsert.attempt(() -> {
+            Review review = reviewRepository.findById(reviewId)
+                    .orElseThrow(() -> BusinessException.notFound("评论不存在"));
+
+            // 三样都要在事务结束**之前**读出来: Review.user 是 LAZY 的, 而 IsolatedInsert
+            // 的约定正是「实体出了这个事务就脱离持久化上下文」—— 出去之后再取作者名会炸
+            String authorName = review.getUser().getUsername();
+            Integer subjectId = review.getSubjectId();
+            String snippet = TextSnippet.of(review.getContent());
+
+            reviewRepository.delete(review);
+
+            // detail 里带上作者名与正文摘要, 而不是只留一个 reviewId: 评论已经删了,
+            // 事后想弄清「删的是哪条」就只能靠这一行字
+            recordAction(actor, AdminActionLog.REVIEW_DELETE, AdminActionLog.TARGET_REVIEW, reviewId,
+                    "删除用户 " + authorName + " 在作品 " + subjectId + " 下的评论"
+                            + (snippet == null ? "（无正文）" : "：" + snippet));
+            return null;
+        });
+    }
+
+    // ========== 操作账本 ==========
+
+    /**
+     * 管理端操作日志: 按 action 精确筛 + 分页, 时间倒序.
+     *
+     * <p>骨架与 {@link #getUserPage} 逐条相同(夹取 page/limit → 先 count → long 偏移量
+     * 溢出保护 → 越界返回空页 → 取页), 理由也一样, 这里不重复。两处唯一的不同是本页
+     * **没有排序参数** —— 账本只有「最新的在最上面」这一种读法, 加排序开关属于为不存在
+     * 的需求写代码。
+     *
+     * <p>未知的 {@code action} 当作**不筛**、不返回 400: 与 {@link #getUserPage} 对未知
+     * role/status 的口径一致 —— 手改过的 URL 不该把页面变成一个错误屏。
+     */
+    public Map<String, Object> getActionPage(String action, int page, int limit) {
+        String actionFilter = AdminActionLog.ACTIONS.contains(action) ? action : null;
+
+        int safePage = Math.max(page, 1);
+        int safeLimit = limit < 1 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
+
+        long matched = adminActionLogRepository.countPage(actionFilter);
+        int total = (int) Math.min(matched, Integer.MAX_VALUE);
+
+        long offset = (long) (safePage - 1) * safeLimit;
+        if (offset >= total || offset > PageResults.MAX_SQL_OFFSET) {
+            return PageResults.of(Collections.emptyList(), total, safePage);
         }
-        reviewRepository.deleteById(reviewId);
+
+        Pageable pageable = PageRequest.of(safePage - 1, safeLimit);
+        return PageResults.of(
+                toActionRows(adminActionLogRepository.findPage(actionFilter, pageable)),
+                total, safePage);
+    }
+
+    /**
+     * {@code AdminActionLog} → 给管理端看的行.
+     *
+     * <p>{@code targetId} 原样给 id 而不是解析成名字: 账本的整个立意就是「不依赖目标还在
+     * 不在」, 拿 id 回两张表去查名字等于把这个前提推翻。可读的那部分由 {@code actorName}
+     * 与 {@code detail} 提供 —— detail 在**写的时候就**带上了目标的名字快照。
+     */
+    private static List<Map<String, Object>> toActionRows(List<AdminActionLog> logs) {
+        List<Map<String, Object>> result = new ArrayList<>(logs.size());
+        for (AdminActionLog l : logs) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("id", l.getId());
+            map.put("action", l.getAction());
+            map.put("actorName", l.getActorName());
+            map.put("targetType", l.getTargetType());
+            map.put("targetId", l.getTargetId());
+            map.put("detail", l.getDetail());
+            map.put("createdAt", l.getCreatedAt());
+            result.add(map);
+        }
+        return result;
+    }
+
+    /**
+     * 记一条账 —— 四个破坏性动作**唯一的出口**, 且必须在它们各自那个事务里被调用.
+     *
+     * <p>没有 actor 就抛 403, 而不是写一行空的操作者: 那一列是 NOT NULL, 而这里抛出去会
+     * 把整个动作一起回滚 —— 于是「有动作、没账本」在结构上不可能出现。正常情况下走到这里
+     * actor 一定非空(controller 前面那道 {@code checkAdmin} 已经拦过 null), 所以这条是
+     * 兜底而不是常规路径。
+     *
+     * <p>写的是**快照**: {@code actorName} 取当前这一刻的用户名, 而不是留个 id 等读的时候
+     * 再去 join —— 账本要活到那个账号改名或消失之后。
+     *
+     * <p>{@code actor.getId()} 判空是因为 {@code User.builder()} 造出来的对象可以没有 id
+     * (测试里就有这种), 而 {@code actor_id} 同样是 NOT NULL。
+     */
+    private void recordAction(User actor, String action, String targetType, Long targetId, String detail) {
+        if (actor == null || actor.getId() == null) {
+            throw BusinessException.forbidden("无管理员权限");
+        }
+        adminActionLogRepository.save(AdminActionLog.builder()
+                .actorId(actor.getId())
+                .actorName(actor.getUsername())
+                .action(action)
+                .targetType(targetType)
+                .targetId(targetId)
+                .detail(detail)
+                .build());
     }
 
     // ========== 数据统计 ==========

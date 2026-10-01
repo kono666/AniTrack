@@ -77,7 +77,7 @@ public class AdminController {
     @PutMapping("/users/{targetUserId}/toggle")
     public ApiResponse<Void> toggleUser(@CurrentUser User user, @PathVariable Long targetUserId) {
         adminService.checkAdmin(user);
-        adminService.toggleUserStatus(targetUserId);
+        adminService.toggleUserStatus(user, targetUserId);
         return ApiResponse.success("操作成功", null);
     }
 
@@ -86,6 +86,10 @@ public class AdminController {
      *
      * 把当前登录的管理员一起传下去, 是为了让「不能改自己的角色」这条规则有判断依据 ——
      * 在 service 里拿不到登录态, 只能由这里递进去.
+     *
+     * 另外三个破坏性动作(toggle / unlock / deleteReview)现在也照这个形状把 actor 递下去,
+     * 理由从「判断依据」变成了「账本要记是谁按的」。四个一起看: 凡是改动了别人数据的动作,
+     * service 都必须拿到操作者。
      */
     @PutMapping("/users/{targetUserId}/role")
     public ApiResponse<Void> setUserRole(
@@ -106,7 +110,7 @@ public class AdminController {
     @PutMapping("/users/{targetUserId}/unlock")
     public ApiResponse<Void> unlockUser(@CurrentUser User user, @PathVariable Long targetUserId) {
         adminService.checkAdmin(user);
-        adminService.unlockUser(targetUserId);
+        adminService.unlockUser(user, targetUserId);
         return ApiResponse.success("账号已解锁", null);
     }
 
@@ -121,7 +125,25 @@ public class AdminController {
     @DeleteMapping("/reviews/{reviewId}")
     public ApiResponse<Void> deleteReview(@CurrentUser User user, @PathVariable Long reviewId) {
         adminService.checkAdmin(user);
-        adminService.deleteAnyReview(reviewId);
+        adminService.deleteAnyReview(user, reviewId);
         return ApiResponse.success("评论已删除", null);
+    }
+
+    /**
+     * 操作日志: 谁在什么时候对谁做了什么.
+     *
+     * <p>只有一个 {@code action} 筛选, 没有排序参数 —— 账本只有「最新的在最上面」这一种
+     * 读法(理由同 {@code AdminService.getActionPage})。{@code action} 不做取值校验:
+     * 不认识的当「不筛」, 理由同 {@code getUserList} 那段注释。
+     */
+    @GetMapping("/actions")
+    public ApiResponse<Map<String, Object>> getActionLog(
+            @CurrentUser User user,
+            @RequestParam(required = false) String action,
+            @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码从 1 开始") int page,
+            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页至少 1 条")
+            @Max(value = 100, message = "每页最多 100 条") int limit) {
+        adminService.checkAdmin(user);
+        return ApiResponse.success(adminService.getActionPage(action, page, limit));
     }
 }

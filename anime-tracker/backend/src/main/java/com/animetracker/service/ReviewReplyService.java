@@ -8,6 +8,7 @@ import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.ReplyLikeRepository;
 import com.animetracker.repository.ReviewReplyRepository;
 import com.animetracker.repository.ReviewRepository;
+import com.animetracker.util.TextSnippet;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -114,7 +115,7 @@ public class ReviewReplyService {
             row.put("subjectId", rr.getReview().getSubjectId());
             // 评论正文只给**摘要**: 这一行要回答的是"你回的是哪条", 不是把那条评论原文
             // 再贴一遍 —— 评论正文最长 5000 字, 30 行原样带出去就是一个几十 KB 的响应.
-            row.put("reviewContent", snippet(rr.getReview().getContent()));
+            row.put("reviewContent", TextSnippet.of(rr.getReview().getContent()));
             row.put("userId", rr.getUser().getId());
             row.put("username", rr.getUser().getUsername());
             row.put("avatar", rr.getUser().getAvatar());
@@ -271,24 +272,6 @@ public class ReviewReplyService {
     }
 
     // ==================== 私有 ====================
-
-    /**
-     * 「谁回复了我」里那条评论的摘要, 最长 {@value #SNIPPET_LENGTH} 个字符.
-     *
-     * <p>{@code null} 与空白都回成 {@code null} 而不是空串: 评论是可以没有正文的
-     * (只打分不写字), 前端据此显示「（无文字）」, 空串会让那个判断变成"有内容但看不见".
-     */
-    private static String snippet(String content) {
-        if (content == null || content.isBlank()) {
-            return null;
-        }
-        return content.length() <= SNIPPET_LENGTH
-                ? content
-                : content.substring(0, SNIPPET_LENGTH) + "…";
-    }
-
-    /** 摘要长度. 一屏列表里读的是"这是哪条", 一行放得下就够了. */
-    private static final int SNIPPET_LENGTH = 60;
 
     /** 按 id 取一条带作者的回复, 没有就 404 */
     private ReviewReply load(Long replyId) {

@@ -9,8 +9,8 @@ vi.mock('../../../api', () => ({
   unlockUser: vi.fn(),
   // 常量也必须在: 这是整体替换, 漏掉的导出在导入侧是 undefined, 而 ref(undefined)
   // 不报错 —— limit 会安静地变成"没有每页条数", 分页页数跟着变成 NaN
-  ADMIN_USER_PAGE_SIZES: [20, 50, 100],
-  ADMIN_USER_PAGE_SIZE: 20,
+  ADMIN_PAGE_SIZES: [20, 50, 100],
+  ADMIN_PAGE_SIZE: 20,
 }))
 
 import Users from '../Users.vue'

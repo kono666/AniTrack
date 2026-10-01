@@ -25,6 +25,11 @@
         <router-link to="/admin/reviews" class="admin-nav-link" active-class="active" @click="closeSidebar">
           <PhChatCircle :size="16" weight="bold" /> 评论管理
         </router-link>
+        <!-- 排在最后: 前两项管的是"人"和"内容", 这一项管的是**前面那些动作本身** ——
+             它是这一层里唯一一个不属于日常操作、只在追查时才打开的页面. -->
+        <router-link to="/admin/actions" class="admin-nav-link" active-class="active" @click="closeSidebar">
+          <PhClockCounterClockwise :size="16" weight="bold" /> 操作日志
+        </router-link>
       </nav>
 
       <!-- margin-top:auto 把它钉在侧栏底部 -->
@@ -84,6 +89,7 @@ import PhFilmSlate from '@icons/PhFilmSlate.vue.mjs'
 import PhChartLine from '@icons/PhChartLine.vue.mjs'
 import PhUsers from '@icons/PhUsers.vue.mjs'
 import PhChatCircle from '@icons/PhChatCircle.vue.mjs'
+import PhClockCounterClockwise from '@icons/PhClockCounterClockwise.vue.mjs'
 import PhList from '@icons/PhList.vue.mjs'
 import PhSunHorizon from '@icons/PhSunHorizon.vue.mjs'
 import PhMoonStars from '@icons/PhMoonStars.vue.mjs'

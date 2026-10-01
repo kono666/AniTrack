@@ -9,8 +9,8 @@ vi.mock('../../../api', () => ({
   toggleUserStatus: vi.fn(),
   setUserRole: vi.fn(),
   unlockUser: vi.fn(),
-  ADMIN_USER_PAGE_SIZES: [20, 50, 100],
-  ADMIN_USER_PAGE_SIZE: 20,
+  ADMIN_PAGE_SIZES: [20, 50, 100],
+  ADMIN_PAGE_SIZE: 20,
 }))
 
 vi.mock('../../../composables/useToast', () => ({

@@ -14,8 +14,8 @@ vi.mock('../../../api', () => ({
   // 常量也要给: 这是**整体替换**而不是部分替换, 漏掉的导出在导入侧是 undefined,
   // 而 `ref(undefined)` 不会报错 —— 它会安静地把 limit 变成"没有每页条数",
   // 直到某个断言因为别的原因为红才被发现. (AdminController 那边 @Max(100) 同理.)
-  ADMIN_USER_PAGE_SIZES: [20, 50, 100],
-  ADMIN_USER_PAGE_SIZE: 20,
+  ADMIN_PAGE_SIZES: [20, 50, 100],
+  ADMIN_PAGE_SIZE: 20,
 }))
 
 import Dashboard from '../Dashboard.vue'

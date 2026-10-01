@@ -30,7 +30,7 @@
     </select>
 
     <select class="admin-select" :value="limit" aria-label="每页条数" @change="onLimitChange">
-      <option v-for="size in ADMIN_USER_PAGE_SIZES" :key="size" :value="size">{{ size }} 条/页</option>
+      <option v-for="size in ADMIN_PAGE_SIZES" :key="size" :value="size">{{ size }} 条/页</option>
     </select>
 
     <button v-if="hasFilter" class="action-btn" @click="clearFilters">清除筛选</button>
@@ -165,7 +165,7 @@ import PhCaretUp from '@icons/PhCaretUp.vue.mjs'
 import PhCaretDown from '@icons/PhCaretDown.vue.mjs'
 import {
   getAdminUsers, toggleUserStatus, setUserRole, unlockUser,
-  ADMIN_USER_PAGE_SIZES, ADMIN_USER_PAGE_SIZE,
+  ADMIN_PAGE_SIZES, ADMIN_PAGE_SIZE,
 } from '../../api'
 import { useToast } from '../../composables/useToast'
 import { useLatestOnly } from '../../composables/useLatestOnly'
@@ -230,7 +230,7 @@ const status = ref('')
 const sort = ref(DEFAULT_SORT)
 const order = ref(NATURAL_ORDER[DEFAULT_SORT])
 const page = ref(1)
-const limit = ref(ADMIN_USER_PAGE_SIZE)
+const limit = ref(ADMIN_PAGE_SIZE)
 
 /**
  * 分页控件认的页数.
@@ -282,7 +282,7 @@ function readQuery() {
     // `?sort=bogus` 会落回 createdAt, 那 order 的自然首向也该是 desc
     order: ORDERS.includes(rawOrder) ? rawOrder : NATURAL_ORDER[nextSort],
     page: pageParam(route.query.page),
-    limit: ADMIN_USER_PAGE_SIZES.includes(Number(rawLimit)) ? Number(rawLimit) : ADMIN_USER_PAGE_SIZE,
+    limit: ADMIN_PAGE_SIZES.includes(Number(rawLimit)) ? Number(rawLimit) : ADMIN_PAGE_SIZE,
   }
 }
 
@@ -334,7 +334,7 @@ function syncQuery() {
   set('status', status.value)
   set('sort', sort.value === DEFAULT_SORT ? '' : sort.value)
   set('order', order.value === NATURAL_ORDER[sort.value] ? '' : order.value)
-  set('limit', limit.value === ADMIN_USER_PAGE_SIZE ? '' : String(limit.value))
+  set('limit', limit.value === ADMIN_PAGE_SIZE ? '' : String(limit.value))
   set('page', page.value > 1 ? String(page.value) : '')
 
   router.replace({ query: next })
