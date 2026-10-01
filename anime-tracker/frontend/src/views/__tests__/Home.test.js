@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('../../api', () => ({
   getRanking: vi.fn(() => Promise.resolve({ data: { data: [] } })),
@@ -9,11 +10,17 @@ vi.mock('../../api', () => ({
   // 留着它当哨兵: 一个"不该被调用"的桩, 才能断言它没被调用. 工厂里删掉它的话
   // 那条断言就无从写起(而 Home 一旦把它 import 回来, 构建也不会报错).
   getTags: vi.fn(() => Promise.resolve({ data: { data: [] } })),
+  // ⚠️ 这个工厂是**整体替换** ../../api: 漏列一个 Home 真的用到的导出,
+  // 调用点会拿到 undefined 并在运行时炸(而报错位置看起来与那个导出无关).
+  // Home 从「继续看」那一版起就用它了, 所以这里必须有.
+  getContinueWatching: vi.fn(() => Promise.resolve({ data: { data: [] } })),
 }))
 
 import Home from '../Home.vue'
-import { getRanking, getCalendar, getTags } from '../../api'
+import { getRanking, getCalendar, getTags, getContinueWatching } from '../../api'
 import { homeCache, resetHomeCache } from '../../utils/homeCache'
+import { useUserStore } from '../../stores/user'
+import { clearStoredUser } from '../../utils/userStorage'
 
 /**
  * 首页缓存的 TTL 只有在缓存对象**活得比组件实例久**的时候才谈得上生效.
@@ -37,8 +44,25 @@ class FakeIntersectionObserver {
   disconnect() {}
 }
 
-function mountHome() {
-  return mount(Home, { global: { plugins: [router] } })
+/**
+ * 挂载首页.
+ *
+ * 从「继续看」那一版起 Home 会读登录态(useUserStore), 所以每一挂都必须有一份
+ * **活的 pinia** —— 少了它, Home 里的 useUserStore() 会抛 "no active Pinia",
+ * 而这条错误会让**这个文件里所有**用例一起红, 包括那些与登录毫无关系的.
+ *
+ * storage 也要先清干净: store 的初值来自 loadStoredUser(), 上一条用例 setUser
+ * 写进去的那份会让这一条本该「匿名」的挂载看起来像已登录 —— 而 vue-test-utils
+ * 的 global.stubs 之类都拦不住它, 因为读的是真 localStorage.
+ *
+ * token 给了就顺带把登录态塞进 store(UserStore 的 loggedIn 要求非空 token).
+ */
+function mountHome({ token = null } = {}) {
+  clearStoredUser()
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  if (token) useUserStore().setUser({ username: 'me', token })
+  return mount(Home, { global: { plugins: [router, pinia] } })
 }
 
 describe('首页缓存', () => {
@@ -220,5 +244,142 @@ describe('首页卡片的键盘操作', () => {
     wrapper.find('.today-card').element.dispatchEvent(event)
 
     expect(event.defaultPrevented).toBe(true)
+  })
+})
+
+/**
+ * 首页「继续看」.
+ *
+ * 这块的特殊之处在于它是首页**第一处读登录态**的地方: 一个公开页上长出了一块
+ * 因人而异的内容. 所以这里盯的不是样式, 而是四条边界 —— 谁看得见、什么情况下
+ * 整块消失、点了去哪、以及它**不在**缓存里.
+ */
+
+/** /api/track/continue 的一行. 形状与 /api/track/list 逐字相同(后端共用行构造器) */
+const CONTINUE_ROW = {
+  id: 1, subjectId: 601, status: 'watching', progress: 5,
+  score: null, notes: null, createdAt: '2026-10-01T00:00:00', updatedAt: '2026-10-01T00:00:00',
+  animeTitle: '继续看的番', animeCover: 'c.jpg', totalEpisodes: 12,
+}
+
+describe('首页「继续看」', () => {
+  beforeEach(async () => {
+    resetHomeCache()
+    vi.clearAllMocks()
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
+    getRanking.mockResolvedValue({ data: { data: [] } })
+    getContinueWatching.mockResolvedValue({ data: { data: [CONTINUE_ROW] } })
+
+    await router.push('/')
+    await router.isReady()
+  })
+
+  it('已登录: 请求一次, 卡片带上标题、进度条与集号', async () => {
+    const wrapper = mountHome({ token: 'jwt' })
+    await flushPromises()
+
+    expect(getContinueWatching).toHaveBeenCalledTimes(1)
+    const card = wrapper.find('.cw-card')
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain('继续看的番')
+    // 总集数已知时才补「/ 共 M 集」—— 本地没缓存过那部番时后端根本不发这个键
+    expect(card.text()).toContain('第 5 集')
+    expect(card.text()).toContain('/ 共 12 集')
+    // 5/12 = 41.67 → 42%. 直接读内联样式而不是截图: 这是"条真的按进度画了"的唯一守卫,
+    // 只断言"有条"的话, 一条永远 0% 的进度条照样绿
+    expect(wrapper.find('.pb-fill').attributes('style')).toContain('width: 42%')
+
+    // 与今日放送/热门那两类卡片一样, 键盘也要能到
+    expect(card.attributes('role')).toBe('button')
+    expect(card.attributes('tabindex')).toBe('0')
+
+    wrapper.unmount()
+  })
+
+  it('匿名: 一次都不请求, 整块也不渲染', async () => {
+    const wrapper = mountHome()
+    await flushPromises()
+
+    // 首页是公开页. 匿名时连请求都不该发出去 —— 发了的话后端也只会回 401,
+    // 而 401 会被全局处理弹到登录页, 于是「打开首页」变成「被要求登录」
+    expect(getContinueWatching).not.toHaveBeenCalled()
+    expect(wrapper.find('.cw-card').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('继续看')
+
+    wrapper.unmount()
+  })
+
+  it('没在看任何番: 请求发了, 但整块不渲染(不留一个空盒子)', async () => {
+    getContinueWatching.mockResolvedValue({ data: { data: [] } })
+
+    const wrapper = mountHome({ token: 'jwt' })
+    await flushPromises()
+
+    expect(getContinueWatching).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).not.toContain('继续看')
+    expect(wrapper.find('.cw-card').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('点卡片进那部番的详情页', async () => {
+    const wrapper = mountHome({ token: 'jwt' })
+    await flushPromises()
+
+    await wrapper.find('.cw-card').trigger('click')
+    await flushPromises()
+
+    // 用的是 subjectId 而不是行 id —— 行 id 是追番记录的主键, 拿它拼路由会 404
+    expect(router.currentRoute.value.path).toBe('/anime/601')
+
+    wrapper.unmount()
+  })
+
+  it('本地没缓存这部番: 标题用编号兜底, 进度条整根不画', async () => {
+    getContinueWatching.mockResolvedValue({
+      data: { data: [{ id: 2, subjectId: 602, status: 'watching', progress: 3 }] },
+    })
+
+    const wrapper = mountHome({ token: 'jwt' })
+    await flushPromises()
+
+    expect(wrapper.find('.cw-card').text()).toContain('番剧 #602')
+    // 「不知道一共多少集」与「一集都没看」是两件事: 前者不画条, 后者画一条 0% 的
+    expect(wrapper.find('.pb-bar').exists()).toBe(false)
+    expect(wrapper.find('.cw-card').text()).toContain('第 3 集')
+    expect(wrapper.find('.cw-card').text()).not.toContain('共')
+
+    wrapper.unmount()
+  })
+
+  /**
+   * 这一条是「继续看**不写进** homeCache」的守卫, 而且只有第二次挂载才看得见.
+   *
+   * loadHome() 命中缓存时会在函数开头直接 return. 把继续看的请求挂在那个 return
+   * 之后, 表现就是「第一次进首页有、第二次没了」—— 而开发时每次都是刷新页面
+   * (缓存也跟着没了), 所以这个 bug 在手上怎么试都是好的.
+   *
+   * homeCache 是**模块级、不含用户维度**的, 所以它也不能被塞进去: 那样换个账号
+   * 登录, 首页显示的是上一个人的进度.
+   */
+  it('第二次挂载命中热缓存, 继续看仍然重新请求', async () => {
+    const first = mountHome({ token: 'jwt' })
+    await flushPromises()
+    expect(getContinueWatching).toHaveBeenCalledTimes(1)
+    first.unmount()
+
+    // 前置条件: 排行榜那次确实写进了缓存, 第二次才会走提前 return 那条路.
+    // 少了这个断言, 就算缓存没生效这条用例也会绿 —— 那它就什么都没测
+    expect(homeCache.data).toBeTruthy()
+    expect(getRanking).toHaveBeenCalledTimes(2)
+
+    const second = mountHome({ token: 'jwt' })
+    await flushPromises()
+
+    expect(getRanking).toHaveBeenCalledTimes(2)          // 排行榜: 走的缓存
+    expect(getContinueWatching).toHaveBeenCalledTimes(2) // 继续看: 照发不误
+    expect(second.find('.cw-card').exists()).toBe(true)
+
+    second.unmount()
   })
 })

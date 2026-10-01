@@ -7,6 +7,7 @@ import com.animetracker.entity.User;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.TrackingRepository;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import java.util.*;
 
@@ -93,7 +94,78 @@ public class TrackService {
     }
 
     /**
-     * 获取用户的追番列表(含番剧标题和封面).
+     * 获取用户的追番列表(含番剧标题和封面)：全部状态、按最近更新倒序、不分页.
+     *
+     * <p>取数与行构造都交给 {@link #rowsWithAnime}, 与首页「继续看」共用同一套 ——
+     * 那个方法上面写了为什么「一次 findAllById」这件事必须钉住。
+     */
+    public List<Map<String, Object>> getUserTrackings(User user) {
+        return rowsWithAnime(trackingRepository.findByUserOrderByUpdatedAtDesc(user));
+    }
+
+    /** 首页「继续看」的默认与封顶条数. 见 {@link #getContinueWatching} 里关于夹取位置的那一段 */
+    private static final int CONTINUE_DEFAULT_LIMIT = 10;
+    private static final int CONTINUE_MAX_LIMIT = 20;
+
+    /**
+     * 首页「继续看」: 该用户正在看的番, 按最近更新倒序, 最多若干条.
+     *
+     * <p>行形状与 {@link #getUserTrackings} **逐字相同**(共用 {@link #rowsWithAnime}),
+     * 详情页与首页因此不可能对同一部番给出不同的标题或封面。
+     *
+     * <p><b>看完了的不出现</b>
+     *
+     * <p>过滤条件是 {@code totalEpisodes != null && progress >= totalEpisodes}, 而且
+     * **只能在 Java 侧做**: {@code anime_tracking} 与 {@code anime} 之间没有 JPA 关联
+     * (只有 {@code subjectId == anime.id} 这句手工对应), SQL 里 join 不起来, 所以这一步
+     * 挂在「批量补番剧名」之后、与它同一趟。
+     *
+     * <p>为什么需要它: 打卡顺带建出来的行**永远是 watching**(见
+     * {@code StatsService#syncProgressOnWatched}), 而「点一下最后一集」与「我还想继续
+     * 看」在用户那里是两件事。服务端在打卡那一刻<b>不知道 n 是不是最后一集</b>
+     * —— 没有关联就查不到 totalEpisodes —— 所以只能在拿到它之后滤。
+     *
+     * <p>代价说清楚: {@code totalEpisodes} 为 null(本地没缓存过那部番)时<b>滤不掉</b>,
+     * 这一条仍会留在继续看里。另外它是**在取回 limit 条之后**滤的, 所以滤完可能少于
+     * limit 条 —— 宁可少显示几条, 也不为了凑数去多取一批(那会引入"取多少才够"的循环)。
+     *
+     * <p><b>limit 的夹取写在这里, 不写成参数注解</b>
+     *
+     * <p>{@code TrackController} 类上**没有** {@code @Validated}, 所以查询参数上的
+     * {@code @Min/@Max} 会被静默忽略 —— 这个坑 {@code BangumiController} 专门记过。
+     * 被忽略的后果不是"少一层校验": {@code limit=0} 会让 {@code PageRequest.of} 抛
+     * {@code IllegalArgumentException}(500), {@code limit=999999} 会真的去读全表。
+     * 所以夹取与服务层其它入口一样, 是在这里用手写代码做的。
+     */
+    public List<Map<String, Object>> getContinueWatching(User user, Integer limit) {
+        List<Map<String, Object>> rows = rowsWithAnime(
+                trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(
+                        user, "watching", PageRequest.of(0, clampContinueLimit(limit))));
+        return rows.stream().filter(row -> !isFinished(row)).toList();
+    }
+
+    /** null / 非正数一律回默认值, 大于封顶就截断. 两头都要管: 0 会抛, 999999 会全表 */
+    private static int clampContinueLimit(Integer limit) {
+        if (limit == null || limit < 1) return CONTINUE_DEFAULT_LIMIT;
+        return Math.min(limit, CONTINUE_MAX_LIMIT);
+    }
+
+    /**
+     * 这一行是不是「看完了」.
+     *
+     * <p>{@code totalEpisodes} 为 null 时**不滤** —— 本地没缓存过这部番是真信息, 不是
+     * "0 集"; 把它当 0 会让 {@code progress >= 0} 恒真, 于是所有没缓存过的番从继续看里
+     * 一起消失。{@code t <= 0} 同理: 声明总集数为 0 是脏数据, 不该被当成"看完了"。
+     */
+    private static boolean isFinished(Map<String, Object> row) {
+        Object total = row.get("totalEpisodes");
+        Object progress = row.get("progress");
+        if (!(total instanceof Integer t) || !(progress instanceof Integer p)) return false;
+        return t > 0 && p >= t;
+    }
+
+    /**
+     * 把追番行连同番剧信息一起铺成响应行.
      *
      * <p>番剧信息是<b>一次</b> {@code findAllById} 取回来的, 不是在循环里逐条 findById:
      * 追番 50 部就是 50 次数据库往返, 而这个接口就是追番页本身, 每打开一次付一遍.
@@ -101,10 +173,14 @@ public class TrackService {
      * <p>这里原来的注释写着「批量查询番剧信息(修复N+1)」, 紧跟着的却是一个
      * 逐条 findById 的循环 —— 注释说对了该做什么, 代码没做. 这种注释比没有注释更坏:
      * 读到它的人会放心地把这段跳过. 现在注释与代码说的是同一件事, 并由
-     * {@code QueryCountIntegrationTest} 按真实 SQL 条数钉住(不论追番多少条, 恒定 2 条).
+     * {@code QueryCountIntegrationTest} 按真实 SQL 条数钉住(不论追番多少条, 恒定 2 条;
+     * 一条追番都没有时 1 条).
+     *
+     * <p>「继续看」复用这个方法, 而不是另写一份行构造: 同一部番在追番页与首页必须是
+     * 同一个标题、同一张封面. 两份行构造飘开的表现是首页显示中文名、个人页显示原名 ——
+     * 两边都像是对的. 复用之后那两条「2 条 SQL」的断言也自动同时罩住两个入口。
      */
-    public List<Map<String, Object>> getUserTrackings(User user) {
-        List<AnimeTracking> trackings = trackingRepository.findByUserOrderByUpdatedAtDesc(user);
+    private List<Map<String, Object>> rowsWithAnime(List<AnimeTracking> trackings) {
         List<Map<String, Object>> result = new ArrayList<>();
 
         // 一次取回全部番剧. 这里不需要为「一条追番都没有」挡一道: findAllById 收到

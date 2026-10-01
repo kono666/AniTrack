@@ -9,7 +9,9 @@ import com.animetracker.repository.TrackingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Map;
@@ -18,6 +20,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -184,5 +187,111 @@ class TrackServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0)).containsEntry("subjectId", 100);
         assertThat(result.get(0)).doesNotContainKey("animeTitle");
+    }
+
+    // ========== 首页「继续看」 ==========
+
+    private static AnimeTracking watching(int subjectId, int progress) {
+        return AnimeTracking.builder().subjectId(subjectId).status("watching").progress(progress).build();
+    }
+
+    /** 本地缓存过、且知道总集数的那部番 */
+    private static Anime animeWithTotal(int id, Integer totalEpisodes) {
+        return Anime.builder().id(id).title("t" + id).totalEpisodes(totalEpisodes).build();
+    }
+
+    /**
+     * 最近一次调用真的传给仓储的 (status, pageable).
+     *
+     * <p>用 atLeastOnce + getValue(拿最后一个)而不是 verify(默认 1 次): 夹取那条用例在一个
+     * 测试方法里连着调了四次, 而 mock 的调用记录是**跨调用累积**的, 断言"恰好一次"会在
+     * 第二次调用之后就开始失败 —— 而失败信息看着像"多调了一次仓储", 与夹取毫无关系.
+     */
+    private static Pageable lastPageable(TrackingRepository repo) {
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        verify(repo, atLeastOnce())
+                .findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    @DisplayName("继续看: 状态过滤与排序都下推到数据库, 不在 Java 里先取全量再筛")
+    void continueWatchingPushesTheStatusFilterIntoTheQuery() {
+        when(trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(List.of(watching(100, 3)));
+        when(animeRepository.findAllById(any())).thenReturn(List.of(animeWithTotal(100, 12)));
+
+        List<Map<String, Object>> result = trackService.getContinueWatching(user(), null);
+
+        ArgumentCaptor<String> status = ArgumentCaptor.forClass(String.class);
+        verify(trackingRepository)
+                .findByUserAndStatusOrderByUpdatedAtDesc(any(), status.capture(), any());
+        assertThat(status.getValue()).isEqualTo("watching");
+        // 不带排序/分页的那个重载一旦被走回, 就是「把全部在看读进内存再丢掉」
+        verify(trackingRepository, never()).findByUserAndStatus(any(), any());
+        assertThat(result).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("继续看: 不传 limit 时取 10 条, 传了 999999 也只取 20")
+    void continueWatchingClampsTheLimit() {
+        when(trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(List.of());
+        when(animeRepository.findAllById(any())).thenReturn(List.of());
+
+        trackService.getContinueWatching(user(), null);
+        assertThat(lastPageable(trackingRepository).getPageSize()).as("默认 10").isEqualTo(10);
+
+        trackService.getContinueWatching(user(), 999999);
+        assertThat(lastPageable(trackingRepository).getPageSize()).as("封顶 20").isEqualTo(20);
+
+        // 0 不是"夹到最小", 而是回默认值 —— PageRequest.of(0, 0) 会直接抛,
+        // 那正是把 @Min 写在没加 @Validated 的控制器上会得到的东西
+        trackService.getContinueWatching(user(), 0);
+        assertThat(lastPageable(trackingRepository).getPageSize()).as("0 回默认").isEqualTo(10);
+
+        trackService.getContinueWatching(user(), 5);
+        assertThat(lastPageable(trackingRepository).getPageSize()).as("范围内的照用").isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("继续看: 进度已经追平总集数的那部不再出现")
+    void continueWatchingDropsFinishedRows() {
+        when(trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(List.of(watching(100, 12), watching(101, 13), watching(102, 11)));
+        when(animeRepository.findAllById(any())).thenReturn(List.of(
+                animeWithTotal(100, 12), animeWithTotal(101, 12), animeWithTotal(102, 12)));
+
+        List<Map<String, Object>> result = trackService.getContinueWatching(user(), null);
+
+        // 100 是"正好看完", 101 是"看过头了"(手输进度能造成这种情况), 两个都不该出现;
+        // 102 还差一集, 留着
+        assertThat(result).extracting(m -> m.get("subjectId")).containsExactly(102);
+    }
+
+    @Test
+    @DisplayName("继续看: 本地没缓存这部番时滤不掉它 —— null 不等于看完")
+    void continueWatchingKeepsRowsWithoutATotalEpisodeCount() {
+        when(trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(List.of(watching(100, 999)));
+        when(animeRepository.findAllById(any())).thenReturn(List.of());
+
+        List<Map<String, Object>> result = trackService.getContinueWatching(user(), null);
+
+        // 把 null 当 0 的话 progress >= 0 恒真, 所有没缓存过的番会一起从继续看里消失
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0)).doesNotContainKey("totalEpisodes");
+    }
+
+    @Test
+    @DisplayName("继续看: 保持仓储给的顺序(最近更新的在前), 不重排")
+    void continueWatchingKeepsTheRepositoryOrder() {
+        when(trackingRepository.findByUserAndStatusOrderByUpdatedAtDesc(any(), any(), any()))
+                .thenReturn(List.of(watching(103, 1), watching(101, 1), watching(102, 1)));
+        when(animeRepository.findAllById(any())).thenReturn(List.of());
+
+        assertThat(trackService.getContinueWatching(user(), null))
+                .extracting(m -> m.get("subjectId"))
+                .containsExactly(103, 101, 102);
     }
 }

@@ -301,6 +301,48 @@ class QueryCountIntegrationTest {
         assertThat(statementsFor(() -> trackService.getUserTrackings(user))).isEqualTo(1);
     }
 
+    // ========== 首页「继续看」 ==========
+
+    /**
+     * 与追番列表同一个形状(取页 + 批量查番剧), 所以同样是 2 条 —— 这是「共用行构造器」
+     * 带来的, 不是巧合: 抽公共方法时若谁顺手在 continue 那条路上多补一次查询(比如为了
+     * 判断"看完了没有"再去查一次 anime), 条数就会变成 3, 而返回值一模一样.
+     *
+     * <p>上限有没有真的下推到 SQL, **只看返回值是看不出来的**: 「把全部在看读进内存、
+     * 再截断 10 条」发出去的语句同样是 2 条, 返回的行同样是 10 行 —— 它只是白读了 2 行.
+     * 唯一能把两者分开的是这里真正加载了几个实体(见下面 getEntityLoadCount 那条).
+     *
+     * <p>seedTrackings 造出来的 anime 行没有 total_episodes(那一列是 null), 所以
+     * 「看完了就滤掉」那条不会在这里把行数改小 —— 这条用例断言的就是**取页自己**的上限.
+     */
+    @Test
+    @DisplayName("继续看: 2 次查询, 而且真的只取回 limit 条(不是全读进来再截断)")
+    void continueWatchingCostsTwoQueriesAndOnlyTakesLimitRows() {
+        seedTrackings(12);
+
+        Statistics stats = statsCleared();
+        List<Map<String, Object>> rows = trackService.getContinueWatching(user, 10);
+
+        assertThat(rows).hasSize(10);
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(2);
+        // 10 条追番 + 那 10 部番剧 = 20. 上限没下推的话这里是 24(12 + 12) ——
+        // 而语句条数、返回行数两边都一样, 只有这个数分得开
+        assertThat(stats.getEntityLoadCount())
+                .as("读进内存的必须是 10 条, 不是 12 条")
+                .isEqualTo(20);
+    }
+
+    /**
+     * 一条在看的都没有时那批批量查询不该发出去(与上面追番列表那条同理).
+     *
+     * <p>这条路首页一定会走到 —— 刚注册、还没追任何番的人打开首页就是它.
+     */
+    @Test
+    @DisplayName("继续看: 没有在看的番时只查一次")
+    void emptyContinueWatchingCostsASingleQuery() {
+        assertThat(statementsFor(() -> trackService.getContinueWatching(user, 10))).isEqualTo(1);
+    }
+
     // ========== 类型分布 / 最近活动 ==========
 
     @Test

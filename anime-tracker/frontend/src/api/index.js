@@ -144,6 +144,17 @@ export const deleteTracking = (subjectId) =>
 export const getTrackingList = () => api.get('/track/list')
 export const getTrackingStatus = (subjectId) =>
   api.get('/track/status', { params: { subjectId } })
+/**
+ * 首页「继续看」: 正在看的那几部, 按最近更新倒序.
+ *
+ * 行形状与 getTrackingList() **逐字相同**(后端两处共用同一个行构造器), 所以卡片
+ * 能直接读 animeTitle / animeCover / totalEpisodes.
+ *
+ * limit 不传时后端默认 10、封顶 20 —— 夹取在服务端做, 这里不重复一遍: 两处各写
+ * 一份的话, 前端这份一旦与服务端不一致, 表现是「首页少了几张卡」而没有任何报错.
+ */
+export const getContinueWatching = (limit) =>
+  api.get('/track/continue', { params: { limit } })
 export const getUserStats = () => api.get('/track/stats')
 
 // ========== 评论 ==========

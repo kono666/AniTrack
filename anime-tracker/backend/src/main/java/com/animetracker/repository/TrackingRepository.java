@@ -24,6 +24,27 @@ public interface TrackingRepository extends JpaRepository<AnimeTracking, Long> {
      */
     List<AnimeTracking> findByUserOrderByUpdatedAtDesc(User user, Pageable pageable);
     List<AnimeTracking> findByUserAndStatus(User user, String status);
+
+    /**
+     * 「继续看」: 只要在看的, 按最近更新倒序, 取前若干条.
+     *
+     * <p><b>status 走 SQL, 不在 Java 里 filter。</b>「先取全状态最新 10 条再筛掉不在看的」
+     * 看着更省事, 但结果会少得莫名其妙 —— 用户的 watching 行排在 10 条 want_to_watch
+     * 后面时, 首页那一块就是空的, 而接口返回 200、代码里一行错都没有。取数下推之后
+     * 「拿回来的就是该显示的」。
+     *
+     * <p><b>也不复用上面的 {@code findByUserAndStatus}</b>: 那个不带排序也不带分页,
+     * 会把该用户<b>全部</b>在看记录读进内存 —— 与上面那段 javadoc 里写的
+     * 「追番 500 部的人白读 500 行」是同一个坑, 只是换了个过滤条件。
+     *
+     * <p><b>刻意不加 (user_id, status, updated_at) 索引。</b>`anime_tracking` 上已经有
+     * {@code IDX_ANIME_TRACKING_USER_UPDATED} = (user_id, updated_at), 它既覆盖这次的
+     * 排序、也把范围收在一个用户的几十到几百行里; status 只是剩下的残留过滤条件。
+     * 而 {@code HotPathIndexMigrationTest} 硬断言着热点表的索引集合, 那条白名单是
+     * 「不许随手加索引」的约定, 不是待办清单 —— 要加得先证明没有它就慢, 而在这里证不出来。
+     */
+    List<AnimeTracking> findByUserAndStatusOrderByUpdatedAtDesc(User user, String status, Pageable pageable);
+
     long countByUserAndStatus(User user, String status);
 
     /**

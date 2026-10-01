@@ -48,6 +48,8 @@ class TrackCheckIntegrationTest {
     /** Bangumi 不可能返回的 id 段: 断言只在自己造的行上做, 不受任何真实数据影响 */
     private static final int SUBJECT_NOT_CACHED = 998101;
     private static final int SUBJECT_CACHED = 998102;
+    /** 本地缓存过、且知道总集数, 用来验「看完了就不在继续看里」的那一部 */
+    private static final int SUBJECT_FINISHED = 998103;
 
     @Autowired
     private MockMvc mockMvc;
@@ -232,5 +234,87 @@ class TrackCheckIntegrationTest {
         assertThat(getJson("/api/stats/watched-episodes?animeId=" + SUBJECT_NOT_CACHED, token)
                 .path("data").size()).as("勾是算数的").isEqualTo(1);
         assertThat(trackingList(token).size()).as("但不该因此建一条追番记录").isZero();
+    }
+
+    // ========== 首页「继续看」 ==========
+
+    /** /api/track/continue 的 data 数组. limit 为空则不带那个参数 */
+    private JsonNode continueWatching(String token, Integer limit) throws Exception {
+        String path = limit == null ? "/api/track/continue" : "/api/track/continue?limit=" + limit;
+        return getJson(path, token).path("data");
+    }
+
+    @Test
+    @DisplayName("继续看: 打完勾自动建出的那行就在里面, 行形状与追番列表逐字相同")
+    void continueWatchingCarriesTheRowTogglingJustCreated() throws Exception {
+        String token = registerAndLogin();
+        assertThat(continueWatching(token, null).size()).as("还没看任何番时是空数组").isZero();
+
+        toggle(token, SUBJECT_NOT_CACHED, 3);
+
+        JsonNode rows = continueWatching(token, null);
+        assertThat(rows.size()).isEqualTo(1);
+        // 与 /list 的行**同一套键** —— 两处共用行构造器, 飘开了的表现是首页少一个标题
+        assertThat(keysOf(rows.get(0)))
+                .isEqualTo(keysOf(rowFor(trackingList(token), SUBJECT_NOT_CACHED)));
+        assertThat(rows.get(0).path("subjectId").asInt()).isEqualTo(SUBJECT_NOT_CACHED);
+        assertThat(rows.get(0).path("progress").asInt()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("继续看: 只想看的不算, 已经追平总集数的也不算")
+    void continueWatchingSkipsBothNotStartedAndFinished() throws Exception {
+        String token = registerAndLogin();
+
+        // ① 「想看」的不进来: 状态过滤在 SQL 里, 不是把全部取回来再在 Java 里删
+        mockMvc.perform(post("/api/track")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"subjectId\":" + SUBJECT_NOT_CACHED
+                                + ",\"status\":\"want_to_watch\",\"progress\":0}"))
+                .andExpect(status().isOk());
+        assertThat(continueWatching(token, null).size()).isZero();
+
+        // ② 看完了的不进来. 本地有这部番的行、且知道它一共 12 集 —— 只有这一种情况下
+        //    服务端才判得出"追平了"(totalEpisodes 为 null 时判不了, 那条代价写在
+        //    TrackService#getContinueWatching 上)
+        jdbc.update("INSERT INTO anime (id, title, total_episodes) VALUES (?, ?, ?)",
+                SUBJECT_FINISHED, "finished", 12);
+        toggle(token, SUBJECT_FINISHED, 12);
+
+        assertThat(continueWatching(token, null).size()).isZero();
+        // 但它**仍在**追番列表里, 而且状态是在看 —— 滤掉的只是继续看这一个入口
+        JsonNode row = rowFor(trackingList(token), SUBJECT_FINISHED);
+        assertThat(row.path("status").asText()).isEqualTo("watching");
+        assertThat(row.path("progress").asInt()).isEqualTo(12);
+    }
+
+    @Test
+    @DisplayName("继续看: limit 越界不报错, 而且不会把全部读出来")
+    void continueWatchingClampsItsLimit() throws Exception {
+        String token = registerAndLogin();
+        for (int i = 0; i < 5; i++) {
+            toggle(token, SUBJECT_NOT_CACHED + i, 1);
+        }
+
+        assertThat(continueWatching(token, 2).size()).isEqualTo(2);
+        // 0 会让 PageRequest.of 直接抛 —— 类上没加 @Validated, 所以这里的夹取
+        // 只能是服务层手写的, 真按 0 传下去就是 500
+        assertThat(continueWatching(token, 0).size()).as("0 回默认 10").isEqualTo(5);
+        assertThat(continueWatching(token, -3).size()).as("负数同样回默认").isEqualTo(5);
+        assertThat(continueWatching(token, 999999).size()).as("封顶 20, 不是 500 也不是全量").isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("继续看也是私事: 未登录 401, 另一个账号看不到")
+    void continueWatchingIsPrivateToo() throws Exception {
+        mockMvc.perform(get("/api/track/continue")).andExpect(status().isUnauthorized());
+
+        String mine = registerAndLogin();
+        String theirs = registerAndLogin();
+        toggle(mine, SUBJECT_NOT_CACHED, 2);
+
+        assertThat(continueWatching(mine, null).size()).isEqualTo(1);
+        assertThat(continueWatching(theirs, null).size()).isZero();
     }
 }

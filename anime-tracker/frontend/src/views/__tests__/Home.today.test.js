@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import { createPinia, setActivePinia } from 'pinia'
 
-// 工厂里只有 Home 真的 import 的那两个 —— 分类搬走之后 getTags/getFiltered
-// 都成了死桩(桩留着不会报错, 但会让下一个读的人以为首页还在拉标签)
+// 工厂里只有 Home 真的 import 的那几个 —— 分类搬走之后 getTags/getFiltered
+// 都成了死桩(桩留着不会报错, 但会让下一个读的人以为首页还在拉标签).
+// ⚠️ 这个工厂是**整体替换** ../../api: Home 新 import 一个导出就要在这里补一行,
+// 否则调用点拿到 undefined 才会炸. 「继续看」也在这个文件里挂 Home, 所以要有.
 vi.mock('../../api', () => ({
   getRanking: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   getCalendar: vi.fn(() => Promise.resolve({ data: { data: [] } })),
+  getContinueWatching: vi.fn(() => Promise.resolve({ data: { data: [] } })),
 }))
 
 import Home from '../Home.vue'
@@ -55,8 +59,15 @@ class FakeIntersectionObserver {
   disconnect() {}
 }
 
+/**
+ * 从「继续看」那一版起 Home 会读登录态(useUserStore), 所以每一挂都要有一份活的
+ * pinia —— 少了它这里三条用例会一起挂在 "no active Pinia" 上, 而报错与"星期比对"
+ * 毫无关系. 这几个用例都是匿名的, 所以不塞 user, 继续看那块自然不出现.
+ */
 function mountHome() {
-  return mount(Home, { global: { plugins: [router] } })
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  return mount(Home, { global: { plugins: [router, pinia] } })
 }
 
 describe('首页「今日放送」的星期比对', () => {

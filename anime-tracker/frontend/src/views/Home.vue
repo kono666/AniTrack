@@ -4,6 +4,47 @@
     <HeroBanner v-if="!error" :items="heroItems" />
 
     <div class="page-container">
+      <!-- 继续看. 只在已登录、且确实有在看的番时渲染 —— 首页是公开页, 访客不该
+           看到一个空盒子. 空数组时整块不渲染(不是渲染一个空标题).
+
+           它**不在** loading / error 那套开关里面, 位置也在这两者之前: 这些数据
+           与公开的排行接口没有任何关系, 排行榜挂了/还在转, 不该把「我昨天看到哪了」
+           一起藏起来 —— 那恰恰是登录用户回首页最想要的那一件事. -->
+      <section v-if="continueList.length > 0" class="home-block">
+        <SectionHeader title="继续看" v-reveal />
+        <HorizontalScroll>
+          <!-- 类名刻意不叫 .hs-card: 首页已有的两条 .hs-card 用例(键盘可达性、
+               点击跳转)拿 find('.hs-card') 取第一个, 继续看的卡片排在它们前面,
+               混用同一个类会让那两条断言指到别的卡片上 -->
+          <div
+            v-for="item in continueList"
+            :key="'c-' + item.subjectId"
+            class="cw-card"
+            role="button"
+            tabindex="0"
+            @click="open(item.subjectId)"
+            @keydown.enter.prevent="open(item.subjectId)"
+            @keydown.space.prevent="open(item.subjectId)"
+          >
+            <div class="cw-cover">
+              <img
+                :src="item.animeCover || fallbackImg"
+                :alt="item.animeTitle"
+                loading="lazy"
+                @error="e => e.target.src = fallbackImg"
+              />
+            </div>
+            <!-- 本地没缓存过这部番时后端**不发** animeTitle 这个键(不是给个 null),
+                 兜底文案与个人页保持一致 -->
+            <div class="cw-title">{{ item.animeTitle || '番剧 #' + item.subjectId }}</div>
+            <ProgressBar :value="item.progress" :total="item.totalEpisodes" />
+            <div class="cw-ep">
+              第 {{ item.progress || 0 }} 集<template v-if="item.totalEpisodes"> / 共 {{ item.totalEpisodes }} 集</template>
+            </div>
+          </div>
+        </HorizontalScroll>
+      </section>
+
       <!-- Today's Schedule -->
       <section v-if="todayAnime.length > 0" class="home-block">
         <SectionHeader title="今日放送" v-reveal>
@@ -135,7 +176,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import PhStar from '@icons/PhStar.vue.mjs'
-import { getRanking, getCalendar } from '../api'
+import { getRanking, getCalendar, getContinueWatching } from '../api'
+import { useUserStore } from '../stores/user'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
@@ -148,14 +190,18 @@ import HorizontalScroll from '../components/HorizontalScroll.vue'
 import SectionHeader from '../components/SectionHeader.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
+import ProgressBar from '../components/ProgressBar.vue'
 
 const $router = useRouter()
+const userStore = useUserStore()
 const loading = ref(true)
 const heroItems = ref([])
 const popularList = ref([])
 const recentList = ref([])
 const todayAnime = ref([])
 const error = ref('')
+/** 「继续看」的原始行, 形状与 /api/track/list 相同 —— 只有已登录时才有内容 */
+const continueList = ref([])
 
 // 今日放送默认只铺前 8 部, 其余收在「全部 N 部」后面(改前是直接丢掉)
 const TODAY_LIMIT = 8
@@ -197,7 +243,37 @@ function bgmWeekdayId() {
   return String(dow === 0 ? 7 : dow)
 }
 
-onMounted(loadHome)
+onMounted(() => {
+  // 两个各自跑、互不等待. 「继续看」**不进** loadHome 里那个 Promise.all: 一次超时
+  // 不能把整个公开首页打成错误态(见 loadContinue 里的 catch)
+  loadHome()
+  loadContinue()
+})
+
+/**
+ * 拉「继续看」. 已登录才有意义, 匿名直接就返回(连请求都不发).
+ *
+ * 三条硬约束, 每一条做错都很难在开发时看出来:
+ *
+ * 1. **不写进 homeCache, 也不受它的提前 return 影响.**
+ *    homeCache 是模块级的、**不含用户维度**(见 utils/homeCache.js): 把「张三看到
+ *    第 5 集」缓存进去, 换个账号登录首页显示的就是上一个人的进度. 而 loadHome 的
+ *    缓存命中会在函数开头直接 return —— 所以这个请求必须单独发, 不能挂在它后面,
+ *    否则「第一次进首页有、第二次没了」, 只有第二次挂载才看得见.
+ *
+ * 2. **失败不写 error.** 这一块是加分项, 后端抖一下的结果应该是"这块不显示",
+ *    而不是整个首页变成错误页(排行榜那两条才该那样).
+ *
+ * 3. **过期 token 会走全局 401 处理被弹到登录页** —— 首页不开例外. 这是既有规则
+ *    (首页今天就已经因为 getRanking 带着过期 token 而被弹走), 不在这里绕开.
+ */
+async function loadContinue() {
+  if (!userStore.loggedIn) return
+  try {
+    const res = await getContinueWatching()
+    continueList.value = res.data?.data || []
+  } catch (e) { /* 见上面第 2 条 */ }
+}
 
 // 单独取名(原来是直接写在 onMounted 里的匿名函数)是为了让错误态上的「重试」
 // 有东西可调 —— 重试就是把这一次加载原样再跑一遍
@@ -349,12 +425,38 @@ async function loadHome() {
   font-size: 11px; color: var(--text-muted); margin-top: 2px;
 }
 
+/* ── 继续看 ──
+   宽度与 .hs-card 同一套节奏, 但卡片比它多两行(进度条 + 集号), 所以高度不写死 ——
+   让它们自己撑开. 一行卡片的封面也一样是 3/4, 与站内其它卡片对齐. */
+.cw-card {
+  width: 160px; flex-shrink: 0;
+  cursor: pointer;
+  scroll-snap-align: start;
+  transition: transform var(--transition);
+}
+.cw-card:hover { transform: translateY(-4px); }
+.cw-cover {
+  aspect-ratio: 3/4; border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--bg-secondary);
+  margin-bottom: 8px;
+}
+.cw-cover img { width: 100%; height: 100%; object-fit: cover; transition: transform .4s; }
+.cw-card:hover .cw-cover img { transform: scale(1.06); }
+.cw-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 6px;
+}
+.cw-ep { font-size: 11px; color: var(--text-muted); margin-top: 5px; }
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .hs-card { width: 130px; }
+  .cw-card { width: 130px; }
   .today-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; }
 }
 @media (max-width: 480px) {
   .hs-card { width: 110px; }
+  .cw-card { width: 110px; }
 }
 </style>
