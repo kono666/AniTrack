@@ -116,43 +116,46 @@
       <router-link to="/" style="color:var(--primary);">去发现动漫</router-link>
     </EmptyState>
 
-    <!-- 收到的回复. 刻意放在追番列表**下面**: 这一页的主任务是追番管理,
-         提醒是附带的, 排在它前面会把列表推下去.
-         也不做成红点或弹层 —— 用户选的就是最简版(见 ReviewReplyService.
-         getReceivedReplies), 站内没有通知通道, 只有"列出来"这一件事. -->
-    <section v-if="!error" class="p-replies">
-      <h2 class="pr-title">收到的回复</h2>
-      <!-- 失败态优先于空态: 拉不到时说"还没有人回复你"是把"没拉到"说成了
-           "你没有", 与这一页追番列表那条是同一件事 -->
-      <div v-if="repliesError" class="pr-hint pr-hint-err">{{ repliesError }}</div>
-      <div v-else-if="!receivedReplies.length" class="pr-hint">还没有人回复你</div>
-      <div v-else class="pr-list">
+    <!-- 通知: 有人回复了我的评论 / 赞了我的评论 / 赞了我的回复.
+         刻意放在追番列表**下面**: 这一页的主任务是追番管理, 通知是附带的,
+         排在它前面会把列表推下去. -->
+    <section v-if="!error" class="p-notices">
+      <h2 class="pf-title">通知</h2>
+      <!-- 三态, 且失败优先于空态: 拉不到时说"还没有人回复或赞过你"是把"没拉到"
+           说成了"你没有" —— 与这一页追番列表那条是同一件事.
+           "加载中"那一态是必需的: 通知与追番列表并发拉, 主内容先到时列表还没回来,
+           少了它就会闪一下空态(而那一下正是上面那句谎话). -->
+      <div v-if="!noticesLoaded" class="pn-hint">加载中…</div>
+      <div v-else-if="noticeError" class="pn-hint pn-hint-err">{{ noticeError }}</div>
+      <div v-else-if="!notices.length" class="pn-hint">还没有人回复或赞过你</div>
+      <div v-else class="pn-list">
         <!-- 点进那部番的详情页. 不做"直接滚到那条评论": 详情页没有按评论定位的
-             锚点, 而回复列表本来就是整页展开的, 找得到 -->
+             锚点, 而评论本来就是整页展开的, 找得到 -->
         <div
-          v-for="r in receivedReplies"
-          :key="r.id"
-          class="pr-item"
-          @click="$router.push(`/anime/${r.subjectId}`)"
+          v-for="n in notices"
+          :key="n.id"
+          class="pn-item"
+          :class="{ 'pn-unread': !n.read }"
+          @click="$router.push(`/anime/${n.subjectId}`)"
         >
-          <div class="pr-avatar">{{ (r.username || '?')[0] }}</div>
-          <div class="pr-body">
-            <div class="pr-top">
-              <span class="pr-name">{{ r.username }}</span>
-              <span class="pr-time">{{ fmtDate(r.createdAt) }}</span>
+          <div class="pn-avatar">{{ (n.actorName || '?')[0] }}</div>
+          <div class="pn-body">
+            <div class="pn-top">
+              <span class="pn-name">{{ n.actorName }}</span>
+              <span class="pn-action">{{ noticeAction(n.type) }}</span>
+              <span class="pn-time">{{ fmtDate(n.createdAt) }}</span>
             </div>
             <!-- 摘要可能为空: 评论可以只打分不写字(服务端把空正文回成 null,
                  空串会让"有内容但看不见"这件事分不出来) -->
-            <div class="pr-quote">{{ r.reviewContent || '（无文字）' }}</div>
-            <div class="pr-text">{{ r.content }}</div>
+            <div class="pn-quote">{{ n.reviewContent || '（无文字）' }}</div>
+            <!-- 三类里只有"赞了我的回复"和"回复了我"有这一行(赞评论那条没有回复) -->
+            <div v-if="n.replyContent" class="pn-text">{{ n.replyContent }}</div>
           </div>
         </div>
       </div>
-      <!-- 服务端封顶 30 条且不分页, 到顶时说清楚是"只显示最近的一批",
-           免得用户以为更早的回复丢了 -->
-      <div v-if="receivedReplies.length >= RECEIVED_LIMIT" class="pr-hint">
-        只显示最近 {{ RECEIVED_LIMIT }} 条
-      </div>
+      <!-- 分页是这一块相对旧版"收到的回复"最大的变化: 那一版服务端封顶 30 条且
+           不分页, 到顶时只能写一句"只显示最近 30 条" -->
+      <Pagination :current-page="noticePage" :total-pages="noticeTotalPages" @change="goNoticePage" />
     </section>
 
     <!-- 改密码.
@@ -161,7 +164,7 @@
          也刻意不做成弹窗: 改密是一个低频、需要想一想的动作, 塞进模态框里
          反而更容易点错; 页面底部这个位置本来也没人路过会误触. -->
     <section class="p-security">
-      <h2 class="pr-title">账号安全</h2>
+      <h2 class="pf-title">账号安全</h2>
       <form class="sec-form" @submit.prevent="handleChangePassword">
         <label class="sec-label" for="sec-old">原密码</label>
         <!-- current-password / new-password 不是可省的装饰: 说成同一个值,
@@ -214,7 +217,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
-import { getTrackingList, getOverallStats, saveTracking, getReceivedReplies, changePassword } from '../api'
+import { useNotificationStore } from '../stores/notification'
+import { getTrackingList, getOverallStats, saveTracking, getNotifications, markNotificationsRead, changePassword } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
@@ -222,9 +226,11 @@ import PhUserCircle from '@icons/PhUserCircle.vue.mjs'
 import PhStar from '@icons/PhStar.vue.mjs'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
+import Pagination from '../components/Pagination.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
+const notificationStore = useNotificationStore()
 const { show: toast } = useToast()
 const loading = ref(true)
 const error = ref('')
@@ -232,13 +238,30 @@ const trackings = ref([])
 const stats = ref(null)
 const filter = ref('all')
 const sortBy = ref('date')
-const receivedReplies = ref([])
-const repliesError = ref('')
 
-/** 「收到的回复」的服务端封顶(ReviewReplyService.MAX_RECEIVED_SHOWN).
- *  在这里再写一遍而不是从接口读: 到了这个数才显示"只显示最近 N 条",
- *  而这个判断要在渲染时就有答案 */
-const RECEIVED_LIMIT = 30
+// ── 通知 ──
+const notices = ref([])
+const noticesLoaded = ref(false)
+const noticeError = ref('')
+const noticePage = ref(1)
+const noticeTotal = ref(0)
+
+/** 一页几条. 与后端 NotificationService.DEFAULT_PAGE_SIZE 同一个数 —— 请求里发的是它,
+ *  而 totalPages 也要按它算, 两边不一致时"最后一页"会点到空页(与 ADMIN_PAGE_SIZE 同一条理由) */
+const NOTICE_PAGE_SIZE = 20
+const noticeTotalPages = computed(() => Math.ceil(noticeTotal.value / NOTICE_PAGE_SIZE) || 1)
+
+/** 三类通知在行里怎么念. 键是后端 Notification 的三个常量. */
+const NOTICE_ACTION = {
+  REPLY: '回复了你的评论',
+  REVIEW_LIKE: '赞了你的评论',
+  REPLY_LIKE: '赞了你的回复',
+}
+/** 认不出来的类型给一句兜底: 服务端将来加了第四类而前端没跟上时, 那一行应当是
+ *  "某人 和你有互动", 而不是一个空白的动词位置 */
+function noticeAction(type) {
+  return NOTICE_ACTION[type] || '和你有互动'
+}
 
 const statusLabel = { want_to_watch: '想看', watching: '在看', watched: '看过', on_hold: '搁置', dropped: '抛弃' }
 const statusOptions = [
@@ -274,7 +297,7 @@ const filtered = computed(() => {
   return list
 })
 
-/** 回复那一条的日期. 与详情页的 fmt 同一个口径(只到日), 但不共用 ——
+/** 通知那一条的日期. 与详情页的 fmt 同一个口径(只到日), 但不共用 ——
  *  那个是 AnimeDetail 的组件内函数, 复制一份比为一个 8 行的工具建一个模块便宜 */
 function fmtDate(d) {
   return d ? new Date(d).toLocaleDateString('zh-CN') : ''
@@ -375,30 +398,80 @@ async function handleChangePassword() {
   pwdLoading.value = false
 }
 
+// ── 通知 ──
+
+/**
+ * 拉一页通知, 并顺手把未读标成已读.
+ *
+ * <p><b>顺序是"先读列表、再标已读", 不能反过来。</b> 标已读之后再读, 服务端回给我们的
+ * 每一行都是 read: true —— 于是"哪几条是新的"这个信息在页面首次渲染时就没了(未读态
+ * 那一道竖线永远不出现), 而 `read` 这个字段也就成了摆设。反过来做, 行里带着标记前的
+ * 状态渲染出来, 红点同时被清掉。
+ *
+ * <p>标已读**只在真的读到未读行时**发: 未读的必然是最新的几条(排序是 created_at DESC,
+ * 而"未读"就是 read_at IS NULL), 所以第一页里没有未读 ⇒ 服务端也没有未读。这一条是
+ * 从这个页面的读法推出来的, 不是猜的; 它省掉的是每进一次个人页都发一个必然改 0 行的 PUT。
+ *
+ * <p>它自己咽掉全部失败(包括标已读的): 通知是这一页的附带区块, 拉不到时最坏的结果
+ * 应该是"这一块空着", 而不是整页落到「加载追番记录失败」—— 追番记录其实好好的。
+ */
+async function loadNotices() {
+  noticeError.value = ''
+  try {
+    const res = await getNotifications({ page: noticePage.value, limit: NOTICE_PAGE_SIZE })
+    const data = res.data.data || {}
+    notices.value = data.list || []
+    noticeTotal.value = data.total || 0
+    if (notices.value.some(n => !n.read)) await markRead()
+  } catch (e) {
+    notices.value = []
+    noticeTotal.value = 0
+    noticeError.value = '通知暂时拉不到'
+  }
+  noticesLoaded.value = true
+}
+
+/**
+ * 把未读全部标为已读, 并就地清掉导航栏的红点.
+ *
+ * <p>清的是 store 里那个数字(clear()), 不是重新问一次服务端: 我们**知道**结果就是 0,
+ * 再问一遍只是把同一件事问第二次, 而且那一次往返里红点还亮着。
+ *
+ * <p>失败不上报: 它是一次"尽力而为"的收尾, 标不上最多是红点多亮一会儿, 下次进来还会
+ * 再试。为它弹一个 toast 是把一件用户没请求过的事说成出了问题。
+ */
+async function markRead() {
+  try {
+    await markNotificationsRead()
+    notificationStore.clear()
+  } catch (e) { /* 见上 */ }
+}
+
+/** 翻页: 只重拉通知那一块(追番列表与统计与页码无关) */
+function goNoticePage(p) {
+  noticePage.value = p
+  loadNotices()
+}
+
 // 单独取名是为了让错误态上的「重试」能重新跑这整段(账号信息来自 store,
 // 失败的是列表和统计这两个接口)
 async function loadProfile() {
   if (!userStore.loggedIn) { router.push('/login'); return }
   loading.value = true
   error.value = ''
-  repliesError.value = ''
+  /* 通知与主内容并发拉, 且**不 await**: 它是附带区块, 没有理由让追番列表等它。
+     它自己咽掉失败(见 loadNotices), 所以"没 await"不等于"它的失败会漏到这里"。 */
+  loadNotices()
   try {
-    const [listRes, statsRes, repliesRes] = await Promise.all([
+    const [listRes, statsRes] = await Promise.all([
       getTrackingList(),
       getOverallStats(),
-      /* 收到的回复是这一页的**附带**内容, 所以它自己把失败咽掉(回 null 而不是抛) ——
-         否则一个提醒区块拉不到, 整页会落到「加载追番记录失败」, 而追番记录其实
-         好好的. 这句谎话比少一个区块严重得多.
-         并发发出去而不是串在后面 await: 它是独立的一路, 没有理由让主内容等它. */
-      getReceivedReplies().catch(() => null),
     ])
     trackings.value = (listRes.data.data || []).map(t => ({
       ...t,
       animeYear: t.animeDate ? t.animeDate.substring(0, 4) : null,
     }))
     stats.value = statsRes.data.data || {}
-    if (repliesRes) receivedReplies.value = repliesRes.data.data?.list || []
-    else repliesError.value = '回复暂时拉不到'
   } catch (e) {
     error.value = loadErrorMessage(e, '加载追番记录')
     trackings.value = []
@@ -477,42 +550,50 @@ async function loadProfile() {
 .pca-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pca-select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text); font-size: 11px; cursor: pointer; font-family: inherit; }
 
-/* ── 收到的回复 ── */
+/* ── 通知 ── */
 /* 与 .p-list 同宽同边距, 于是它与上面的追番列表左右对齐 —— 两块的左边缘
    如果差几个像素, 看起来像两页拼起来的 */
-.p-replies { max-width: 1000px; margin: 32px auto 0; padding: 0 32px; }
-.pr-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
-.pr-hint { font-size: 13px; color: var(--text-muted); padding: 12px 0; }
+.p-notices { max-width: 1000px; margin: 32px auto 0; padding: 0 32px; }
+/* 通知与账号安全两个区块的标题共用一条. 这不是"顺手复用": 两块的左边缘在
+   同一条线上, 字号/间距也必须同一条, 否则两块看起来是两个页面拼的 */
+.pf-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+.pn-hint { font-size: 13px; color: var(--text-muted); padding: 12px 0; }
 /* 失败那一句要跟"还没有"区分开: 同色同字号的话, 一次网络抖动看起来就像
    "这个站没人理我" */
-.pr-hint-err { color: var(--danger); }
-.pr-list { display: flex; flex-direction: column; gap: 8px; }
-.pr-item {
+.pn-hint-err { color: var(--danger); }
+.pn-list { display: flex; flex-direction: column; gap: 8px; }
+.pn-item {
   display: flex; gap: 12px; padding: 12px 14px; cursor: pointer;
   background: var(--card); border: 1px solid var(--card-border);
   border-radius: var(--radius); transition: all var(--transition);
 }
-.pr-item:hover { border-color: var(--primary-line); background: var(--card-hover); }
-.pr-avatar {
+.pn-item:hover { border-color: var(--primary-line); background: var(--card-hover); }
+/* 未读 = 左边一道强调色. 用 inset 阴影而不是 border-left: 后者会把这一行的
+   内容整体右移 2px, 于是"已读"和"未读"两行的头像不在一条竖线上 */
+.pn-unread { box-shadow: inset 3px 0 0 var(--primary); }
+.pn-avatar {
   width: 32px; height: 32px; border-radius: 50%; background: var(--primary);
   color: var(--primary-foreground); display: flex; align-items: center;
   justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;
 }
-.pr-body { flex: 1; min-width: 0; }
-.pr-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-.pr-name { font-weight: 700; font-size: 13px; color: var(--text); }
-.pr-time { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+.pn-body { flex: 1; min-width: 0; }
+.pn-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.pn-name { font-weight: 700; font-size: 13px; color: var(--text); }
+/* 动词块跟着名字, 与它一起读成一句话("alice 赞了你的评论"); 颜色压一档,
+   让名字仍然是这一行的主语 */
+.pn-action { font-size: 13px; color: var(--text-secondary); }
+.pn-time { font-size: 11px; color: var(--text-muted); margin-left: auto; }
 /* 我那条评论的摘要: 用左侧竖线 + 斜体压成"引文", 与下面的回复正文一眼分得开 ——
    两块都是正文的话, 读起来不知道哪句是谁说的 */
-.pr-quote {
+.pn-quote {
   font-size: 12px; color: var(--text-muted); padding-left: 8px;
   border-left: 2px solid var(--border); margin-bottom: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pr-text { font-size: 13px; line-height: 1.6; color: var(--text-secondary); word-break: break-word; }
+.pn-text { font-size: 13px; line-height: 1.6; color: var(--text-secondary); word-break: break-word; }
 
 /* ── 账号安全 ── */
-/* 与 .p-replies 同宽同边距, 理由同那条 —— 三块的左边缘不在一条线上就像两页拼的 */
+/* 与 .p-notices 同宽同边距, 理由同那条 —— 三块的左边缘不在一条线上就像两页拼的 */
 .p-security { max-width: 1000px; margin: 32px auto 0; padding: 0 32px; }
 /* 表单本身不铺满 1000px: 输入框横跨整行会让人以为要填很长一段内容,
    而这里只有三格短文本 */
@@ -540,7 +621,7 @@ async function loadProfile() {
 
 @media (max-width: 768px) {
   .p-header { padding: 0 16px; gap: 16px; }
-  .p-replies { padding: 0 16px; }
+  .p-notices { padding: 0 16px; }
   .p-security { padding: 0 16px; }
   .p-avatar { width: 72px; height: 72px; }
   .p-info { padding-top: 36px; }

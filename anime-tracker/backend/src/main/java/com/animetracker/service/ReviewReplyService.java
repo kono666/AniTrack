@@ -8,7 +8,6 @@ import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.ReplyLikeRepository;
 import com.animetracker.repository.ReviewReplyRepository;
 import com.animetracker.repository.ReviewRepository;
-import com.animetracker.util.TextSnippet;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -38,15 +37,6 @@ import java.util.Set;
 @Service
 public class ReviewReplyService {
 
-    /**
-     * 「谁回复了我」最多列几条.
-     *
-     * <p>这是一个没有分页控件的列表区块, 与 {@link ReviewLikeService#MAX_LIKERS_SHOWN}
-     * 是同一种东西, 所以也封顶而不是分页。30 比 50 小, 因为这里每一项是一行带正文的
-     * 记录(而名单里只是一串名字), 铺满一屏之外没有意义。
-     */
-    public static final int MAX_RECEIVED_SHOWN = 30;
-
     /** 一条短评下最多取多少条回复. 与评论列表一样是"不封顶地一次倒出"必须堵上的那个洞。 */
     public static final int MAX_REPLIES_PER_REVIEW = 200;
 
@@ -54,15 +44,18 @@ public class ReviewReplyService {
     private final ReviewReplyRepository reviewReplyRepository;
     private final ReplyLikeRepository replyLikeRepository;
     private final IsolatedInsert isolatedInsert;
+    private final NotificationService notificationService;
 
     public ReviewReplyService(ReviewRepository reviewRepository,
                               ReviewReplyRepository reviewReplyRepository,
                               ReplyLikeRepository replyLikeRepository,
-                              IsolatedInsert isolatedInsert) {
+                              IsolatedInsert isolatedInsert,
+                              NotificationService notificationService) {
         this.reviewRepository = reviewRepository;
         this.reviewReplyRepository = reviewReplyRepository;
         this.replyLikeRepository = replyLikeRepository;
         this.isolatedInsert = isolatedInsert;
+        this.notificationService = notificationService;
     }
 
     /** {@code ORDER BY} 里那个 {@code :epoch} 的值 —— 见仓储方法上的说明, 取什么都不影响结果 */
@@ -94,42 +87,10 @@ public class ReviewReplyService {
         return result;
     }
 
-    /**
-     * 「谁回复了我」: 我写的短评下面、别人发的回复.
-     *
-     * <p>这一版**不做已读、不做红点**(用户明确选的最简版): 没有"上次看到哪"这种状态,
-     * 也就没有要存的东西 —— 整条路径是只读的。
-     *
-     * <p>每一项都带上 {@code subjectId} 与评论正文的摘要: 列表里要回答"这是哪条番剧下
-     * 我写的哪条评论", 光有回复正文的话用户不知道说的是什么。
-     */
-    public Map<String, Object> getReceivedReplies(User user) {
-        List<ReviewReply> replies = reviewReplyRepository.findReceivedReplies(
-                user.getId(), EPOCH, PageRequest.of(0, MAX_RECEIVED_SHOWN));
-
-        List<Map<String, Object>> list = new ArrayList<>();
-        for (ReviewReply rr : replies) {
-            Map<String, Object> row = new HashMap<>();
-            row.put("id", rr.getId());
-            row.put("reviewId", rr.getReview().getId());
-            row.put("subjectId", rr.getReview().getSubjectId());
-            // 评论正文只给**摘要**: 这一行要回答的是"你回的是哪条", 不是把那条评论原文
-            // 再贴一遍 —— 评论正文最长 5000 字, 30 行原样带出去就是一个几十 KB 的响应.
-            row.put("reviewContent", TextSnippet.of(rr.getReview().getContent()));
-            row.put("userId", rr.getUser().getId());
-            row.put("username", rr.getUser().getUsername());
-            row.put("avatar", rr.getUser().getAvatar());
-            row.put("content", rr.getContent());
-            row.put("createdAt", rr.getCreatedAt());
-            list.add(row);
-        }
-
-        Map<String, Object> result = new HashMap<>();
-        // 没有 total: 这一块不分页, 而"一共多少条"要另发一条 COUNT —— 用户明确选的是
-        // 最简版, 封顶 30 条就够用, 多出来的那个数字没有任何地方会显示.
-        result.put("list", list);
-        return result;
-    }
+    // 「谁回复了我」原本在这里(getReceivedReplies)。V11 之后它被
+    // NotificationService 的列表接管了 —— 通知表建好之后,"我收到的回复"就是
+    // type = 'REPLY' 的一个子集, 留着它就有两个真源, 个人页会出现两块内容高度相似的
+    // 区块。端点(/api/user/received-replies)一并删掉, 没有留兼容窗口。
 
     // ==================== 写 ====================
 
@@ -139,17 +100,21 @@ public class ReviewReplyService {
      * 两种都不报错, 只让计数越漂越远(与 {@link ReviewLikeService#like} 同一条理由)。
      */
     public Map<String, Object> addReply(User user, Long reviewId, String content) {
-        if (!reviewRepository.existsById(reviewId)) {
-            throw BusinessException.notFound("评论不存在");
-        }
+        // 读出来(带作者)而不是 existsById: 通知要送到**评论作者**手上, 而那是这条实体
+        // 上的一个字段。一次查询换一次查询, 详见 ReviewRepository.findByIdWithUser。
+        Review review = reviewRepository.findByIdWithUser(reviewId)
+                .orElseThrow(() -> BusinessException.notFound("评论不存在"));
         Long replyId = isolatedInsert.attempt(() -> {
             ReviewReply saved = reviewReplyRepository.saveAndFlush(ReviewReply.builder()
-                    // 只写外键, 不把 Review 读出来: 存在性上面已经确认过
-                    .review(reviewRepository.getReferenceById(reviewId))
+                    // 只写外键, 不把 Review 再读一遍: 上面那句已经读过它了
+                    .review(review)
                     .user(user)
                     .content(content)
                     .build());
             reviewRepository.incrementReplyCount(reviewId);
+            // 与上面两个写同一个事务: 分开就有"回复写进去了、通知没发"这种半截状态,
+            // 而它不报错, 只让收件人永远不知道有人回了他。
+            notificationService.onReply(user, review.getUser().getId(), reviewId, saved.getId());
             return saved.getId();
         });
         // 读回来再回给前端, 而不是拿 isolatedInsert 里那个实体: 那个事务结束后它已经
@@ -215,16 +180,24 @@ public class ReviewReplyService {
 
     /** 赞一条回复. 幂等, 形状与理由与 {@link ReviewLikeService#like} 逐条相同。 */
     public Map<String, Object> likeReply(User user, Long replyId) {
-        if (!reviewReplyRepository.existsById(replyId)) {
-            throw BusinessException.notFound("回复不存在");
-        }
+        // 读出来(带作者与评论)而不是 existsById: 通知要送到**回复作者**手上(赞的是他
+        // 的话, 不是评论作者的话), 而通知行上还要写 review_id —— 两个都在这条实体的
+        // 关联上。顺带把下面那句 getReferenceById 也省了。
+        ReviewReply reply = reviewReplyRepository.findByIdWithUser(replyId)
+                .orElseThrow(() -> BusinessException.notFound("回复不存在"));
         try {
             isolatedInsert.attempt(() -> {
                 replyLikeRepository.saveAndFlush(ReplyLike.builder()
-                        .reply(reviewReplyRepository.getReferenceById(replyId))
+                        .reply(reply)
                         .user(user)
                         .build());
                 reviewReplyRepository.incrementLikeCount(replyId);
+                // 位置就是这条: 它在 saveAndFlush 之后、attempt 之内, 于是"已经赞过"那条
+                // 幂等路径(撞唯一约束 → 走下面的 catch)根本走不到这里, 重复点赞不会刷出
+                // 一串通知。reviewId 也要一并存下(通知行上三种类型都写它), 读列表时
+                // 才能跳回那条番剧。
+                notificationService.onReplyLike(user, reply.getUser().getId(),
+                        reply.getReview().getId(), replyId);
                 return null;
             });
         } catch (DataIntegrityViolationException e) {

@@ -179,13 +179,32 @@ export const unlikeReply = (replyId) => api.delete(`/reply/${replyId}/like`)
 /** 谁赞了这条回复. 公开接口 */
 export const getReplyLikers = (replyId) => api.get(`/reply/${replyId}/likes`)
 
+// ========== 通知 ==========
+//
+// 三个端点取代了原先的 getReceivedReplies(那个只有"谁回复了我"一种, 没有 total、
+// 没有分页、没有已读)。它已随 V11 一起删掉, 没有留兼容——个人页那一块现在读通知。
+
 /**
- * 「谁回复了我」: 我写的短评下面、别人发的回复. 需要登录.
+ * 我的通知: 有人回复了我的评论 / 赞了我的评论 / 赞了我的回复. 需要登录.
  *
- * 返回 {list}, 没有 total —— 这一块不分页(封顶 30 条, 见 ReviewReplyService),
- * 而"一共多少条"要另发一条 COUNT, 没有任何地方会显示它.
+ * 返回 {list, total, page} 的分页信封(与评论列表同一个形状), 所以这一块有翻页控件 ——
+ * 而旧端点回的是裸 {list} 且封顶 30 条.
  */
-export const getReceivedReplies = () => api.get('/user/received-replies')
+export const getNotifications = (params) => api.get('/user/notifications', { params })
+
+/**
+ * 未读条数, 只回 {count}. 导航栏的红点用.
+ *
+ * 单独一个端点而不是让前端去数列表里的未读: 红点每个页面都要显示, 而列表只在个人页拉.
+ */
+export const getUnreadCount = () => api.get('/user/notifications/unread-count')
+
+/**
+ * 把未读全部标为已读. 幂等 —— 重复调用改 0 行, 第一次那个已读时间不会被覆盖.
+ *
+ * 用 PUT 不用 POST: 它把状态设成一个确定值, 与 unlockUser 是同一条理由。
+ */
+export const markNotificationsRead = () => api.put('/user/notifications/read')
 
 // ========== 管理员 ==========
 export const getDashboard = () => api.get('/admin/dashboard')

@@ -23,6 +23,9 @@ vi.mock('./api', async (importOriginal) => {
     setUserRole: vi.fn(list),
     unlockUser: vi.fn(list),
     adminDeleteReview: vi.fn(list),
+    // 导航栏的未读红点: 这几条用例里有登录态(ADMIN), 而 NavBar 的 watcher 一挂载
+    // 就会去问一次 —— 不给桩的话那是一次真的会发出去的网络请求
+    getUnreadCount: vi.fn(() => Promise.resolve({ data: { code: 200, data: { count: 0 } } })),
   }
 })
 

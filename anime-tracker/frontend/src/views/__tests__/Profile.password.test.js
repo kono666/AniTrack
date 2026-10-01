@@ -9,8 +9,9 @@ vi.mock('../../api', () => ({
   getTrackingList: vi.fn(),
   getOverallStats: vi.fn(),
   saveTracking: vi.fn(),
-  getReceivedReplies: vi.fn(),
-  // 整体替换模块, 漏一个就在解构时抛 —— 这五个是 Profile.vue 会全部用到的
+  getNotifications: vi.fn(),
+  markNotificationsRead: vi.fn(),
+  // 整体替换模块, 漏一个就在解构时抛 —— 这六个是 Profile.vue 会全部用到的
   changePassword: vi.fn(),
 }))
 
@@ -21,7 +22,7 @@ vi.mock('../../composables/useToast', () => ({
 
 import Profile from '../Profile.vue'
 import { useUserStore } from '../../stores/user'
-import { getTrackingList, getOverallStats, saveTracking, getReceivedReplies, changePassword } from '../../api'
+import { getTrackingList, getOverallStats, saveTracking, getNotifications, changePassword } from '../../api'
 
 /**
  * 个人页「账号安全」这一块 —— 用户改自己的密码.
@@ -85,7 +86,9 @@ beforeEach(() => {
     data: { code: 200, data: { totalAnime: 0, totalEpisodes: 0, totalReviews: 0, avgScore: 0, completed: 0 } },
   })
   saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 1 } } })
-  getReceivedReplies.mockResolvedValue({ data: { code: 200, data: { list: [] } } })
+  // 通知那一块默认给空 —— 这几条用例测的是改密码, 不关心它(它的失败也影响不到
+  // 这一块: 两个区块各自独立)
+  getNotifications.mockResolvedValue({ data: { code: 200, data: { list: [], total: 0 } } })
 })
 
 describe('个人页改密码: 五道本地校验, 一个请求都不发', () => {

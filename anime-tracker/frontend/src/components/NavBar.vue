@@ -48,8 +48,16 @@
       </router-link>
       <!-- User Dropdown -->
       <div v-if="userStore.loggedIn" class="nav-user-area">
-        <button class="nav-user-btn" @click="toggleMenu">
-          <PhUserCircle :size="22" weight="fill" class="nav-avatar" />
+        <!-- 未读红点挂**头像**上, 不挂在「个人主页」那一项上: 那一项在折叠的下拉里,
+             要先把菜单点开才看得见 —— 而红点的全部价值就是"不用点也知道". 下拉里
+             仍然有一个带数字的角标(见下), 两个读的是同一个数字。
+             title 是给鼠标用户的同一句话; 红点自己 aria-hidden —— 它是个纯视觉提示,
+             数字在下拉里是**真文本**, 读屏用户点开就念得出来, 不必在这里重复一遍。 -->
+        <button class="nav-user-btn" :title="unread > 0 ? `${unread} 条未读通知` : ''" @click="toggleMenu">
+          <span class="nav-avatar-wrap">
+            <PhUserCircle :size="22" weight="fill" class="nav-avatar" />
+            <span v-if="unread > 0" class="nav-dot" aria-hidden="true"></span>
+          </span>
           <span class="nav-username">{{ userStore.user?.username }}</span>
           <PhCaretDown :size="12" weight="bold" class="nav-caret" :class="{ open: menuOpen }" />
         </button>
@@ -69,6 +77,7 @@
             <div class="dropdown-divider"></div>
             <router-link to="/profile" class="dropdown-item" @click="closeMenu">
               <PhUser :size="16" weight="bold" /> 个人主页
+              <span v-if="unread > 0" class="dropdown-badge">{{ unread }}</span>
             </router-link>
             <router-link v-if="userStore.user?.role === 'ADMIN'" to="/admin" class="dropdown-item" @click="closeMenu">
               <PhGear :size="16" weight="bold" /> 管理后台
@@ -97,9 +106,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
+import { useNotificationStore } from '../stores/notification'
 import { useTheme } from '../composables/useTheme'
 /* 字重统一成两档: 身份标记(品牌标、用户头像)用 fill, 其余功能性图标一律 bold。
    模板里这 12 处图标改前混着 fill / bold / duotone 三种 —— duotone 在小尺寸下
@@ -120,7 +130,35 @@ import PhRobot from '@icons/PhRobot.vue.mjs'
 import PhFilmSlate from '@icons/PhFilmSlate.vue.mjs'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
+const notificationStore = useNotificationStore()
+
+// 未读通知数。红点与下拉里的角标读的是**同一个**数字, 它住在 store 里而不是这里 ——
+// 个人页读完通知后要能就地把它清零, 而导航栏在应用外壳里、页面切换不会让它重新挂载
+// (理由写在 stores/notification.js 的文件头)。
+const unread = computed(() => notificationStore.unreadCount)
+
+/**
+ * 什么时候去问一次未读数。两个触发点, 都必要:
+ *
+ *   1. **每次换页**(含进入 Profile)。改前只有挂载时拉一次的话, 用户在个人页把
+ *      通知读完了、回到首页 —— 导航栏从头到尾没重新挂载, 红点就一直是亮的。
+ *      immediate 顺带把"首次进入"这件事一起管了, 不需要再在 onMounted 里写一遍。
+ *   2. **登录态变化**。登入时要立刻拉一次(否则要等下一次换页), 登出时清零 ——
+ *      清除**单独**放在 watcher 里而不是 handleLogout 里, 是因为登出有两条路:
+ *      点"退出登录", 以及 401 拦截器里的那句 logout。写进其中一条就会漏掉另一条,
+ *      而漏掉的那条的症状是"换个人登录, 上一个人的红点还在"。
+ *
+ * 未登录时一个请求都不发: 游客点一下换一页就多发一次 401 请求, 毫无收益。
+ * (store 的 refresh() 也扛得住未登录 —— 它把 401 当"没有未读"。这里是省流量, 不是正确性。)
+ */
+function syncBadge() {
+  if (userStore.loggedIn) notificationStore.refresh()
+  else notificationStore.clear()
+}
+watch(() => route.fullPath, syncBadge, { immediate: true })
+watch(() => userStore.loggedIn, syncBadge)
 
 // Search
 const searchQuery = ref('')
@@ -282,6 +320,22 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 .nav-user-btn:hover { border-color: var(--primary); background: var(--card-hover); }
 .nav-avatar { color: var(--primary); flex-shrink: 0; }
+/* 包一层只为给红点当定位参照 —— 头像本身是 svg, 直接往上绝对定位会连它的
+   基线一起算进去。flex-shrink:0 从 .nav-avatar 挪到这里(现在被压缩的是这个
+   盒子), 窄屏下用户名让位时头像不许被挤扁。 */
+.nav-avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+/* 红点压着头像右上角。描边用 --card 而不是白色: 按钮的底色就是 --card,
+   两套主题各是各的底色, 靠它把红点从图标线条上"抠"出来。 */
+.nav-dot {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 1.5px solid var(--card);
+}
 .nav-username { font-weight: 600; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-caret { color: var(--text-muted); transition: transform var(--transition); flex-shrink: 0; }
 .nav-caret.open { transform: rotate(180deg); }
@@ -338,6 +392,21 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   font-family: inherit;
 }
 .dropdown-item:hover { background: var(--card-hover); color: var(--text); }
+/* 下拉里的未读角标. 用 tokens 里那对 badge-red(两套主题各一份、对比度实测过的),
+   不自己调一个红: 「压在色块上的小字」在这个仓里已经有一处定义点。 */
+.dropdown-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--badge-red-bg);
+  color: var(--badge-red-fg);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
 .dropdown-danger { color: var(--danger); }
 .dropdown-danger:hover { background: var(--danger-soft); color: var(--danger); }
 

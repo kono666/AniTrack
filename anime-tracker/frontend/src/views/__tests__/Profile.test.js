@@ -7,12 +7,13 @@ vi.mock('../../api', () => ({
   getTrackingList: vi.fn(),
   getOverallStats: vi.fn(),
   saveTracking: vi.fn(),
-  // 「收到的回复」也是这一页会调的接口 —— 整体替换模块, 漏一个就在解构时抛
-  getReceivedReplies: vi.fn(),
+  // 通知那一块也是这一页会调的接口 —— 整体替换模块, 漏一个就在解构时抛
+  getNotifications: vi.fn(),
+  markNotificationsRead: vi.fn(),
 }))
 
 import Profile from '../Profile.vue'
-import { getTrackingList, getOverallStats, saveTracking, getReceivedReplies } from '../../api'
+import { getTrackingList, getOverallStats, saveTracking, getNotifications } from '../../api'
 
 /**
  * 个人页的两个数字口径问题.
@@ -67,10 +68,11 @@ describe('个人页的统计口径与 +1 封顶', () => {
     getTrackingList.mockResolvedValue({ data: { code: 200, data: TRACKINGS.map(t => ({ ...t })) } })
     getOverallStats.mockResolvedValue({ data: { code: 200, data: { totalAnime: 6, totalEpisodes: 30, totalReviews: 2, avgScore: 7.5, completed: 1 } } })
     saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 1 } } })
-    // 「收到的回复」默认给空 —— 这几个用例测的是追番统计, 不关心那一块.
-    // 不给的话 `getReceivedReplies()` 返回 undefined, 组件里那句 .catch 会当场抛,
-    // 整页落到错误态, 于是所有 .p-card 都不存在
-    getReceivedReplies.mockResolvedValue({ data: { code: 200, data: { list: [] } } })
+    // 通知那一块默认给空 —— 这几个用例测的是追番统计, 不关心它.
+    // 不给也能跑(那一块的失败自己咽掉了, 只显示"通知暂时拉不到"), 但给空更接近
+    // 真实情况: 这几条用例的断言是"整页正常", 而一个必然失败的附带区块混在里面,
+    // 会把"整页正常"这件事的成色说糊
+    getNotifications.mockResolvedValue({ data: { code: 200, data: { list: [], total: 0 } } })
   })
 
   it('「在看」按 status=watching 统计, 与筛选栏同一口径', async () => {

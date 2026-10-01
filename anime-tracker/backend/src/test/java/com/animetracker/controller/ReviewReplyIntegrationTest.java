@@ -69,9 +69,10 @@ class ReviewReplyIntegrationTest {
     private static final int SUBJECT_LIKE_WHO = 999312;
     private static final int SUBJECT_LIKE_SHOWN = 999313;
     private static final int SUBJECT_LIKE_ANON = 999314;
-    private static final int SUBJECT_INBOX = 999306;
-    private static final int SUBJECT_INBOX_SNIPPET = 999315;
-    private static final int SUBJECT_INBOX_BLANK = 999316;
+    // 999306 / 999315 / 999316 原本是「谁回复了我」那三条用例的。V11 把那个端点换成
+    // 了通知列表, 它们整段搬去了 NotificationIntegrationTest(那边另起了一段 id, 见
+    // 那个类的注释) —— 这里刻意**不复用**这几个号, 免得将来有人照着历史 diff 找回来
+    // 时撞上一半新的数据。
     private static final int SUBJECT_VALIDATION = 999307;
     private static final int SUBJECT_GUARDS = 999308;
     private static final int SUBJECT_CASCADE = 999309;
@@ -240,13 +241,8 @@ class ReviewReplyIntegrationTest {
         assertThat(replyRowsInDb(reviewId)).as("401 之后不能留下行").isEqualTo(1);
     }
 
-    /** 「谁回复了我」答的是"回给我的", 必须知道"我"是谁 —— 匿名 401 */
-    @Test
-    @DisplayName("谁回复了我: 匿名 401")
-    void theInboxNeedsALogin() throws Exception {
-        mockMvc.perform(get("/api/user/received-replies"))
-                .andExpect(status().isUnauthorized());
-    }
+    // 「谁回复了我」匿名 401 那条也在这里(V8)。V11 删掉了那个端点, 它由
+    // NotificationIntegrationTest 里的"通知匿名 401"接替。
 
     // ========== 404 ==========
 
@@ -699,120 +695,6 @@ class ReviewReplyIntegrationTest {
         assertThat(replyLikeCountInDb(replyId)).isZero();
     }
 
-    // ========== 「谁回复了我」 ==========
-
-    /**
-     * 「谁回复了我」= 我写的短评下面、**别人**发的回复。
-     *
-     * <p>三个边界一起验, 因为每一个漏掉都是一种静默的错误列表:
-     * <ul>
-     *   <li>只列<b>我的</b>评论下的回复 —— 别人家楼里发生的事不该出现在这里;</li>
-     *   <li>排除<b>我自己</b>发的回复 —— 那不是"谁回复了我";</li>
-     *   <li>带上被回复的那条评论的<b>摘要</b>与 {@code subjectId} —— 光有回复正文的话,
-     *       用户不知道这是在哪条番剧下说的什么(摘要而不是原文, 见 service 里的 {@code snippet})。</li>
-     * </ul>
-     */
-    @Test
-    @DisplayName("谁回复了我: 只列我评论下的、别人发的回复, 并带上被回复评论的摘要")
-    void theInboxOnlyListsOtherPeoplesRepliesUnderMyReviews() throws Exception {
-        String me = registerAndLogin("replyinbox1");
-        String other = registerAndLogin("replyinbox2");
-        long myReview = writeReview(me, SUBJECT_INBOX, "我的评论");
-        long theirReview = writeReview(other, SUBJECT_INBOX, "别人的评论");
-
-        reply(other, myReview, "回给我的");
-        reply(other, myReview, "又回了我一条");
-        reply(me, myReview, "我自己在自己楼下说的");
-        reply(me, theirReview, "我去别人楼里说的");
-        reply(other, theirReview, "别人楼里别人说的");
-
-        JsonNode mine = inbox(me);
-        assertThat(mine.size())
-                .as("两条是别人回我的; 我自己在自己楼下的那条不算'谁回复了我'")
-                .isEqualTo(2);
-
-        JsonNode theirs = inbox(other);
-        assertThat(theirs.size())
-                .as("别人收到的同理: 只算我去他楼里说的那条")
-                .isEqualTo(1);
-
-        for (JsonNode row : mine) {
-            assertThat(row.path("reviewId").asLong()).as("只能是我那条评论下的")
-                    .isEqualTo(myReview);
-            assertThat(row.path("subjectId").asInt()).isEqualTo(SUBJECT_INBOX);
-            assertThat(row.path("reviewContent").asText())
-                    .as("要能看出是回在哪条评论下").isEqualTo("我的评论");
-            assertThat(row.path("username").asText())
-                    .as("我自己发的回复不该出现在这里").isEqualTo("replyinbox2");
-        }
-        assertThat(mine.get(0).path("content").asText())
-                .as("按时间倒序: 最新的一条在前").isEqualTo("又回了我一条");
-        assertThat(mine.get(1).path("content").asText()).isEqualTo("回给我的");
-    }
-
-    /**
-     * 评论正文只带**摘要**, 不是原文。
-     *
-     * <p>这一条防的是一份会随互动量悄悄变大的响应: 评论正文最长 5000 字, 30 行原样带出去
-     * 就是几十 KB —— 而列表里每一项真正要回答的只是"你回的是哪条"。
-     */
-    @Test
-    @DisplayName("谁回复了我: 评论只带摘要(超长截断成 60 字 + 省略号)")
-    void theInboxCarriesASnippetNotTheWholeReview() throws Exception {
-        String me = registerAndLogin("replysnip1");
-        String other = registerAndLogin("replysnip2");
-        String longText = "长".repeat(200);
-        long reviewId = writeReview(me, SUBJECT_INBOX_SNIPPET, longText);
-        reply(other, reviewId, "回一条很长的");
-
-        JsonNode row = inbox(me).get(0);
-
-        assertThat(row.path("reviewContent").asText())
-                .as("60 个字 + 一个省略号; 原样带全文的话 30 行就是几十 KB")
-                .hasSize(61)
-                .endsWith("…");
-        assertThat(row.path("content").asText())
-                .as("摘要只裁评论正文; 回复本身是这一行的主角, 一个字都不能少")
-                .isEqualTo("回一条很长的");
-    }
-
-    /**
-     * 评论是可以**只打分不写字**的, 摘要这时必须是 {@code null} 而不是空串。
-     *
-     * <p>前端的判据是"有没有内容", 空串会让它变成"有内容但看不见" —— 那一行会显示成
-     * 一片空白, 而不是「（无文字）」。
-     */
-    @Test
-    @DisplayName("谁回复了我: 被回复的评论没写字时, 摘要给 null 而不是空串")
-    void theInboxGivesNullWhenTheReviewHasNoText() throws Exception {
-        String me = registerAndLogin("replyblank1");
-        String other = registerAndLogin("replyblank2");
-        long reviewId = writeReview(me, SUBJECT_INBOX_BLANK, "");
-        reply(other, reviewId, "回一条只有评分的");
-
-        JsonNode row = inbox(me).get(0);
-
-        assertThat(row.path("content").asText()).as("前提: 那条回复真的发出去了")
-                .isEqualTo("回一条只有评分的");
-        assertThat(row.path("reviewContent").isNull())
-                .as("空串会让前端的判断变成'有内容但看不见'").isTrue();
-    }
-
-    /** 没有人回我的时候是一个空列表, 不是 404、也不是 null —— 个人页那一块据此显示空态 */
-    @Test
-    @DisplayName("没人回复我: 空列表")
-    void theInboxIsEmptyWhenNobodyReplied() throws Exception {
-        String lonely = registerAndLogin("replyinbox3");
-
-        assertThat(inbox(lonely).size()).isZero();
-    }
-
-    /** 读自己的收件箱 */
-    private JsonNode inbox(String token) throws Exception {
-        String body = mockMvc.perform(get("/api/user/received-replies")
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-        return objectMapper.readTree(body).path("data").path("list");
-    }
+    // 「谁回复了我」那一整段(4 条用例 + inbox 助手)原本在这里, V11 之后由
+    // NotificationIntegrationTest 接管 —— 端点和查询都换了地方, 断言逐条搬了过去。
 }

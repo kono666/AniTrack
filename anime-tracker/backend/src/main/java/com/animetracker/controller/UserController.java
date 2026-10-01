@@ -6,27 +6,40 @@ import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.*;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.service.ReviewReplyService;
+import com.animetracker.service.NotificationService;
 import com.animetracker.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
 
+/**
+ * 用户自己的东西: 注册 / 登录取 token、自己的资料、自己的密码、自己的通知。
+ *
+ * <p><b>类上的 {@code @Validated} 是通知列表那两个分页参数生效的前提</b> —— 参数级的
+ * {@code @Min}/{@code @Max} 只在被它标注过的 bean 上装配, 少了它 {@code ?limit=100000}
+ * 会一路走到 service, 接口照样 200, 看起来像"约束写了但没起作用"。它与
+ * {@code AdminController} / {@code ReviewController} 是同一个写法, 加在这里是因为
+ * V11 这一批才第一次有带分页参数的端点落在本类上。
+ */
+@Validated
 @RestController
 @RequestMapping("/api/user")
 public class UserController {
 
     private final UserService userService;
     private final AuthRateLimiter authRateLimiter;
-    private final ReviewReplyService reviewReplyService;
+    private final NotificationService notificationService;
 
     public UserController(UserService userService, AuthRateLimiter authRateLimiter,
-                          ReviewReplyService reviewReplyService) {
+                          NotificationService notificationService) {
         this.userService = userService;
         this.authRateLimiter = authRateLimiter;
-        this.reviewReplyService = reviewReplyService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -102,26 +115,73 @@ public class UserController {
     }
 
     /**
-     * 「谁回复了我」: 我写的短评下面、别人发的回复(V8).
+     * 我的通知: 有人回复了我的评论 / 赞了我的评论 / 赞了我的回复, 最新的在最上面.
      *
-     * <p><b>为什么落在 UserController 而不是 ReviewReplyController</b>: 分法按的是
-     * **路径前缀的所有权** —— 全仓每个控制器各占一个前缀({@code /api/review}、
-     * {@code /api/track}、…), 这个端点是 {@code /api/user/...}, 归这里。数据本身当然
-     * 由 {@link ReviewReplyService} 出, 这个类只负责"它挂在哪个地址上"。
+     * <p><b>它取代了 {@code GET /api/user/received-replies}</b>(V8 的那个端点已删)。
+     * 通知表建起来之后, "我收到的回复"就是这里 {@code type='REPLY'} 的一个子集, 留着旧
+     * 端点就有两个真源, 而个人页会并排出现两块内容高度相似的区块。删除是有意的破坏性
+     * 契约变更, 没有留兼容窗口: 前后端同轮发布。
      *
-     * <p>它**不在** SecurityConfig 的公开清单里, 这是有意的: 这一块答的是"回给我的",
-     * 必须知道"我"是谁. 匿名访问在过滤器链上就是 401, 走不到这个方法 —— 下面这个
-     * 判空是兜底(与 {@link #getUserInfo} 同一个理由), 不是主要防线。
+     * <p><b>为什么落在 UserController 而不是别处</b>: 分法按的是**路径前缀的所有权** ——
+     * 全仓每个控制器各占一个前缀({@code /api/review}、{@code /api/track}、…), 这个端点
+     * 是 {@code /api/user/...}, 归这里。数据本身由 {@link NotificationService} 出,
+     * 这个类只负责"它挂在哪个地址上"。
      *
-     * <p>没有 total、没有分页控件、没有已读状态 —— 用户拍板的就是这一档最简版,
-     * 封顶条数见 {@code ReviewReplyService.MAX_RECEIVED_SHOWN}。
+     * <p>三个通知端点**都不在** SecurityConfig 的公开清单里, 这是有意的: 它们答的都是
+     * "我的", 必须知道"我"是谁. 匿名访问在过滤器链上就是 401, 走不到这些方法 —— 方法体
+     * 里那个判空是兜底(与 {@link #getUserInfo} 同一个理由), 不是主要防线。
+     *
+     * <p>{@code page}/{@code limit} 的默认值写在 {@code defaultValue} 上而不是靠
+     * {@code int} 的零值: 少了它, 不带分页参数的请求会拿到 {@code page=0}, 而 0 会被
+     * {@code @Min(1)} 拦成 400 —— 「不带参数」变成错误是说不通的。上限 50 与评论列表
+     * 同一个量级(两者都是用户自己看的一屏), 而管理端那张全站表用的是 100。
      */
-    @GetMapping("/received-replies")
-    public ApiResponse<Map<String, Object>> getReceivedReplies(@CurrentUser User user) {
+    @GetMapping("/notifications")
+    public ApiResponse<Map<String, Object>> getNotifications(
+            @CurrentUser User user,
+            @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码从 1 开始") int page,
+            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页至少 1 条")
+            @Max(value = 50, message = "每页最多 50 条") int limit) {
         if (user == null) {
             throw BusinessException.unauthorized("未登录");
         }
-        return ApiResponse.success(reviewReplyService.getReceivedReplies(user));
+        return ApiResponse.success(notificationService.getNotificationPage(user, page, limit));
+    }
+
+    /**
+     * 未读条数, 给导航栏的红点用.
+     *
+     * <p>单独一个端点而不是让前端数列表里的未读: 红点是**每个页面**都要显示的东西,
+     * 而列表只在个人页拉。让它走列表就意味着每进一个页面都拉一页通知回来只为了数几个
+     * 布尔值。这里只回 {@code {count: N}}。
+     */
+    @GetMapping("/notifications/unread-count")
+    public ApiResponse<Map<String, Object>> getUnreadCount(@CurrentUser User user) {
+        if (user == null) {
+            throw BusinessException.unauthorized("未登录");
+        }
+        return ApiResponse.success(Map.of("count", notificationService.getUnreadCount(user)));
+    }
+
+    /**
+     * 把当前用户的未读全部标为已读.
+     *
+     * <p>用 PUT 而不是 POST: 它把「已读」这个状态设成一个确定值、重复调用结果相同
+     * (幂等), 与 {@code AdminController} 的解锁端点选 PUT 是同一条理由 —— 而这条的
+     * 幂等性还有一层具体的必要: 用户每进一次个人页就会调一次它, 万一重复发送,
+     * 第二次不能把第一次的"什么时候读的"覆盖掉。
+     *
+     * <p><b>刻意不做单条已读</b>: 用户的心智是"打开看一眼就都算看过了", 逐条已读要配
+     * 一套逐条交互(每条一个按钮, 或者"滚到哪算哪"), 而那是红点该干的事 —— 没有红点的
+     * 时候没人会去点。
+     */
+    @PutMapping("/notifications/read")
+    public ApiResponse<Void> markNotificationsRead(@CurrentUser User user) {
+        if (user == null) {
+            throw BusinessException.unauthorized("未登录");
+        }
+        notificationService.markAllRead(user);
+        return ApiResponse.success("已全部标为已读", null);
     }
 
     /**
@@ -133,7 +193,7 @@ public class UserController {
      * bug。回一张新的, 当前会话无缝续上, 别处的旧 token 照常失效。前端要把 data.token
      * 存回去, 不存就等于自己把自己登出了。
      *
-     * <p>它**不在** SecurityConfig 的公开清单里(与 {@link #getReceivedReplies} 同一条
+     * <p>它**不在** SecurityConfig 的公开清单里(与 {@link #getNotifications} 同一条
      * 理由: 要改的是「我」的密码, 必须知道我是谁), 下面判空是兜底不是主防线。
      */
     @PutMapping("/password")

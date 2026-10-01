@@ -52,8 +52,12 @@ import static org.mockito.Mockito.when;
  */
 class ReviewLikeServiceTest {
 
+    /** 被赞的那条评论的作者。通知要送到他手上, 所以每条桩里的 Review 都得带上他 */
+    private static final Long AUTHOR_ID = 2L;
+
     private ReviewRepository reviewRepository;
     private ReviewLikeRepository reviewLikeRepository;
+    private NotificationService notificationService;
     private CountingInsert isolatedInsert;
     private ReviewLikeService reviewLikeService;
 
@@ -82,11 +86,23 @@ class ReviewLikeServiceTest {
     void setUp() {
         reviewRepository = mock(ReviewRepository.class);
         reviewLikeRepository = mock(ReviewLikeRepository.class);
+        // 通知那侧是替身: 这一组盯的是"赞"这条路径的分支, 通知有没有写、写在哪个事务里
+        // 由 NotificationWriteTest 管。但 like() 会去取评论作者的 id, 所以下面每条桩里
+        // 的 Review **必须带 user**, 否则是 NPE 而不是断言失败。
+        notificationService = mock(NotificationService.class);
         isolatedInsert = new CountingInsert();
-        reviewLikeService = new ReviewLikeService(reviewRepository, reviewLikeRepository, isolatedInsert);
-        // 默认: 评论存在, 计数读回来是 1
+        reviewLikeService = new ReviewLikeService(reviewRepository, reviewLikeRepository,
+                isolatedInsert, notificationService);
+        // 默认: 评论存在(带作者), 计数读回来是 1
+        when(reviewRepository.findByIdWithUser(any())).thenReturn(Optional.of(reviewWithAuthor()));
         when(reviewRepository.existsById(any())).thenReturn(true);
         when(reviewRepository.readLikeCount(any())).thenReturn(1L);
+    }
+
+    private static Review reviewWithAuthor() {
+        return Review.builder().id(7L).subjectId(200)
+                .user(User.builder().id(AUTHOR_ID).username("owner").build())
+                .build();
     }
 
     private static User user() {
@@ -98,7 +114,6 @@ class ReviewLikeServiceTest {
     @Test
     @DisplayName("点赞: 写一行赞 + 计数加一, 回 {liked=true, likeCount}")
     void likeWritesTheRowAndBumpsTheCounter() {
-        when(reviewRepository.getReferenceById(7L)).thenReturn(Review.builder().id(7L).build());
         when(reviewRepository.readLikeCount(7L)).thenReturn(1L);
 
         Map<String, Object> result = reviewLikeService.like(user(), 7L);
@@ -145,7 +160,9 @@ class ReviewLikeServiceTest {
     @Test
     @DisplayName("冲突后发现评论已被删: 报 404, 不假装点赞成功")
     void conflictBecauseTheReviewVanishedIsNotFound() {
-        when(reviewRepository.existsById(any())).thenReturn(true, false);
+        // 第一次(进 like 时)还在, 是 setUp 里那条 findByIdWithUser 给的;
+        // 冲突之后重问的那一次(existsById)才是不在
+        when(reviewRepository.existsById(any())).thenReturn(false);
         when(reviewLikeRepository.saveAndFlush(any(ReviewLike.class)))
                 .thenThrow(new DataIntegrityViolationException("fk_review_like_review"));
 
@@ -157,7 +174,7 @@ class ReviewLikeServiceTest {
     @Test
     @DisplayName("赞一条不存在的评论: 404, 而且一行都不写")
     void likingAMissingReviewIsNotFound() {
-        when(reviewRepository.existsById(any())).thenReturn(false);
+        when(reviewRepository.findByIdWithUser(any())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> reviewLikeService.like(user(), 7L))
                 .isInstanceOf(BusinessException.class)
@@ -243,8 +260,6 @@ class ReviewLikeServiceTest {
     @Test
     @DisplayName("点赞的两个写共用一个事务, 不是两次独立提交")
     void likeOpensExactlyOneTransaction() {
-        when(reviewRepository.getReferenceById(7L)).thenReturn(Review.builder().id(7L).build());
-
         reviewLikeService.like(user(), 7L);
 
         assertThat(isolatedInsert.calls)

@@ -44,13 +44,16 @@ public class ReviewLikeService {
     private final ReviewRepository reviewRepository;
     private final ReviewLikeRepository reviewLikeRepository;
     private final IsolatedInsert isolatedInsert;
+    private final NotificationService notificationService;
 
     public ReviewLikeService(ReviewRepository reviewRepository,
                              ReviewLikeRepository reviewLikeRepository,
-                             IsolatedInsert isolatedInsert) {
+                             IsolatedInsert isolatedInsert,
+                             NotificationService notificationService) {
         this.reviewRepository = reviewRepository;
         this.reviewLikeRepository = reviewLikeRepository;
         this.isolatedInsert = isolatedInsert;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -70,18 +73,23 @@ public class ReviewLikeService {
      * 而 catch 只能在这一层做, 见类注释。
      */
     public Map<String, Object> like(User user, Long reviewId) {
-        if (!reviewRepository.existsById(reviewId)) {
-            throw BusinessException.notFound("评论不存在");
-        }
+        // 读出来(带作者)而不是 existsById: 通知要送到**评论作者**手上, 而那是这条实体
+        // 上的一个字段。代价是这一条 SELECT 从"只判在不在"变成"取回整行", 换掉的是下面
+        // 那句 getReferenceById —— 一次查询换一次查询, 净支出为零。
+        // (为什么用 findByIdWithUser 而不是 findById: 见那个方法上的注释。)
+        Review review = reviewRepository.findByIdWithUser(reviewId)
+                .orElseThrow(() -> BusinessException.notFound("评论不存在"));
         try {
             isolatedInsert.attempt(() -> {
                 reviewLikeRepository.saveAndFlush(ReviewLike.builder()
-                        // 只写外键, 不把 Review 读出来: 存在性上面已经确认过,
-                        // getReferenceById 拿到的是代理, 不产生查询。
-                        .review(reviewRepository.getReferenceById(reviewId))
+                        .review(review)
                         .user(user)
                         .build());
                 reviewRepository.incrementLikeCount(reviewId);
+                // 在 attempt 之内、saveAndFlush 之后: 于是只有**真的插入成功**这一次才
+                // 会写通知, 而"已经赞过"撞唯一约束的那条幂等路径会直接跳到下面的 catch,
+                // 不会重复刷通知(见 NotificationService.onReviewLike)。
+                notificationService.onReviewLike(user, review.getUser().getId(), reviewId);
                 return null;
             });
         } catch (DataIntegrityViolationException e) {

@@ -38,28 +38,9 @@ public interface ReviewReplyRepository extends JpaRepository<ReviewReply, Long> 
                                   @Param("epoch") LocalDateTime epoch,
                                   Pageable pageable);
 
-    /**
-     * 「谁回复了我」: 我写的短评下面、**别人**发的回复, 最新的在前.
-     *
-     * <p>两个条件都不多余: {@code r.user.id = :userId} 是"我写的短评"(而不是"我发的
-     * 回复"), {@code rr.user.id <> :userId} 排掉自己回自己的 —— 不排的话, 每自己回一条
-     * 就会给自己发一条通知, 这个列表会迅速变成自己跟自己说话的流水账.
-     *
-     * <p>{@code JOIN FETCH rr.review} 在这里**必须做**: 列表每一项都要给出"是哪条番剧的
-     * 哪条评论", 而 {@code Review.user} 是 LAZY 的 —— 不过它指到的只是外键列, 判
-     * {@code r.user.id} 不产生查询. 真正要读出来的是 {@code subjectId}.
-     *
-     * <p>倒序这里用 {@code rr.id DESC} 而不是别处的 {@code ASC}: 这一条不是分页切片
-     * (它封顶 30 条, 见 {@code ReviewReplyService.MAX_RECEIVED_SHOWN}), 所以"并列时谁在前"
-     * 没有漏行风险, 按 id 倒序与"最新在前"的读法一致.
-     */
-    @Query("SELECT rr FROM ReviewReply rr JOIN FETCH rr.user JOIN FETCH rr.review r"
-            + " WHERE r.user.id = :userId AND rr.user.id <> :userId"
-            + " ORDER BY CASE WHEN rr.createdAt IS NULL THEN 1 ELSE 0 END ASC,"
-            + " COALESCE(rr.createdAt, :epoch) DESC, rr.id DESC")
-    List<ReviewReply> findReceivedReplies(@Param("userId") Long userId,
-                                          @Param("epoch") LocalDateTime epoch,
-                                          Pageable pageable);
+    // findReceivedReplies 原本在这里(V8)。V11 之后「我收到的回复」由通知表接管, 它
+    // 的列表查询在 NotificationRepository 里 —— 那条查询同时还装着"赞了我的评论"
+    // 与"赞了我的回复"两类, 而这三类共用一份"未读/排序/分页"的逻辑。
 
     /**
      * 带作者的回复(编辑与删除之后要把这一条回给前端, 也要判权限).

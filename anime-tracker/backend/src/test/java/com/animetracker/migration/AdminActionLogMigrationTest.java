@@ -146,6 +146,13 @@ class AdminActionLogMigrationTest {
      *
      * <p>先断一次主键在, 否则下面那条"没有外键"可能只是因为约束视图整个是空的
      * (查询写错表名、或者 H2 换了视图名), 而那种绿是最危险的一种.
+     *
+     * <p>⚠️ <b>约束类型串是 {@code 'FOREIGN KEY'} 而不是 {@code 'REFERENTIAL'}.</b>
+     * 后者是 JDBC 的 {@code DatabaseMetaData.getImportedKeys} 那一侧的词, H2 的
+     * {@code INFORMATION_SCHEMA.TABLE_CONSTRAINTS} 里没有这个取值 —— 写成它就永远查到
+     * 0 行, 于是这条用例<b>无条件通过</b>(写这条注释的当天实测过: 给表加上外键,
+     * 那一版仍然全绿)。真正的外键在 {@code REFERENTIAL_CONSTRAINTS} 里(那条视图用它
+     * 自己的 {@code DELETE_RULE}), 但"有几条"要在本视图上问。
      */
     @Test
     @DisplayName("admin_action_log 上一个外键都没有, 但有主键")
@@ -159,7 +166,7 @@ class AdminActionLogMigrationTest {
                 .as("对照: 这条查询本身认得出约束, 所以下面那个 0 才有意义")
                 .isEqualTo(1);
         assertThat(count(url, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
-                + "WHERE TABLE_NAME = 'ADMIN_ACTION_LOG' AND CONSTRAINT_TYPE = 'REFERENTIAL'"))
+                + "WHERE TABLE_NAME = 'ADMIN_ACTION_LOG' AND CONSTRAINT_TYPE = 'FOREIGN KEY'"))
                 .as("账本刻意不挂外键: CASCADE 会连处理记录一起抹掉, RESTRICT 会让正常删除失败")
                 .isZero();
     }

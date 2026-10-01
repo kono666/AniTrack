@@ -151,6 +151,24 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     int decrementReplyCount(@Param("id") Long id);
 
     /**
+     * 一条短评 + 它的作者.
+     *
+     * <p><b>为什么不是 {@code findById} 然后 {@code r.getUser().getId()}。</b> 那个写法
+     * 在多数情况下也能拿到 id —— 但拿到的是**懒加载代理上的 id**, 而这条路径上没有任何
+     * 环境事务(互动那三个 service 都刻意不带类级注解), 一旦 Hibernate 决定为了这个 id
+     * 去初始化代理, 撞上的就是 {@code LazyInitializationException}。同一个判断在
+     * {@link ReviewReplyRepository#findByIdWithUser} 那里已经写过一次, 这里照旧:
+     * 多读一行用户, 比在这条"点赞 / 回复"的热路径上赌"它不会初始化"便宜。
+     *
+     * <p>与 {@code findById} 一样是一次查询, 只是多一个 join —— 所以它不是一笔额外开销,
+     * 而是把"取回整行"这件事一次做完。
+     *
+     * <p>写通知要收件人的 id(评论作者), 这是它唯一的调用方。
+     */
+    @Query("SELECT r FROM Review r JOIN FETCH r.user WHERE r.id = :id")
+    Optional<Review> findByIdWithUser(@Param("id") Long id);
+
+    /**
      * 全部评论 + 作者(管理端).
      *
      * <p>同样是为了避免逐条加载作者. 管理端的分页留到 4.6 —— 这里的量级远小于
