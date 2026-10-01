@@ -45,10 +45,13 @@
 ### 2.2 把「规划」立起来
 
 - [x] `ROADMAP.md`（本文件）
-- [x] `CHANGELOG.md` —— 从 123 个提交提炼出 9 个版本
+- [x] `CHANGELOG.md` —— 从 123 个提交提炼出 **10 个版本**
+- [x] **Git tag**：`v0.1.0` … `v0.10.0` 已打到对应提交并推送（让「做完了」有边界）
 - [ ] **GitHub Issues** 接管「待办」：本文件写阶段，Issues 写可勾选的细项
 - [ ] **GitHub Milestones**：M1–M4 各一个，Issue 归属到里程碑
-- [ ] **Git tag**：给上面 9 个版本补上标签（让「做完了」有边界）
+
+> GitHub 的 **Releases**（带发版说明的那种）还没有建 —— tag 已经有了，Release 可以随时
+> 从 tag 生成。它和 Issues 一样需要网页操作或 `gh`。
 
 ### 2.3 完成标准
 
