@@ -9,8 +9,42 @@
     <div class="p-header">
       <div class="p-avatar-wrap">
         <div class="p-avatar">
-          <PhUserCircle :size="80" weight="fill" />
+          <!-- 有头像就显示图片, 没有就退回图标. `userStore.user?.avatar` 是后端
+               `user.avatar` 那一列 —— 它是一个**带版本号的 URL**(?v=...), 所以
+               换头像之后这个值本身就变了, 不需要在这里做任何缓存处理.
+               avatarBroken 兜的是"URL 在、图却是死的"(记录被删了之类): 那种情况下
+               这一格不该变成一个破图标记, 它原本只是"没有头像"而已. -->
+          <img
+            v-if="userStore.user?.avatar && !avatarBroken"
+            :src="userStore.user.avatar"
+            :alt="userStore.user?.username || '头像'"
+            class="p-avatar-img"
+            @error="avatarBroken = true"
+          />
+          <PhUserCircle v-else :size="80" weight="fill" />
         </div>
+        <div class="p-avatar-actions">
+          <button class="pa-btn" type="button" :disabled="avatarLoading" @click="pickAvatar">
+            {{ avatarLoading ? '上传中…' : (userStore.user?.avatar ? '更换' : '上传头像') }}
+          </button>
+          <button
+            v-if="userStore.user?.avatar"
+            class="pa-btn pa-btn-muted"
+            type="button"
+            :disabled="avatarLoading"
+            @click="handleDeleteAvatar"
+          >删除</button>
+        </div>
+        <!-- accept 与后端白名单**逐字对应**, 不含 webp: 后端 ImageIO 没有 WebP 解码器,
+             收进来也只会被拒. 两处不一致的表现是"文件选择框里能选中、上传后被拒",
+             那比一开始就选不中更让人困惑. -->
+        <input
+          ref="fileInput"
+          class="pa-file"
+          type="file"
+          accept="image/png,image/jpeg"
+          @change="handleAvatarPick"
+        />
       </div>
       <div class="p-info">
         <h1 class="p-name">{{ userStore.user?.username }}</h1>
@@ -138,7 +172,12 @@
           :class="{ 'pn-unread': !n.read }"
           @click="$router.push(`/anime/${n.subjectId}`)"
         >
-          <div class="pn-avatar">{{ (n.actorName || '?')[0] }}</div>
+          <!-- 头像: 有就用图, 没有就用名字首字母. 这一格是**32px 的圆**,
+               所以图必须是 cover 裁切 —— 不裁的话一张方图会被压扁成椭圆 -->
+          <div class="pn-avatar">
+            <img v-if="n.actorAvatar" :src="n.actorAvatar" :alt="n.actorName || ''" class="pn-avatar-img" />
+            <template v-else>{{ (n.actorName || '?')[0] }}</template>
+          </div>
           <div class="pn-body">
             <div class="pn-top">
               <span class="pn-name">{{ n.actorName }}</span>
@@ -218,7 +257,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { useNotificationStore } from '../stores/notification'
-import { getTrackingList, getOverallStats, saveTracking, getNotifications, markNotificationsRead, changePassword } from '../api'
+import { getTrackingList, getOverallStats, saveTracking, getNotifications, markNotificationsRead, changePassword, uploadAvatar, deleteAvatar } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
@@ -398,6 +437,82 @@ async function handleChangePassword() {
   pwdLoading.value = false
 }
 
+// ── 头像 ──
+
+/**
+ * 与后端 AvatarService 的两条硬约束同一份口径: 512KB、只收 png/jpeg。
+ *
+ * <p>后端那一份才是权威(它还会读文件头判尺寸、判真实格式), 这一份纯粹是为了省掉一次
+ * 白跑的往返 —— 传一张 5MB 的图上去、等它传完再被拒, 体验上差得很远。所以两处**故意**
+ * 没有任何"谁同步谁"的机制: 前端多拦一下不会坏数据, 少拦一下服务端仍然兜住。
+ *
+ * <p>这里判的是 `file.type` 而不是扩展名 —— 扩展名是文件名里的一段字, 可以随便写;
+ * 而 `file.type` 虽然也能伪造, 但它与后端第 2 关看的**是同一个东西**, 两边不会打架。
+ */
+const AVATAR_MAX_BYTES = 512 * 1024
+const AVATAR_TYPES = ['image/png', 'image/jpeg']
+
+const fileInput = ref(null)
+const avatarLoading = ref(false)
+/** 图挂了(URL 在、取不到图)时退回图标, 见模板里的注释 */
+const avatarBroken = ref(false)
+
+/** 什么都不做, 只把系统文件框弹出来 —— 真正的 `<input type="file">` 是藏着的 */
+function pickAvatar() {
+  fileInput.value?.click()
+}
+
+/** 返回一句给用户看的话, 通过则返回空串 */
+function checkAvatarFile(file) {
+  if (!AVATAR_TYPES.includes(file.type)) return '只支持 PNG 或 JPEG 格式的图片'
+  if (file.size > AVATAR_MAX_BYTES) return '图片不能超过 512KB'
+  return ''
+}
+
+async function handleAvatarPick(event) {
+  const file = event.target.files?.[0]
+  /* 先把 input 的值清掉再去上传. 不清的话"同一个文件选了第二次"不会触发 change
+     (值没变), 用户看到的是"点了没反应" —— 而重试一次正是这里最常见的动作(第一次
+     上传失败之后)。清掉 value 之后同一个文件也能再次触发。 */
+  event.target.value = ''
+  if (!file) return
+
+  const problem = checkAvatarFile(file)
+  if (problem) {
+    toast(problem, 'error')
+    return
+  }
+
+  avatarLoading.value = true
+  try {
+    const res = await uploadAvatar(file)
+    // 服务端回的地址(带 ?v= 版本号)写回 store, 于是这一页、导航栏、以及刷新之后的
+    // localStorage 里都是新地址
+    userStore.setAvatar(res.data.data.avatar)
+    // 上一张图加载失败留下的标记要清掉, 否则新图明明能读, 这一格还是显示图标
+    avatarBroken.value = false
+    toast('头像已更新', 'success')
+  } catch (e) {
+    // 走服务端的原话:「图片不能超过 512KB」「图片尺寸不能超过 2048×2048 像素」
+    // 这类只有它知道(它真的读了文件头)
+    toast(e.response?.data?.message || '头像上传失败，请重试', 'error')
+  }
+  avatarLoading.value = false
+}
+
+async function handleDeleteAvatar() {
+  avatarLoading.value = true
+  try {
+    await deleteAvatar()
+    userStore.setAvatar(null)
+    avatarBroken.value = false
+    toast('头像已删除', 'success')
+  } catch (e) {
+    toast('删除失败，请重试', 'error')
+  }
+  avatarLoading.value = false
+}
+
 // ── 通知 ──
 
 /**
@@ -497,6 +612,28 @@ async function loadProfile() {
 .p-header { display: flex; gap: 28px; max-width: 1000px; margin: -44px auto 0; padding: 0 32px; position: relative; z-index: 2; }
 .p-avatar-wrap { flex-shrink: 0; }
 .p-avatar { width: 96px; height: 96px; border-radius: 50%; background: var(--card); border: 4px solid var(--bg); box-shadow: 0 4px 24px rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; color: var(--primary); }
+/* 图片要自己再来一次 border-radius: 上面那个 50% 是给这层容器的, 而 scoped 样式
+   之下溢出不会被裁 —— 少了这一行, 头像是一张**方图**压在一个圆的描边环里, 四个
+   角露在环外面. (容器没写 overflow: hidden 是故意的: 那样会连描边一起裁掉.)
+   object-fit: cover 而不是 contain: 非正方形的图用 contain 会留出两条背景色的边,
+   而这一格是圆的, 留边看起来像图没加载完 */
+.p-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+/* 头像下面那两个小按钮. 宽度跟着头像那一列(96px), 于是它们与头像的左边缘对齐 */
+.p-avatar-actions { display: flex; gap: 6px; margin-top: 8px; }
+.pa-btn {
+  flex: 1; padding: 3px 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  border: 1px solid var(--card-border); background: var(--card); color: var(--text-secondary);
+  transition: all var(--transition);
+}
+.pa-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.pa-btn:disabled { opacity: .5; cursor: not-allowed; }
+/* 「删除」比「更换」低一档: 这两个按钮挨在一起, 同样醒目的话误点的代价不对等 */
+.pa-btn-muted { background: none; color: var(--text-muted); }
+/* 文件选择框本身永远不出现 —— 它由「上传头像/更换」那个按钮代点(programmatic
+   .click() 对隐藏元素同样有效). 不用 opacity/尺寸压零那一类: 那样元素仍在文档流里、
+   仍在 Tab 顺序上, 键盘用户会停在一个看不见的控件上, 而这里已经有了真的按钮 */
+.pa-file { display: none; }
 .p-info { flex: 1; padding-top: 48px; min-width: 0; }
 .p-name { font-size: 24px; font-weight: 800; color: var(--text); margin-bottom: 2px; }
 .p-email { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
@@ -575,7 +712,11 @@ async function loadProfile() {
   width: 32px; height: 32px; border-radius: 50%; background: var(--primary);
   color: var(--primary-foreground); display: flex; align-items: center;
   justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;
+  overflow: hidden;
 }
+/* 有头像时这一格换成图片; 没有时容器自己显示首字母. overflow: hidden 写在容器上
+   (而不是给 img 一个 border-radius) —— 这一格是 32px 的圆, 图片本身不一定是方的 */
+.pn-avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pn-body { flex: 1; min-width: 0; }
 .pn-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .pn-name { font-weight: 700; font-size: 13px; color: var(--text); }

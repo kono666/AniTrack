@@ -97,6 +97,31 @@ export const getCurrentUser = () => api.get('/user/me')
  */
 export const changePassword = (data) => api.put('/user/password', data)
 
+/**
+ * 上传/更换头像.
+ *
+ * <p><b>不设 Content-Type</b>: 传 FormData 时必须让**浏览器**自己写这个头, 因为
+ * multipart 的 boundary 是它生成的. 手写 {@code 'multipart/form-data'} 会得到一个
+ * 没有 boundary 的头, 服务端解析不出任何部分 —— 而报出来的错是"没有收到 file",
+ * 与真正的原因差得很远. (axios 1.x 传 FormData 时会主动删掉这个头, 这里不设是为了
+ * 让这条规矩在代码里看得见.)
+ *
+ * <p><b>超时单独放宽到 30 秒。</b> 实例默认是 10 秒, 那是按小 JSON 定的; 一张 512KB 的图
+ * 在弱网下(200KB/s)就要 2.5 秒, 上传方向的带宽往往还更窄. 用默认值的话, 用户看到的
+ * 是"传到一半就失败", 而重试一次往往又成功了 —— 最难查的那类问题.
+ *
+ * <p>响应里的 {@code data.avatar} 是新的地址(带 {@code ?v=} 版本号), 调用方要把它写回
+ * store, 否则页面上的头像要等下一次 {@code /api/user/me} 才会变.
+ */
+export const uploadAvatar = (file) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post('/user/avatar', form, { timeout: 30000 })
+}
+
+/** 删掉头像, 退回首字母/图标兜底. 幂等 —— 本来就没有头像时调它也不会报错. */
+export const deleteAvatar = () => api.delete('/user/avatar')
+
 // ========== Bangumi 番剧 ==========
 /** 搜索每页条数. 后端 limit 的上限是 50(BangumiController 的 @Max), 20 是本项目的口径;
  *  导出它是为了让 Search.vue 算「共几页」时用的是同一个数, 而不是自己再抄一份 20. */

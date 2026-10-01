@@ -55,7 +55,13 @@
              数字在下拉里是**真文本**, 读屏用户点开就念得出来, 不必在这里重复一遍。 -->
         <button class="nav-user-btn" :title="unread > 0 ? `${unread} 条未读通知` : ''" @click="toggleMenu">
           <span class="nav-avatar-wrap">
-            <PhUserCircle :size="22" weight="fill" class="nav-avatar" />
+            <img
+              v-if="userStore.user?.avatar"
+              :src="userStore.user.avatar"
+              :alt="userStore.user?.username || '头像'"
+              class="nav-avatar-img"
+            />
+            <PhUserCircle v-else :size="22" weight="fill" class="nav-avatar" />
             <span v-if="unread > 0" class="nav-dot" aria-hidden="true"></span>
           </span>
           <span class="nav-username">{{ userStore.user?.username }}</span>
@@ -68,7 +74,13 @@
         <Transition name="dropdown">
           <div v-if="menuOpen" class="nav-dropdown">
             <div class="dropdown-header">
-              <PhUserCircle :size="32" weight="fill" />
+              <img
+                v-if="userStore.user?.avatar"
+                :src="userStore.user.avatar"
+                :alt="userStore.user?.username || '头像'"
+                class="nav-avatar-img nav-avatar-img-lg"
+              />
+              <PhUserCircle v-else :size="32" weight="fill" />
               <div>
                 <div class="dropdown-name">{{ userStore.user?.username }}</div>
                 <div class="dropdown-role">{{ userStore.user?.role === 'ADMIN' ? '管理员' : '用户' }}</div>
@@ -320,6 +332,11 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 .nav-user-btn:hover { border-color: var(--primary); background: var(--card-hover); }
 .nav-avatar { color: var(--primary); flex-shrink: 0; }
+/* 有头像时占的是与上面那个 22px 图标**一样大**的一格 —— 尺寸不一致的话,
+   上传头像会让导航栏的高度跳一下, 而红点(绝对定位在 wrap 上)也会跟着挪位 */
+.nav-avatar-img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; display: block; flex-shrink: 0; }
+/* 下拉里的那一份与上面的图标(32)同尺寸 */
+.nav-avatar-img-lg { width: 32px; height: 32px; }
 /* 包一层只为给红点当定位参照 —— 头像本身是 svg, 直接往上绝对定位会连它的
    基线一起算进去。flex-shrink:0 从 .nav-avatar 挪到这里(现在被压缩的是这个
    盒子), 窄屏下用户名让位时头像不许被挤扁。 */

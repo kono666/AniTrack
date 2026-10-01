@@ -18,6 +18,20 @@ export const useUserStore = defineStore('user', () => {
     saveStoredUser(data)
   }
 
+  /**
+   * 只换头像地址, 别的一个字段都不动.
+   *
+   * <p>刻意**不**用 {@code setUser({ avatar })}: 那是整份替换, 会把 token、username、
+   * role 一起抹掉 —— 而 token 没了的表现是"换个头像就被登出了"。所以这里合并。
+   *
+   * <p>它同时也让 {@code localStorage} 里的那份跟着更新(走 setUser), 于是刷新页面后
+   * 头像仍然是新的 —— 少了这一步, 用户会看到"传完了、一刷新又变回去了"。
+   */
+  function setAvatar(url) {
+    if (!user.value) return
+    setUser({ ...user.value, avatar: url })
+  }
+
   function logout() {
     user.value = null
     clearStoredUser()
@@ -25,5 +39,5 @@ export const useUserStore = defineStore('user', () => {
 
   const token = computed(() => user.value?.token || null)
 
-  return { user, loggedIn, token, setUser, logout }
+  return { user, loggedIn, token, setUser, setAvatar, logout }
 })

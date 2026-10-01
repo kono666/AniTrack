@@ -112,7 +112,17 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET,
                                 "/api/review/*/likes",
                                 "/api/review/*/replies",
-                                "/api/reply/*/likes").permitAll()
+                                "/api/reply/*/likes",
+                                // 头像图也免登录, 理由与上面三条同类: 评论区、回复列表、
+                                // 通知列表都要显示它, 而那些地方未登录访客本来就看得见.
+                                // 漏掉这一条的**症状**正是这里的注释描述的: 访客看得见评论、
+                                // 却看不见评论者的头像 —— 那不是权限设计, 是漏配。
+                                //
+                                // 形状上它天然与写路径错开: 上传是 POST /api/user/avatar
+                                // (三段), 读是 GET /api/user/{id}/avatar(四段)。即便这样也
+                                // 照惯例写明 HttpMethod.GET —— 见上面那段"不带方法会把写也
+                                // 一起放行"的实测记录。
+                                "/api/user/*/avatar").permitAll()
                         // AI 对话对访客开放: 未登录时工具注册表只会放出公开工具, 不存在越权路径.
                         // 开放是因为「不用注册就能试」对作品展示很重要, 由限流负责成本兜底.
                         .requestMatchers(HttpMethod.POST,

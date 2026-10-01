@@ -6,19 +6,25 @@ import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.*;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
+import com.animetracker.service.AvatarService;
 import com.animetracker.service.NotificationService;
 import com.animetracker.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Duration;
 import java.util.*;
 
 /**
- * 用户自己的东西: 注册 / 登录取 token、自己的资料、自己的密码、自己的通知。
+ * 用户自己的东西: 注册 / 登录取 token、自己的资料、自己的密码、自己的通知、自己的头像。
  *
  * <p><b>类上的 {@code @Validated} 是通知列表那两个分页参数生效的前提</b> —— 参数级的
  * {@code @Min}/{@code @Max} 只在被它标注过的 bean 上装配, 少了它 {@code ?limit=100000}
@@ -34,12 +40,14 @@ public class UserController {
     private final UserService userService;
     private final AuthRateLimiter authRateLimiter;
     private final NotificationService notificationService;
+    private final AvatarService avatarService;
 
     public UserController(UserService userService, AuthRateLimiter authRateLimiter,
-                          NotificationService notificationService) {
+                          NotificationService notificationService, AvatarService avatarService) {
         this.userService = userService;
         this.authRateLimiter = authRateLimiter;
         this.notificationService = notificationService;
+        this.avatarService = avatarService;
     }
 
     /**
@@ -220,5 +228,75 @@ public class UserController {
         data.put("status", user.getStatus());
         data.put("createdAt", user.getCreatedAt());
         return ApiResponse.success(data);
+    }
+
+    /**
+     * 上传/更换自己的头像。
+     *
+     * <p><b>路径里没有用户 id, 也不该有</b> —— 换的是"我的"头像, 那个"我"只能从登录态
+     * 推出来。带 id 的版本会立刻多出一个要单独审的越权面(把别人的 id 填进来会怎样),
+     * 而它换不来任何东西。
+     *
+     * <p>校验与落库都在 {@link AvatarService#upload} 里, 四道关卡的顺序与理由写在那里。
+     * 这个类只负责"它挂在哪个地址上"与把失败映射成状态码。
+     *
+     * <p>响应里回的是**新的头像地址**(带 {@code ?v=} 版本号), 前端直接把它填进
+     * {@code <img src>} 就能立刻看到效果, 不必等下一次 {@code /api/user/me}。
+     */
+    @PostMapping("/avatar")
+    public ApiResponse<Map<String, Object>> uploadAvatar(@CurrentUser User user,
+                                                         @RequestParam("file") MultipartFile file) {
+        // 走不到这里: 本路径不在 SecurityConfig 的免登录名单里, 匿名请求在过滤器链上
+        // 就被拦成 401。下面判空是兜底(与 getUserInfo 同一个理由)。
+        if (user == null) {
+            throw BusinessException.unauthorized("未登录");
+        }
+        return ApiResponse.success("头像已更新", avatarService.upload(user, file));
+    }
+
+    /**
+     * 删除自己的头像, 退回默认(首字母/图标)。
+     *
+     * <p>幂等: 本来就没有头像时调它, 结果与调用前一致, 不是错误 —— 这个端点的心智是
+     * "把我变回默认", 而不是"删掉一条存在的记录"。
+     */
+    @DeleteMapping("/avatar")
+    public ApiResponse<Void> deleteAvatar(@CurrentUser User user) {
+        if (user == null) {
+            throw BusinessException.unauthorized("未登录");
+        }
+        avatarService.delete(user);
+        return ApiResponse.success("头像已删除", null);
+    }
+
+    /**
+     * 取某个用户的头像图片。**免登录**, 见 {@code SecurityConfig} 里带
+     * {@code HttpMethod.GET} 的那一组白名单。
+     *
+     * <p>为什么要免登录: 评论区、回复列表、通知列表都要显示头像, 而这些地方未登录访客
+     * 本来就看得见。漏配的症状与那组白名单注释里写的一模一样 ——
+     * <b>未登录访客看得见评论、却看不见评论者的头像</b>, 那不是权限设计, 是漏配。
+     *
+     * <p>回的是**字节**而不是一个重定向或一段 base64: 浏览器直接把它当图片渲染,
+     * 不经过 JS, 也就没有"一屏 20 个头像要解 20 段 base64"这种开销。
+     *
+     * <p><b>ETag 与 Cache-Control 是这一条的性能所在。</b> 头像在每一页里可能出现几十次,
+     * 而它几乎从不变 —— 没有缓存头, 每次翻页都要重下一遍。ETag 由上传时刻算出来
+     * (见 {@link AvatarService#etagOf}), 于是"变了没变"由它回答, {@code max-age}
+     * 只是把"没变"这段时间的往返也省掉。用户换头像时 URL 上的 {@code ?v=} 会变,
+     * 所以长 {@code max-age} 不会让人看到旧图。
+     *
+     * <p>没有头像就 404: 前端在 {@code avatar} 为 null 时本来就显示兜底图标、根本不发
+     * 这个请求, 所以 404 只会在手敲地址时出现, 它是最诚实的回答。
+     */
+    @GetMapping("/{userId}/avatar")
+    public ResponseEntity<byte[]> getAvatar(@PathVariable Long userId) {
+        return avatarService.find(userId)
+                .map(image -> ResponseEntity.ok()
+                        .contentType(MediaType.parseMediaType(image.contentType()))
+                        .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePublic())
+                        .eTag(AvatarService.etagOf(userId, image.updatedAt()))
+                        .body(image.bytes()))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 }

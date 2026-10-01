@@ -59,6 +59,29 @@ server:
   # 是批次 7 的 nginx 配置.
   forward-headers-strategy: native
 
+# 文件上传的上限.
+#
+# 这一段写在**基础配置**里(不属于任何 profile), 因为它是接口的契约, 不该随环境变 ——
+# dev 能传 5MB 而 prod 只能传 512KB 的话, "本地好的、线上坏了"就是必然。
+#
+# 收在 512KB 是因为这里唯一的用法是头像: 一张 512KB 的 PNG 已经是 1024×1024 级别的
+# 无损图, 再大对那个几十像素的圆形来说没有任何意义, 只是白占库、白占带宽。
+#
+# ⚠ 这个数**必须与 AvatarService.MAX_BYTES 同值**。两边不一致的两种坏法:
+#   · 这边更大 —— 上传永远先被 AvatarService 拒掉, 容器这一关一次都不会触发;
+#   · 这边更小 —— 用户收到的是容器抛的 MaxUploadSizeExceededException(已由
+#     GlobalExceptionHandler 映射成 400), 而 AvatarService 里那句更具体的提示
+#     ("至少 16×16 像素"之类)永远看不到。
+# 两处都在时, 这里只是"请求体太大, 连收都不用收完"这一层更早的拒绝。
+#
+# max-request-size 略大于 max-file-size: multipart 的分隔符、每个部分的头都要算进
+# 请求体, 两者写同一个数会让一张恰好 512KB 的图因为几十字节的开销被拒。
+spring:
+  servlet:
+    multipart:
+      max-file-size: 512KB
+      max-request-size: 1MB
+
 ---
 # ============================================================
 # DEV Profile: H2 文件数据库

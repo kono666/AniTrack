@@ -169,7 +169,10 @@
         <!-- Review list -->
         <div v-if="reviews.length > 0" class="review-list">
           <div v-for="r in reviews" :key="r.id" class="rv-item">
-            <div class="rv-avatar">{{ (r.username||'?')[0] }}</div>
+            <div class="rv-avatar">
+              <img v-if="r.avatar" :src="r.avatar" :alt="r.username || ''" class="rv-avatar-img" />
+              <template v-else>{{ (r.username||'?')[0] }}</template>
+            </div>
             <div class="rv-body">
               <div class="rv-top">
                 <span class="rv-username">{{ r.username }}</span>
@@ -229,7 +232,10 @@
                 <div v-else-if="!replyBox[r.id].list.length" class="rp-hint">还没有回复</div>
                 <div v-else class="rp-list">
                   <div v-for="p in replyBox[r.id].list" :key="p.id" class="rp-item">
-                    <div class="rp-avatar">{{ (p.username||'?')[0] }}</div>
+                    <div class="rp-avatar">
+                      <img v-if="p.avatar" :src="p.avatar" :alt="p.username || ''" class="rp-avatar-img" />
+                      <template v-else>{{ (p.username||'?')[0] }}</template>
+                    </div>
                     <div class="rp-body">
                       <div class="rp-top">
                         <span class="rp-username">{{ p.username }}</span>
@@ -947,7 +953,10 @@ onMounted(load)
 
 .review-list{ display:flex; flex-direction:column; }
 .rv-item{ display:flex; gap:12px; padding:16px 0; border-bottom:1px solid var(--border); }
-.rv-avatar{ width:36px; height:36px; border-radius:50%; background:var(--primary); color:var(--primary-foreground); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; flex-shrink:0; }
+.rv-avatar{ width:36px; height:36px; border-radius:50%; background:var(--primary); color:var(--primary-foreground); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; flex-shrink:0; overflow:hidden; }
+/* 有头像时这一格是图片, 没有时容器自己显示首字母. 裁成圆靠容器上的 overflow
+   —— 图片本身多半不是方的, 只给 img 加 border-radius 挡不住 36px 方框外的角 */
+.rv-avatar-img{ width:100%; height:100%; object-fit:cover; display:block; }
 .rv-body{ flex:1; min-width:0; }
 .rv-top{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
 .rv-username{ font-weight:700; font-size:13px; color:var(--text); }
@@ -1007,8 +1016,10 @@ onMounted(load)
 .rp-avatar{
   width:26px; height:26px; border-radius:50%; background:var(--tag-bg);
   color:var(--text-secondary); display:flex; align-items:center; justify-content:center;
-  font-weight:700; font-size:12px; flex-shrink:0;
+  font-weight:700; font-size:12px; flex-shrink:0; overflow:hidden;
 }
+/* 理由同 .rv-avatar-img */
+.rp-avatar-img{ width:100%; height:100%; object-fit:cover; display:block; }
 .rp-body{ flex:1; min-width:0; }
 .rp-top{ display:flex; align-items:center; gap:8px; margin-bottom:2px; }
 .rp-username{ font-weight:600; font-size:12px; color:var(--text); }

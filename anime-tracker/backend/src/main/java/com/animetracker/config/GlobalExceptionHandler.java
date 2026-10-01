@@ -2,6 +2,7 @@ package com.animetracker.config;
 
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.exception.BusinessException;
+import com.animetracker.service.AvatarService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -23,6 +24,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
@@ -154,6 +157,40 @@ public class GlobalExceptionHandler {
         log.debug("不支持的 Content-Type: {}", e.getContentType());
         return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
                 .body(ApiResponse.error(415, "请求内容类型不受支持, 本服务只接受 JSON"));
+    }
+
+    /**
+     * 上传的文件超过了 {@code spring.servlet.multipart.max-file-size}.
+     *
+     * <p><b>不登记这一条的话, 最常见的那个错误会变成 500。</b> 它在 multipart 解析阶段
+     * 抛出, 兜底处理器接走之后用户看到的是「服务器内部错误」——而真实原因是"图传大了
+     * 一点", 该改的是用户手上的文件, 不是服务端。同时每次都会往日志里写一条 ERROR,
+     * 把真正的异常淹掉(与上面 404、参数错那几条同一个道理)。
+     *
+     * <p>消息里带上限值: 用户唯一能采取的行动就是"换张小的", 不告诉他界限在哪,
+     * 他只能反复试。这个数字在 {@code application.yml} 与
+     * {@link com.animetracker.service.AvatarService#MAX_BYTES} 里各写了一份(必须同值,
+     * 理由见那个常量), 所以这里不写死 —— 从异常里读到的客户端声明大小反而是不可信的,
+     * 干脆只说规定。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUploadTooLarge(MaxUploadSizeExceededException e) {
+        log.debug("上传内容超过限制: {}", e.getMessage());
+        return badRequest("图片不能超过 " + (AvatarService.MAX_BYTES / 1024) + "KB");
+    }
+
+    /**
+     * multipart 请求本身是坏的 —— 少了那一部分({@code MissingServletRequestPartException})
+     * 或者报文格式不对({@code MultipartException} 的其余子类)。
+     *
+     * <p>与上面那条同一个理由: 不登记就掉进兜底变 500, 而它同样是调用方的问题。
+     * 典型触发是"POST 了 JSON 却没有带 file 那一部分", 那在小程序/Postman 里试接口时
+     * 非常容易发生。
+     */
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMultipart(MultipartException e) {
+        log.debug("multipart 请求不合法: {}", e.getMessage());
+        return badRequest("请选择一张图片后再上传");
     }
 
     /** 上面几个 400 共用: 统一的记录方式 + 统一的响应结构 */
