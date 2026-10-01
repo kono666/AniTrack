@@ -85,13 +85,7 @@ public class AdminTools implements ToolProvider {
                 .access(Access.ADMIN)
                 .executor((call, user) -> {
                     adminService.checkAdmin(user);
-                    List<Map<String, Object>> all = adminService.getAllReviews();
-
-                    Map<String, Object> out = new LinkedHashMap<>();
-                    out.put("total", all.size());
-                    out.put("returned", Math.min(all.size(), DETAIL_LIMIT));
-                    out.put("list", excerpt(all, DETAIL_LIMIT));
-                    return out;
+                    return reviewSample(DETAIL_LIMIT);
                 })
                 .build();
     }
@@ -140,8 +134,7 @@ public class AdminTools implements ToolProvider {
                     ToolViews.tagAnimeRows(heat);
                     out.put("heatRanking", heat);
 
-                    List<Map<String, Object>> reviews = adminService.getAllReviews();
-                    out.put("reviewSample", excerpt(reviews, 15));
+                    out.put("reviewSample", reviewSample(15));
 
                     Map<String, Object> users = summarizeUsers(adminService.getUserList());
                     out.put("userBreakdown", users);
@@ -151,6 +144,41 @@ public class AdminTools implements ToolProvider {
                     return out;
                 })
                 .build();
+    }
+
+    /**
+     * 评论样本: 最新的 N 条 + **真实的**总数.
+     *
+     * <p>改前这两处调的是 {@code adminService.getAllReviews()} —— 它把整张 review 表
+     * 读进 JVM 再截前 30 / 15 条, 而报出去的 {@code total} 是 {@code all.size()}:
+     * 那个数**只在取全表时才等于总数**。现在底层换成管理端分页那条, 总数由独立的
+     * count 查询给, 于是"一共有多少条"与"这次给了几条"第一次成为两件互不牵连的事。
+     *
+     * <p><b>为什么这两处可以走分页, 而 {@code list_users} 那两处不行。</b>
+     * 用户那两个工具要的是**全量构成**({@code byRole}/{@code byStatus} 是全体用户的
+     * 统计), 指到分页上会静默变成"最新 30 个人的构成"; 而这两个工具要的只是
+     * "最新 N 条 + 一个总数", 分页那条**恰好**就是它们要的 —— 语义一个字都不变,
+     * 少读的是一整张表。同一条判断在 {@code AdminService.getUserList} 的注释里
+     * 写的是另一半(为什么那个方法留着)。
+     *
+     * <p>返回的三个键({@code total} / {@code returned} / {@code list})与改前逐字相同,
+     * 所以消费这两处的提示词与卡片渲染都不用动。
+     */
+    private Map<String, Object> reviewSample(int limit) {
+        // 四个 null 依次是 keyword / rating / sort / order —— 全给 null 表示
+        // "不筛 + 后端的默认序(主键倒序, 也就是最新在前)". 刻意不在这里写死 "id"/"desc":
+        // 那是 AdminService 的私有常量, 抄一份过来就是同一个约定的第二处定义。
+        Map<String, Object> page = adminService.getReviewPage(null, null, null, null, 1, limit);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) page.get("list");
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("total", page.get("total"));
+        // returned 与 list 的长度恒等: excerpt 只截**正文**, 一行都不丢
+        out.put("returned", rows.size());
+        out.put("list", excerpt(rows, limit));
+        return out;
     }
 
     /** 截断评论正文, 只保留样本量的内容 */

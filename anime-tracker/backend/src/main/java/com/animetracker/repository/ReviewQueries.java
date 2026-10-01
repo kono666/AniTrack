@@ -100,4 +100,133 @@ final class ReviewQueries {
     static final String PAGE_CREATED_DESC = SELECT_PAGE + ORDER_CREATED_DESC;
 
     static final String PAGE_HOT_DESC = SELECT_PAGE + ORDER_HOT_DESC;
+
+    // ==================== 管理端(后台评论管理) ====================
+    //
+    // 上面的片段服务的是「某部番的评论区」, 下面这一组服务的是「全站评论的后台列表」.
+    // 两者有四条实质差别, 逐条写清楚, 因为看着很像、照着上面的写法抄会抄错.
+
+    /**
+     * 管理端取页: 全部评论 + 作者, 条件是**可选**的, 所以这条不带 WHERE.
+     *
+     * <p><b>差别一: {@code JOIN FETCH r.user} 必须带别名 {@code u}。</b>
+     * 上面那条 {@code SELECT_PAGE} 是不带别名的 —— 它的 WHERE 只用 {@code r.subjectId},
+     * 不需要引用用户的列, 所以别名没有用处。这条的关键词要
+     * {@code LOWER(u.username)}, 没有别名就只能写成 {@code r.user.username}: 那是
+     * <b>再拼一次 join</b>, 而 Hibernate 会不会把它复用成同一个 join 是**实现选择,
+     * 不是语言保证** —— 今天复用、换个版本多一条 join, 而两条 join 的语义在
+     * (对 {@code @ManyToOne}) 恰好等价, 所以错了也看不出来。
+     */
+    static final String SELECT_ADMIN = "SELECT r FROM Review r JOIN FETCH r.user u";
+
+    /**
+     * 关键词: 评论**正文**或作者名的包含匹配, 大小写不敏感。
+     *
+     * <p>不含番剧名 —— 那是拍板的选择({@code review.subject_id} 与 {@code anime}
+     * 之间连外键都没有, 要搜番剧名得先拿名字反查 id 再进这条, 是另一条查询)。
+     *
+     * <p>{@code content} 可空(用户可以不写字只打分), 与 {@code UserQueries} 里
+     * email 那半边同一条理由: {@code NULL LIKE ..} 求值为未知(按假处理), 这一行不会
+     * 被错误命中, 整条 WHERE 也不会因此挂掉 —— 第二个析取项为真就短路了。
+     */
+    static final String FILTER_KEYWORD =
+            "(:keywordPattern IS NULL"
+                    + " OR LOWER(r.content)  LIKE LOWER(:keywordPattern) ESCAPE '!'"
+                    + " OR LOWER(u.username) LIKE LOWER(:keywordPattern) ESCAPE '!')";
+
+    /**
+     * 评分档位: {@code [minRating, maxRating]} 闭区间, 两个一起给或一起不给。
+     *
+     * <p>界面上是一个三选一的下拉(差评 1–4 / 中评 5–7 / 好评 8–10)而不是
+     * 1~10 的十一个选项 —— 后者没人会去点。解析成区间是在 service 里做的
+     * ({@code AdminService.RatingBand}), 这里只认这两个数。
+     *
+     * <p>两个参数必须**同时**为空或同时有值: 只给 min 会变成"4 分以上"(把档位
+     * 变成开区间), 只给 max 变成"7 分以下" —— 而列表上分不出这是"我筛错了"还是
+     * "库里就这些"。所以 service 侧用一个 record 而不是两个各自可空的局部变量。
+     *
+     * <p>{@code rating} 是 V1 的 {@code NOT NULL}, 但这里的 {@code r.rating >= ..}
+     * 仍然写成受 {@code :minRating IS NULL} 保护的形式: 保护的是"不筛"这一件事,
+     * 不是 NULL 语义。
+     */
+    static final String FILTER_RATING_BAND =
+            "(:minRating IS NULL OR (r.rating >= :minRating AND r.rating <= :maxRating))";
+
+    /** 两个可选条件的合取. 给值才筛、不给就不筛, 理由同 {@code UserQueries.WHERE} */
+    static final String WHERE_ADMIN = " WHERE " + FILTER_KEYWORD + " AND " + FILTER_RATING_BAND;
+
+    /**
+     * <b>差别二: 六条排序都不需要 {@code CASE WHEN .. IS NULL} 那一段, 一条都不需要。</b>
+     *
+     * <p>上面那两条排序(以及 {@code UserQueries} 的四条)之所以要三段式, 唯一的原因是
+     * 它们排的 {@code created_at} <b>可空</b> —— 而 {@code ORDER BY x DESC} 时 NULL 排哪
+     * 两个库正好相反, 后面跟着 LIMIT/OFFSET, 序一变第 2 页就会混进第 1 页的行。
+     *
+     * <p>这里排的三个键<b>全都非空</b>: {@code id} 是主键,
+     * {@code like_count}/{@code reply_count} 是 V7/V8 建的 {@code NOT NULL DEFAULT 0}。
+     * 没有 NULL ⇒ 没有方言分歧 ⇒ 不需要 {@code :epoch} 参数。这是「默认排序选 id
+     * 而不是 created_at」换来的直接好处, 不是省事。
+     *
+     * <p><b>差别三: 第二键一律是 {@code r.id}, 方向与第一键**无关**、恒为 {@code DESC}。</b>
+     * 并列是常态(没人点过赞时整表并列), 没有第二键时两条相同查询的序不定, 而分页正是
+     * 在这个序上切片的。第二键的方向不跟着第一键翻: 它只是"打破并列"用的, 翻不翻它
+     * 都不影响正常排序的可见结果, 恒定反而让"第 2 页接不接得上第 1 页"这件事
+     * 在正序倒序下是同一条推理。
+     */
+
+    /** 默认序: 主键倒序. 见上面「时间列排序用的是 id」那段 */
+    static final String ORDER_ID_DESC = " ORDER BY r.id DESC";
+
+    /** 同上, 正序 */
+    static final String ORDER_ID_ASC = " ORDER BY r.id ASC";
+
+    /** 赞多的在前. {@code like_count} 非空, 见上面那条 */
+    static final String ORDER_LIKES_DESC = " ORDER BY r.likeCount DESC, r.id DESC";
+
+    /** 赞少的在前. 调这个序通常是为了找"没人理的评论" */
+    static final String ORDER_LIKES_ASC = " ORDER BY r.likeCount ASC, r.id DESC";
+
+    /** 回复多的在前 —— 一条挂着二十条回复的评论删掉, 带走的是一整串对话 */
+    static final String ORDER_REPLIES_DESC = " ORDER BY r.replyCount DESC, r.id DESC";
+
+    /** 同上, 正序 */
+    static final String ORDER_REPLIES_ASC = " ORDER BY r.replyCount ASC, r.id DESC";
+
+    // ==================== 拼好的管理端语句 ====================
+
+    static final String ADMIN_ID_DESC = SELECT_ADMIN + WHERE_ADMIN + ORDER_ID_DESC;
+    static final String ADMIN_ID_ASC = SELECT_ADMIN + WHERE_ADMIN + ORDER_ID_ASC;
+    static final String ADMIN_LIKES_DESC = SELECT_ADMIN + WHERE_ADMIN + ORDER_LIKES_DESC;
+    static final String ADMIN_LIKES_ASC = SELECT_ADMIN + WHERE_ADMIN + ORDER_LIKES_ASC;
+    static final String ADMIN_REPLIES_DESC = SELECT_ADMIN + WHERE_ADMIN + ORDER_REPLIES_DESC;
+    static final String ADMIN_REPLIES_ASC = SELECT_ADMIN + WHERE_ADMIN + ORDER_REPLIES_ASC;
+
+    /**
+     * 计数. 与上面六条共用同一份 {@link #WHERE_ADMIN} —— 分页与 total 不会各自漂移的原因。
+     *
+     * <p><b>差别四: 这条要自己带上 {@code JOIN r.user u}, 少一个别名就整个应用起不来。</b>
+     *
+     * <p>一开始这里写的是 {@code "SELECT COUNT(r) FROM Review r"} —— 想的是"HQL 会隐式
+     * join"。<b>不会。</b>隐式 join 只在把路径写成 {@code r.user.username} 时才发生, 而
+     * {@link #WHERE_ADMIN} 里那半句是 {@code u.username}: 一个从未声明过的别名,
+     * Hibernate 解析不了, 报
+     * {@code SemanticException: Could not interpret path expression 'u.username'} ——
+     * 而这条 {@code @Query} 是在**建仓 bean 时**校验的, 于是整个 ApplicationContext 起不来,
+     * 整个后端起不来。它不是"这条查询返回错结果", 是"应用根本启动不了"。
+     *
+     * <p><b>为什么 {@code AdminServiceReviewPageTest} 48 个用例全绿也没发现</b>: 那个类
+     * 里的 {@code reviewRepository} 是 Mockito 造的, {@code @Query} 文本根本不进解析器。
+     * 换句话说"单元测试全绿"在这里**一点保证都没有** —— 唯一守得住这条的是任何一条
+     * {@code @SpringBootTest}(它会在起上下文时炸)。这个常量改完必须跑一遍真上下文的用例。
+     *
+     * <p>内连接**不会丢行**: {@code review.user_id} 是 {@code NOT NULL} + 外键, 所以
+     * 不会出现"有评论但不计入总数"—— 那正是分页最常见的一种坏法(总数比实际少, 最后一页
+     * 永远差几条)。也正因为不会丢行, 这里用 {@code JOIN} 而不是 {@code LEFT JOIN}。
+     *
+     * <p>不带 fetch: COUNT 只数行, 不需要把用户实体取回来。
+     *
+     * <p>参数比取页那条少: 计数不需要排序, 也就没有 {@code :epoch} 那类参数。
+     * 与 {@code UserQueries.COUNT_USERS} 同一条说明。
+     */
+    static final String COUNT_ADMIN = "SELECT COUNT(r) FROM Review r JOIN r.user u" + WHERE_ADMIN;
 }

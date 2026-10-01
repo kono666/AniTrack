@@ -136,11 +136,37 @@ public class AdminController {
         return ApiResponse.success("密码已重置", null);
     }
 
-    /** 获取所有评论 */
+    /**
+     * 评论列表: 关键词 / 评分档位筛选 + 排序 + 分页.
+     *
+     * <p><b>返回值从 {@code ApiResponse<List<…>>} 变成了 {@code ApiResponse<Map<String,Object>>}
+     * —— 这是一次破坏性契约变更, 没有兼容窗口, 前后端同轮发布。</b> 与
+     * {@link #getUserList} 那次是同一件事: 裸数组装不下 total, 而分页控件要靠 total
+     * 算页数。改前这一页是"把整张表读进 JVM 再原样吐出来", 用户表两行时看不出问题,
+     * 真的几百条评论时它既不能搜、不能筛、不能排序, 而且每删一条都要把整张表重下一次。
+     *
+     * <p>四个筛选参数都 {@code required = false} 且**不做取值校验** —— 不在白名单里的
+     * {@code rating}/{@code sort}/{@code order} 由 service 当作默认值处理, 不返回 400
+     * (理由见 {@code AdminService.getUserPage} 的注释)。这里只校验分页数字: 越界的
+     * {@code limit} 是个**资源**问题(一次拉十万行), 而写错一个档位键不是。
+     *
+     * <p>{@code page}/{@code limit} 的默认值写在 {@code defaultValue} 上而不是靠
+     * {@code int} 的零值, 理由同 {@link #getUserList}: 少了它, 不带分页参数的请求会拿到
+     * {@code page=0}, 被 {@code @Min(1)} 拦成 400 —— 「不带参数」变成错误是说不通的。
+     */
     @GetMapping("/reviews")
-    public ApiResponse<List<Map<String, Object>>> getAllReviews(@CurrentUser User user) {
+    public ApiResponse<Map<String, Object>> getReviews(
+            @CurrentUser User user,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String rating,
+            @RequestParam(required = false) String sort,
+            @RequestParam(required = false) String order,
+            @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码从 1 开始") int page,
+            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页至少 1 条")
+            @Max(value = 100, message = "每页最多 100 条") int limit) {
         adminService.checkAdmin(user);
-        return ApiResponse.success(adminService.getAllReviews());
+        return ApiResponse.success(
+                adminService.getReviewPage(keyword, rating, sort, order, page, limit));
     }
 
     /** 删除评论 */

@@ -77,7 +77,9 @@ const routes = [
         path: 'reviews',
         name: 'AdminReviews',
         component: () => import('../views/admin/Reviews.vue'),
-        meta: { title: '评论管理' },
+        // 与 users 同一条理由: 这一页的搜索/筛选/排序/翻页现在也全写在 query 上,
+        // 改条件或翻页都不是"到了另一个地方", 回顶会把人从翻页条那里扔回最上面
+        meta: { title: '评论管理', scrollOnQueryChange: false },
       },
       {
         path: 'actions',

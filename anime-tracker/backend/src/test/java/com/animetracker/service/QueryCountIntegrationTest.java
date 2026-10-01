@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,11 +28,13 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
@@ -89,14 +92,45 @@ class QueryCountIntegrationTest {
     public static class SqlRecorder implements StatementInspector {
         private static final AtomicReference<String> LAST = new AtomicReference<>();
 
+        /** 最近若干条, 给 {@link #lastContaining} 用. 有上限, 免得整类跑下来无限长 */
+        private static final Deque<String> RECENT = new ConcurrentLinkedDeque<>();
+        private static final int RECENT_LIMIT = 64;
+
         @Override
         public String inspect(String sql) {
             LAST.set(sql);
+            RECENT.addLast(sql);
+            while (RECENT.size() > RECENT_LIMIT) {
+                RECENT.pollFirst();
+            }
             return sql;
         }
 
         static String last() {
             return LAST.get();
+        }
+
+        /**
+         * 最近这批语句里**最后一条包含 {@code needle} 的**.
+         *
+         * <p><b>为什么 {@link #last()} 在这条路上不够用。</b>一次 {@code getReviewPage}
+         * 发的不止一条语句: count、取页、以及**取页之后**还有一条给行补番剧名的批量查询
+         * (见 {@code AdminService.toAdminReviewRows})。所以 {@code last()} 拿到的是那条
+         * 批量查询, 不是取页 SQL —— 而取页 SQL 恰恰是这里唯一想看的东西。
+         * 页为空时没有那条批量查询, {@code last()} 又碰巧是对的: 断言于是变成
+         * "看这一页有没有数据" 才决定查的是哪条语句, 是最难查的那种假绿。
+         *
+         * <p>按内容挑而不是按序号挑: 序号要人去数"这次多发了哪一条", 而数错了的表现
+         * 是拿到一条别的语句去断言 —— 一条永远为真的断言。
+         */
+        static String lastContaining(String needle) {
+            String found = null;
+            for (String sql : RECENT) {
+                if (sql.contains(needle)) {
+                    found = sql;
+                }
+            }
+            return found;
         }
     }
 
@@ -484,22 +518,309 @@ class QueryCountIntegrationTest {
         }
     }
 
+    // ========== 管理端评论列表 ==========
+    //
+    // 这条路以前是 getAllReviews(): Pageable.unpaged(), 整张评论表进 JVM 再原样塞进
+    // 一个 JSON 数组, 而两个 AI 工具各取全表只为了截前 30 / 15 条. 改成分页之后
+    // 「一条语句取回全部」这个行为**没有了** —— 原来那条 adminReviewListCostsASingleQuery
+    // 钉的正是它, 所以它被下面这几条取代(而不是被"修正").
+
+    /** 灌 n 条评论, 番剧 id 各自不同 —— 番剧名那一次批量查询才有多个 id 可查 */
+    private void seedReviewsOnDistinctSubjects(int n) {
+        long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
+        for (int i = 0; i < n; i++) {
+            User author = userRepository.save(User.builder()
+                    .username("s" + UUID.randomUUID().toString().substring(0, 12))
+                    .password("x").role("USER").status("ACTIVE").build());
+            jdbc.update("INSERT INTO review (user_id, subject_id, rating, content, created_at) "
+                            + "VALUES (?, ?, ?, ?, ?)",
+                    author.getId(), SUBJECT_BASE + i, 8, "c" + i,
+                    new java.sql.Timestamp(base + i * 60_000L));
+        }
+    }
+
+    /** 取一页的行(只留 content, 断言里全是它在说话) */
+    @SuppressWarnings("unchecked")
+    private static List<String> contentsOfPage(Map<String, Object> page) {
+        return ((List<Map<String, Object>>) page.get("list")).stream()
+                .map(m -> (String) m.get("content")).toList();
+    }
+
+    /** 取一页的整行, 给"键在不在、值是什么"这类断言用 */
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> rowsOfPage(Map<String, Object> page) {
+        return (List<Map<String, Object>>) page.get("list");
+    }
+
     /**
-     * 管理端列表同样是 JOIN FETCH.
+     * 管理端评论列表一页 = <b>恰好 3 条</b>: count + 取页 + 番剧名批量.
      *
-     * <p>这条还顺带证明 {@code Pageable.unpaged()} 真的当"不分页"在用 —— 管理端的
-     * 分页留到 4.6, 现在必须把全部评论取回来, 一个不少.
+     * <p>第三条是这一页独有的: 行里要给 {@code animeTitle}, 而
+     * {@code review.subject_id} 与 {@code anime} 之间**没有外键**, 名字只能另查一次.
+     * 逐行查会变成 2+N, 所以把数字钉死在 3 才有意义 —— 与
+     * {@link #trackingListCostsTwoQueriesRegardlessOfRowCount} 是同一条道理.
+     *
+     * <p>参数化取两档页大小: 要防的回归是"有人在循环里又补一次查询", 那种改动会让
+     * 次数随着行数长上去, 而不是从 3 变成 4. 只测一个页大小的话, 恰好等于某个数字
+     * 也能过.
+     */
+    @ParameterizedTest(name = "每页 {0} 条")
+    @ValueSource(ints = {5, 20})
+    @DisplayName("管理端评论列表: 不论页大小都是 3 条语句(count + 取页 + 番剧名批量)")
+    void adminReviewPageCostsThreeQueriesRegardlessOfPageSize(int limit) {
+        seedReviewsOnDistinctSubjects(limit + 3);
+
+        long statements = statementsFor(
+                () -> adminService.getReviewPage(null, null, null, null, 1, limit));
+
+        assertThat(statements).as("每页 %d 条", limit).isEqualTo(3);
+    }
+
+    /**
+     * 番剧名那一格: 本地缓存过就给名字, 没缓存过就 <b>null</b>(不编一个假名字).
+     *
+     * <p>上面那条只数语句条数, 分辨不出"批量查了但按错的 id 去取值" —— 那一样是 3 条.
+     * 所以这里把两个分支都断出来: {@code review.subject_id} 与 {@code anime} 之间没有
+     * 外键, 那部番完全可能还没被拉进本地库, 而**"这个 id 对应的番剧还没进本地库"
+     * 本身就是真信息**, 前端靠它退化成「番剧 #656083」.
+     *
+     * <p>两条评论的 subject_id 刻意不同: 相同的话, "取到了名字"可能只是两行都撞上了
+     * 同一部番, 与那一行对不对得上无关.
      */
     @Test
-    @DisplayName("管理端评论列表: 1 次查询取回全部评论(含作者)")
-    void adminReviewListCostsASingleQuery() {
-        seedReviews(6);
+    @DisplayName("管理端评论列表: 缓存过的番给名字, 没缓存过的给 null(键必须在)")
+    void adminReviewRowsResolveTheAnimeTitlePerRow() {
+        seedReviewsOnDistinctSubjects(2);
+        jdbc.update("INSERT INTO anime (id, title, tags) VALUES (?, ?, ?)",
+                SUBJECT_BASE, "番0", "科幻");
 
-        List<Map<String, Object>> all = adminService.getAllReviews();
+        List<Map<String, Object>> rows = rowsOfPage(
+                adminService.getReviewPage(null, null, null, null, 1, 20));
 
-        assertThat(all).hasSize(6);
-        assertThat(all.get(0)).containsKeys("username", "userId", "subjectId");
-        assertThat(statementsFor(() -> adminService.getAllReviews())).isEqualTo(1);
+        assertThat(rows).hasSize(2);
+        // 键**必须都在**(哪怕值是 null): 少了这个键, 前端那一格走的是 undefined 分支,
+        // 而"没有这个键"与"这部番还没进本地库"在界面上长得一模一样
+        assertThat(rows).allSatisfy(r -> assertThat(r).containsKey("animeTitle"));
+        // 列表按主键倒序, 所以 c1(subject_id = BASE+1)在前
+        assertThat(rows.get(0)).containsEntry("content", "c1").containsEntry("animeTitle", null);
+        assertThat(rows.get(1)).containsEntry("content", "c0").containsEntry("animeTitle", "番0");
+    }
+
+    /**
+     * 越界页只发 <b>1</b> 条(count), 而且 total 仍是真实的匹配数.
+     *
+     * <p>⚠️ 计划里这笔账记的是"空页 = 2 条", 实测是 <b>1</b> 条:
+     * {@code offset >= total} 那道提前返回排在取页那条之前, 所以"取页"与"番剧名批量"
+     * 两条**都不会发出去** —— 与 {@link #outOfRangeUserPageOnlyRunsTheCount} 逐字同形.
+     * {@code toAdminReviewRows} 里那个空集合守卫因此不是这条用例的落点: 它在
+     * "count 时 offset 还够、真取页时那一页已被别人删空"的并发窗口下才够得着,
+     * 单线程测不到. 两处守卫都留着(一处省一次主键扫描, 一处是并发下的第二道),
+     * 但账要记对.
+     *
+     * <p>total 报真实值这一条不能省: 报 0 的话前端按 {@code ceil(total/limit)} 算出来的
+     * 翻页控件会凭空少几页, 用户从最后一页往回点就回不去了. 分页条是按 total 渲染的,
+     * 所以这也是"越界那一页还能点回第 1 页"的前提.
+     */
+    @Test
+    @DisplayName("管理端评论列表: 越界页只发 count 一条, total 仍是真实匹配数")
+    void outOfRangeReviewPageOnlyRunsTheCount() {
+        seedReviewsOnDistinctSubjects(3);
+        AtomicReference<Map<String, Object>> holder = new AtomicReference<>();
+
+        long statements = statementsFor(() -> holder.set(
+                adminService.getReviewPage(null, null, null, null, 9999, 20)));
+
+        assertThat((List<?>) holder.get().get("list")).isEmpty();
+        assertThat(holder.get().get("total")).isEqualTo(3);
+        assertThat(statements).as("取页与番剧名那两条根本不该发出去").isEqualTo(1);
+    }
+
+    /**
+     * 同一个关键词同时收窄 count 与取页 —— 两边必须是**同一份** WHERE.
+     *
+     * <p>计数那条若忘了带关键词, 结果是"共 3000 条评论"而列表里只有几条: 前端按那个
+     * 数字算出几十页, 翻过去每一页都是空的. 与
+     * {@link #keywordNarrowsBothTheCountAndTheRows} 是同一条.
+     */
+    @Test
+    @DisplayName("管理端评论列表: 关键词与评分档位同时作用于 total 与列表")
+    void adminReviewFiltersNarrowBothTheCountAndTheRows() {
+        seedReviewsForFiltering();
+
+        Map<String, Object> low = adminService.getReviewPage(null, "low", null, null, 1, 20);
+        Map<String, Object> keyword = adminService.getReviewPage("t1", null, null, null, 1, 20);
+        Map<String, Object> both = adminService.getReviewPage("t1", "high", null, null, 1, 20);
+
+        assertThat(low.get("total")).as("差评 1–4 只该收下前两条").isEqualTo(2);
+        assertThat(contentsOfPage(low)).containsExactly("t1", "t0");
+        assertThat(keyword.get("total")).isEqualTo(1);
+        assertThat(contentsOfPage(keyword)).containsExactly("t1");
+        // 两个条件必须**同时**生效(AND 而不是 OR): 用 OR 的话这条会是 3
+        assertThat(both.get("total")).as("t1 是中评, 落在好评档里就该是 0").isEqualTo(0);
+        assertThat(contentsOfPage(both)).isEmpty();
+    }
+
+    /**
+     * 正文是 {@code t0..t3}, 评分前两条是 3、后两条是 9.
+     *
+     * <p>正文刻意用字母 <b>t</b>: {@code seedReviews} 用的 {@code c0/c1} 里那个
+     * {@code c} <b>是十六进制字符</b>, 而本类灌的用户名都是 UUID 的十六进制片段 ——
+     * 关键词 {@code "c1"} 有可能在某个随机用户名里出现, 于是"命中 1 条"变成"命中 2 条",
+     * 而且只在运气不好的时候红. {@code t} 不在 {@code [0-9a-f]} 里, 择得干净.
+     */
+    private void seedReviewsForFiltering() {
+        long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
+        int[] ratings = {3, 3, 9, 9};
+        for (int i = 0; i < ratings.length; i++) {
+            User author = userRepository.save(User.builder()
+                    .username("f" + UUID.randomUUID().toString().substring(0, 12))
+                    .password("x").role("USER").status("ACTIVE").build());
+            jdbc.update("INSERT INTO review (user_id, subject_id, rating, content, created_at) "
+                            + "VALUES (?, ?, ?, ?, ?)",
+                    author.getId(), SUBJECT_BASE, ratings[i], "t" + i,
+                    new java.sql.Timestamp(base + i * 60_000L));
+        }
+    }
+
+    /**
+     * 六种排序: 各自给出**自己的那一页**, 而且三页拼起来一条不漏、一条不重.
+     *
+     * <p>语句条数分辨不出「切在数据库上」与「整表读回来再在内存里切」—— 都是 3 条.
+     * 只有"拿回来的是哪几条"能, 所以这里把每条排序的前两行都点名断言.
+     *
+     * <p>灌进去的赞数与回复数是**刻意打乱**的两组: 见 {@link #seedReviewsForSorting} 里
+     * 那张表. 三个键若彼此同序, 六种组合里会有一半给出同一个答案, 于是"排序真的换了"
+     * 就断言不出来 —— 按下面那张表, 六种组合的首页两行<b>两两不同</b>.
+     */
+    @ParameterizedTest(name = "{0} {1}")
+    @CsvSource({
+            // sort,    order, 首页两行,  第二页两行,  第三页两行
+            "id,       desc,  c5|c4,     c3|c2,      c1|c0",
+            "id,       asc,   c0|c1,     c2|c3,      c4|c5",
+            "likes,    desc,  c2|c4,     c0|c5,      c3|c1",
+            "likes,    asc,   c1|c3,     c5|c0,      c4|c2",
+            "replies,  desc,  c2|c0,     c4|c1,      c5|c3",
+            "replies,  asc,   c3|c5,     c1|c4,      c0|c2",
+    })
+    @DisplayName("管理端评论列表: 六种排序各自切在库上, 三页拼起来不重不漏")
+    void adminReviewSortsAreCutInTheDatabase(String sort, String order,
+                                             String first, String second, String third) {
+        seedReviewsForSorting();
+
+        List<String> page1 = contentsOfPage(
+                adminService.getReviewPage(null, null, sort, order, 1, 2));
+        List<String> page2 = contentsOfPage(
+                adminService.getReviewPage(null, null, sort, order, 2, 2));
+        List<String> page3 = contentsOfPage(
+                adminService.getReviewPage(null, null, sort, order, 3, 2));
+
+        assertThat(page1).as("%s %s 的第 1 页", sort, order).isEqualTo(split(first));
+        assertThat(page2).as("%s %s 的第 2 页", sort, order).isEqualTo(split(second));
+        assertThat(page3).as("%s %s 的第 3 页", sort, order).isEqualTo(split(third));
+        // 三页拼起来必须正好是那六行. 少了这个, 上面三条各自看都对, 而"第 2 页重复
+        // 了第 1 页的一行、另有一行永远看不到"照样能过 —— 那正是"在内存里切"与
+        // "在库里切"最容易被混淆的失效方式
+        assertThat(Stream.concat(page1.stream(), Stream.concat(page2.stream(), page3.stream())))
+                .hasSize(6).doesNotHaveDuplicates();
+    }
+
+    /**
+     * 生成的 SQL: 排序键是请求的那一列, 行数限制在库里做.
+     *
+     * <p>为什么必须看 SQL 文本: H2 上"排序对不对"能被上面的行序断言抓到, 但
+     * "切片在库上还是在内存里"抓不到 —— 两种写法返回的行一模一样. 只有
+     * {@code fetch first}(H2 对 {@code setMaxResults} 的渲染)能证明是库在切.
+     *
+     * <p>回复数那一列尤其要盯着: {@code ORDER BY like_count DESC} 写成
+     * {@code like_count} 而漏了 {@code reply_count} 不会报错, 只会让"按回复数排"
+     * 变成"按赞数排", 而且两者恰好都非空、都能排.
+     *
+     * <p><b>取语句用的是 {@code lastContaining("order by")} 而不是 {@code last()}</b>:
+     * 这一页非空, 取完之后还会为番剧名发一条批量查询, 于是 {@code last()} 拿到的是那条
+     * (理由写在 {@code SqlRecorder.lastContaining} 上)。这也是本用例第一条吃掉的红:
+     * 断言曾经打在一条 {@code from anime} 上.
+     *
+     * <p><b>⚠️ 不要断言 {@code "reply_count asc"} 这种带方向词的整串 —— 实测渲染出来是
+     * {@code order by r1_0.reply_count,r1_0.id desc}: Hibernate 把正序的 {@code asc}
+     * 省略了(它是默认方向), 只留了 {@code desc}。</b>于是那条断言测的不是"排序对不对",
+     * 而是"Hibernate 有没有把默认方向词写出来", 而且它红了之后最像"修好了"的改法是把
+     * 期望值改成 {@code reply_count desc} —— 一条永远为假的断言, 正序倒序它都觉得对.
+     *
+     * <p>所以这里拆成两问: 列对不对(有没有写错成 {@code like_count}), 方向对不对
+     * (正序时不出现 {@code reply_count desc}). 方向那半边其实是弱守卫 —— 真正管用的是
+     * 上面 {@code adminReviewSortsAreCutInTheDatabase} 的行序断言(它证明了正序真的升),
+     * 这里只是补一条"SQL 里确实是那一列".
+     */
+    @Test
+    @DisplayName("管理端评论列表的 SQL: 排序键是请求的那一列, 且带行数限制")
+    void adminReviewPageSqlNamesTheRequestedSortColumn() {
+        seedReviewsForSorting();
+
+        adminService.getReviewPage(null, null, "replies", "asc", 1, 2);
+        String sql = pageSql();
+        String orderBy = orderByClause(sql);
+
+        assertThat(orderBy).as("按回复数排. 写成 like_count 不会报错, 只会静默变成按赞数排")
+                .containsIgnoringCase("reply_count")
+                .doesNotContainIgnoringCase("like_count");
+        assertThat(orderBy).as("正序. Hibernate 省略冗余的 asc, 所以只能反过来断言")
+                .doesNotContainIgnoringCase("reply_count desc");
+        assertThat(orderBy).as("第二键是主键, 同值行才有一个稳定的序 —— 少了它翻页会重复/丢行")
+                .containsIgnoringCase("id desc");
+        assertThat(sql).as("分页必须是库做的, 不是读回来再切")
+                .containsIgnoringCase("fetch first");
+
+        adminService.getReviewPage(null, null, "likes", "desc", 1, 2);
+        assertThat(orderByClause(pageSql()))
+                .as("倒序时 desc 在位, 而且没有串到回复数那一列去")
+                .containsIgnoringCase("like_count desc")
+                .doesNotContainIgnoringCase("reply_count");
+    }
+
+    /** SQL 里 {@code order by} 后面的那一段; 没有就回空串(断言会红, 而不是 NPE) */
+    private static String orderByClause(String sql) {
+        int at = sql.toLowerCase(Locale.ROOT).lastIndexOf(" order by ");
+        return at < 0 ? "" : sql.substring(at + " order by ".length());
+    }
+
+    /** {@code "c5|c4"} → {@code ["c5", "c4"]} */
+    private static List<String> split(String csv) {
+        return List.of(csv.split("\\|"));
+    }
+
+    /**
+     * 灌 6 条评论, 让**主键 / 赞数 / 回复数**三者给出三个不同的序.
+     *
+     * <p>三个键同序的话, 六种排序组合里有一半会返回同一个答案, 于是那些用例变成
+     * 同一条用例(改错排序键也照样绿). 下面两张表是手排的, 目的只有一个:
+     * 六种组合各自的**前两行两两不同**.
+     *
+     * <pre>
+     * 行   like_count   reply_count
+     * c0      3            4
+     * c1      0            2
+     * c2      5            5
+     * c3      1            0
+     * c4      4            3
+     * c5      2            1
+     * </pre>
+     *
+     * <p>{@code created_at} 仍给递增的时刻(部分索引与"缺时间的行"无关, 但别的用例
+     * 共用同一张表, 留一个确定的形状省得互相干扰).
+     */
+    private void seedReviewsForSorting() {
+        int[] likes = {3, 0, 5, 1, 4, 2};
+        int[] replies = {4, 2, 5, 0, 3, 1};
+        long base = java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime();
+        for (int i = 0; i < likes.length; i++) {
+            User author = userRepository.save(User.builder()
+                    .username("k" + UUID.randomUUID().toString().substring(0, 12))
+                    .password("x").role("USER").status("ACTIVE").build());
+            jdbc.update("INSERT INTO review (user_id, subject_id, rating, content, created_at,"
+                            + " like_count, reply_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    author.getId(), SUBJECT_BASE, 8, "c" + i,
+                    new java.sql.Timestamp(base + i * 60_000L), (long) likes[i], (long) replies[i]);
+        }
     }
 
     // ========== 回复列表 ==========
@@ -1004,6 +1325,16 @@ class QueryCountIntegrationTest {
     /** 行数限制在 H2 方言里是 fetch first; 断言前把空白折平, 免得被换行/多空格绊倒 */
     private static String lastSqlNormalized() {
         return SqlRecorder.last().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * 管理端取页那一句 —— 按内容挑, 不是按"最后一条".
+     *
+     * <p>原因见 {@code SqlRecorder.lastContaining}: 取页之后还有一条补番剧名的批量查询,
+     * 而它才是那次调用里最后发出的语句.
+     */
+    private static String pageSql() {
+        return SqlRecorder.lastContaining("order by").replaceAll("\\s+", " ");
     }
 
     /**

@@ -51,15 +51,18 @@ const router = createRouter({
  * undefined、「暂无用户」那条断言会因为**错误的原因**变绿, 而真正的形状错误
  * (信封套错一层)要到线上没人点的时候才发现.
  */
-const ADMIN_USER_OK = { data: { code: 200, data: { list: [], total: 0, page: 1 } } }
+const ADMIN_PAGE_OK = { data: { code: 200, data: { list: [], total: 0, page: 1 } } }
 
 const PAGES = [
   { name: '仪表盘', component: Dashboard, api: () => getDashboard, empty: null,
     ok: { data: { code: 200, data: [] } } },
   { name: '用户管理', component: Users, api: () => getAdminUsers, empty: '暂无用户',
-    ok: ADMIN_USER_OK },
+    ok: ADMIN_PAGE_OK },
+  // 评论管理也是分页信封了(与用户管理同轮发布). 这里若继续给裸数组,
+  // `reviews.value` 会变成一个对象 —— `reviews.length` 是 undefined、
+  // 「暂无评论」那条断言因为**错误的原因**变绿, 而真正的形状错误要到线上才发现.
   { name: '评论管理', component: Reviews, api: () => getAdminReviews, empty: '暂无评论',
-    ok: { data: { code: 200, data: [] } } },
+    ok: ADMIN_PAGE_OK },
 ]
 
 function mountPage(component) {

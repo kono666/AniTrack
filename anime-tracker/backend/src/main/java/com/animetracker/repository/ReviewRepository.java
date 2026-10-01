@@ -168,12 +168,61 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     @Query("SELECT r FROM Review r JOIN FETCH r.user WHERE r.id = :id")
     Optional<Review> findByIdWithUser(@Param("id") Long id);
 
+    // ==================== 管理端评论列表 ====================
+    //
+    // 改前这里是**一条** findAllWithUser(Pageable): 无筛选、无排序参数、调用方一律传
+    // Pageable.unpaged(), 于是整张 review 表进 JVM 再原样塞进一个 JSON 数组。
+    // 那条方法连同它的调用方(AdminService.getAllReviews)这一轮一起删掉了 ——
+    // 留着它就是留一把「谁都能把整张评论表读进内存」的枪, 而它已经没有任何调用方。
+    //
+    // 现在的形状与 UserRepository 那五条一一对应: 一条计数 + 六条取页, 排序字面写在
+    // JPQL 里, 所以**下面每个方法的 Pageable 都不带 Sort**。
+
     /**
-     * 全部评论 + 作者(管理端).
+     * 匹配的评论条数(管理端). 与六条取页共用同一份 WHERE, 见 {@link ReviewQueries#COUNT_ADMIN}.
      *
-     * <p>同样是为了避免逐条加载作者. 管理端的分页留到 4.6 —— 这里的量级远小于
-     * 用户侧, 而先把 N+1 去掉是这次的目标.
+     * <p>参数没有 {@code :epoch} 之类: 计数不需要排序. 参数名的差异由 {@code ReviewQueries}
+     * 里两条语句各自声明, 不是漏写.
      */
-    @Query("SELECT r FROM Review r JOIN FETCH r.user ORDER BY r.createdAt DESC")
-    List<Review> findAllWithUser(Pageable pageable);
+    @Query(ReviewQueries.COUNT_ADMIN)
+    long countAdminReviews(@Param("keywordPattern") String keywordPattern,
+                           @Param("minRating") Integer minRating,
+                           @Param("maxRating") Integer maxRating);
+
+    /** 管理端取页, 默认序: 主键倒序(最新在前). 六条只差 ORDER BY 常量 */
+    @Query(ReviewQueries.ADMIN_ID_DESC)
+    List<Review> findAdminReviewPageByIdDesc(@Param("keywordPattern") String keywordPattern,
+                                             @Param("minRating") Integer minRating,
+                                             @Param("maxRating") Integer maxRating,
+                                             Pageable pageable);
+
+    @Query(ReviewQueries.ADMIN_ID_ASC)
+    List<Review> findAdminReviewPageByIdAsc(@Param("keywordPattern") String keywordPattern,
+                                            @Param("minRating") Integer minRating,
+                                            @Param("maxRating") Integer maxRating,
+                                            Pageable pageable);
+
+    @Query(ReviewQueries.ADMIN_LIKES_DESC)
+    List<Review> findAdminReviewPageByLikesDesc(@Param("keywordPattern") String keywordPattern,
+                                                @Param("minRating") Integer minRating,
+                                                @Param("maxRating") Integer maxRating,
+                                                Pageable pageable);
+
+    @Query(ReviewQueries.ADMIN_LIKES_ASC)
+    List<Review> findAdminReviewPageByLikesAsc(@Param("keywordPattern") String keywordPattern,
+                                               @Param("minRating") Integer minRating,
+                                               @Param("maxRating") Integer maxRating,
+                                               Pageable pageable);
+
+    @Query(ReviewQueries.ADMIN_REPLIES_DESC)
+    List<Review> findAdminReviewPageByRepliesDesc(@Param("keywordPattern") String keywordPattern,
+                                                  @Param("minRating") Integer minRating,
+                                                  @Param("maxRating") Integer maxRating,
+                                                  Pageable pageable);
+
+    @Query(ReviewQueries.ADMIN_REPLIES_ASC)
+    List<Review> findAdminReviewPageByRepliesAsc(@Param("keywordPattern") String keywordPattern,
+                                                 @Param("minRating") Integer minRating,
+                                                 @Param("maxRating") Integer maxRating,
+                                                 Pageable pageable);
 }

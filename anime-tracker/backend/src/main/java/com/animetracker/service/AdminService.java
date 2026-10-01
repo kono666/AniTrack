@@ -75,6 +75,39 @@ public class AdminService {
     private static final String ORDER_ASC = "asc";
     private static final String ORDER_DESC = "desc";
 
+    /**
+     * 评论列表的排序键白名单.
+     *
+     * <p><b>默认键是 {@code id}, 不是 {@code createdAt}。</b> 两者在界面上给的是同一个序
+     * (自增主键的顺序就是入库顺序), 但 {@code review.created_at} <b>可空</b> ——
+     * 按它排就得在 JPQL 里写「先分组 NULL + COALESCE + id 兜底」那三段式才让 H2 与 PG
+     * 给出同一个序, 而 {@code id} 是主键、永远非空, 那三段一段都不需要。
+     * 代价是 URL 上写的是 {@code sort=id}: 它是对外契约的一部分, 前端的列头因此
+     * 显示为「时间」而值是主键序(前端那一侧有一段注释说明这件事)。
+     */
+    private static final String SORT_ID = "id";
+    private static final String SORT_LIKES = "likes";
+    private static final String SORT_REPLIES = "replies";
+
+    /** 评论排序键的白名单 */
+    private static final Set<String> REVIEW_SORTS = Set.of(SORT_ID, SORT_LIKES, SORT_REPLIES);
+
+    /**
+     * 评分档位. 键 → {@code [min, max]} 闭区间.
+     *
+     * <p>三个档而不是 1~10 的十个值: 后台是一个下拉, 十个选项没人会去点, 而管理员
+     * 真正会做的判断只有「差评有哪些」。区间的边界(1–4 / 5–7 / 8–10)与前端下拉的
+     * 文案必须一致 —— 那三行是同一个约定的两处写法。
+     *
+     * <p>用 {@code Map.of} 而不是写三个 if: 键是 URL 直接带上来的字符串, 用 Map 查
+     * 就天然是"白名单"语义, 未知值拿到 null 当作不筛(读路径不报 400, 理由见
+     * {@link #getUserPage})。
+     */
+    private static final Map<String, RatingBand> RATING_BANDS = Map.of(
+            "low", new RatingBand(1, 4),
+            "mid", new RatingBand(5, 7),
+            "high", new RatingBand(8, 10));
+
     /** 分页参数的默认与上限. 上限与 {@code AdminController} 上的 {@code @Max} 必须同值 */
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
@@ -471,27 +504,156 @@ public class AdminService {
     // ========== 评论管理 ==========
 
     /**
-     * 获取所有评论列表.
+     * 管理端评论列表: 关键词 / 评分档位筛选 + 排序 + 分页.
      *
-     * <p>用 JOIN FETCH 一次把作者带回来: {@code Review.user} 是 LAZY 的, 而每一行
-     * 都要读作者名和 id —— 不 fetch 就是「有几条评论就查几次用户」. 评论越多越慢,
-     * 而这是管理端首页, 恰好是评论最多的那类库最常被打开.
+     * <p>骨架与 {@link #getUserPage} 逐条相同(夹取 page/limit → 先 count → long 偏移量
+     * 溢出保护 → 越界返回空页 → 取页), 那一段的注释已经把每条理由写过了, 这里只记
+     * 三处**不一样**的:
+     *
+     * <p><b>一、没有"已删除"这个维度。</b> 这一轮评论仍然是**硬删**(软删属于这条线的
+     * 第三个提交), 所以列表里出现的就是全部还在的评论, 不存在"要不要显示已删除"的
+     * 开关。等软删落地时, 那个开关加在这里, 而不是加在 SQL 的 WHERE 里偷偷过滤掉。
+     *
+     * <p><b>二、排序键没有"每列各自的自然首向"。</b> {@code id}/{@code likes}/{@code replies}
+     * 三列的自然首向**都是 desc**(最新在前、赞多的在前、回复多的在前), 于是
+     * {@link #isAscending} 那条"按列查表"的规则在这里塌缩成一句
+     * {@code ORDER_ASC.equals(order)}。前端"默认值不写进 URL"的规矩因此也只剩一个默认
+     * 组合(排序键本身除外), 不会出现"分享出去的链接点出来是反的"那种错。
+     *
+     * <p><b>三、行里多两样东西: 番剧名与回复数。</b> 前者要一次批量查询(见
+     * {@link #toAdminReviewRows}), 后者是 {@code review.reply_count} 这一列直接读出来的
+     * —— 改前前端就在渲染 {@code r.replyCount}, 而后端从来没发过这个键, 于是那一项
+     * **永不显示**。它不是新功能, 是一件"写了一半"的东西。
+     *
+     * @param keyword 关键词, 命中评论正文或作者名; 空白等于不筛
+     * @param rating  档位键 {@code low}/{@code mid}/{@code high}, 其他值等于不筛
+     * @param sort    {@code id}(默认) / {@code likes} / {@code replies}, 其他值等于默认
+     * @param order   {@code asc} / {@code desc}; 不认识或没给时一律 desc(见上面第二条)
      */
-    public List<Map<String, Object>> getAllReviews() {
-        List<Review> reviews = reviewRepository.findAllWithUser(Pageable.unpaged());
-        List<Map<String, Object>> result = new ArrayList<>();
+    public Map<String, Object> getReviewPage(String keyword, String rating, String sort, String order,
+                                             int page, int limit) {
+        String keywordPattern = keywordPatternOf(keyword);
+        RatingBand band = ratingBandOf(rating);
+
+        int safePage = Math.max(page, 1);
+        int safeLimit = limit < 1 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
+
+        // count 先算, 理由同 getUserPage: 越界页也要报真实 total, 否则前端的翻页控件
+        // 会凭空少几页, 用户从最后一页往回点就回不去了
+        long matched = reviewRepository.countAdminReviews(keywordPattern, band.min(), band.max());
+        int total = (int) Math.min(matched, Integer.MAX_VALUE);
+
+        long offset = (long) (safePage - 1) * safeLimit;
+        if (offset >= total || offset > PageResults.MAX_SQL_OFFSET) {
+            return PageResults.of(Collections.emptyList(), total, safePage);
+        }
+
+        Pageable pageable = PageRequest.of(safePage - 1, safeLimit);
+        boolean ascending = ORDER_ASC.equals(order);
+        // ⚠️ `sort == null` 那一半**不能省**, 也不能改成 `REVIEW_SORTS.contains(sort)` 一句:
+        // REVIEW_SORTS 是 Set.of 建的不可变集合, 而不可变集合的 contains(null) 抛
+        // NullPointerException(HashSet 返回 false)。少了它, 「不带 sort 参数的默认请求」
+        // —— 也就是**绝大多数请求**, 以及两个 AI 工具传 null 的那条路 —— 全部 500。
+        // ORDER_ASC.equals(order) 那行之所以没这个毛病, 是因为它是 String.equals, 天生吃 null。
+        // 同一个坑在 AdminActionLog.ACTIONS 上不存在, 只因为那里用的是 LinkedHashSet,
+        // 不能据此以为"本仓的 Set 都吃得下 null"。
+        String sortKey = (sort != null && REVIEW_SORTS.contains(sort)) ? sort : SORT_ID;
+
+        List<Review> rows;
+        if (SORT_REPLIES.equals(sortKey)) {
+            rows = ascending
+                    ? reviewRepository.findAdminReviewPageByRepliesAsc(
+                            keywordPattern, band.min(), band.max(), pageable)
+                    : reviewRepository.findAdminReviewPageByRepliesDesc(
+                            keywordPattern, band.min(), band.max(), pageable);
+        } else if (SORT_LIKES.equals(sortKey)) {
+            rows = ascending
+                    ? reviewRepository.findAdminReviewPageByLikesAsc(
+                            keywordPattern, band.min(), band.max(), pageable)
+                    : reviewRepository.findAdminReviewPageByLikesDesc(
+                            keywordPattern, band.min(), band.max(), pageable);
+        } else {
+            rows = ascending
+                    ? reviewRepository.findAdminReviewPageByIdAsc(
+                            keywordPattern, band.min(), band.max(), pageable)
+                    : reviewRepository.findAdminReviewPageByIdDesc(
+                            keywordPattern, band.min(), band.max(), pageable);
+        }
+        return PageResults.of(toAdminReviewRows(rows), total, safePage);
+    }
+
+    /**
+     * 评分档位解析出来的闭区间: {@code [min, max]}, 或者两个都为 null 表示不筛.
+     *
+     * <p>用一个小类型而不是两个各自可空的局部变量, 理由与 {@link StatusFilter} **逐字
+     * 相同**: 这两者必须同时有值或同时为空, 用两个变量表达迟早会出现"只有 min 没有 max"
+     * 这种半截条件 —— 而它在列表上表现为"筛出来的东西说不清是按什么筛的"。
+     * 一个 {@code Integer min} 为 null 而 {@code max} 不为 null 的状态在这里**表达不出来**,
+     * 这正是要的。
+     *
+     * <p>区间值是常量表里的那两个数, 不来自请求 —— 请求只带一个档位键, 越界的评分
+     * 因此不是一个可能的输入。
+     */
+    private record RatingBand(Integer min, Integer max) {
+        static final RatingBand NONE = new RatingBand(null, null);
+    }
+
+    /** 未知档位当成"不筛档位". 为什么读路径不报 400, 见 {@link #getUserPage} */
+    private static RatingBand ratingBandOf(String rating) {
+        if (rating == null) {
+            return RatingBand.NONE;
+        }
+        RatingBand band = RATING_BANDS.get(rating.trim().toLowerCase(Locale.ROOT));
+        return band == null ? RatingBand.NONE : band;
+    }
+
+    /**
+     * {@code Review} → 给管理端看的行, 顺带批量补上番剧名.
+     *
+     * <p><b>番剧名是一次 {@code findAllById} 拿回来的整页, 不是逐条查。</b> 形状照
+     * {@link #getAnimeHeatRanking}(同一个类里已经有的那种批量补全)。番剧名这一格
+     * 改前**根本不存在** —— 列表上只有一串裸的 {@code subjectId}, 管理员看不出这是
+     * 哪部番。
+     *
+     * <p><b>{@code animeTitle} 允许为 null。</b> {@code review.subject_id} 与 {@code anime}
+     * 之间**没有外键**, 本地也不一定缓存过那部番(番剧数据是按需从外部 API 拉进
+     * {@code anime} 表的)。查不到就给 null, 由前端退化成「番剧 #656083」——
+     * 编一个假名字比空着更糟, 而"这个 id 对应的番剧还没进本地库"本身是**真信息**。
+     *
+     * <p>空页提前返回, 于是那一次批量查询不会为一个空列表白跑一遍 —— 但**它并不是
+     * 越界页的那道防线**: {@link #getReviewPage} 里 {@code offset >= total} 的提前返回
+     * 排在取页之前, 越界页根本走不到这里(那里只发一条 count). 这个守卫够得着的是
+     * 另一种情况: count 那一刻 offset 还够、真去取页时那一页已被别人删空(并发下的
+     * 窗口), 单线程测不到. 两处都留着, 一处省一次主键扫描, 一处是并发下的第二道.
+     */
+    private List<Map<String, Object>> toAdminReviewRows(List<Review> reviews) {
+        if (reviews.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Integer> subjectIds = reviews.stream()
+                .map(Review::getSubjectId)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<Integer, Anime> byId = animeRepository.findAllById(subjectIds).stream()
+                .collect(Collectors.toMap(Anime::getId, a -> a, (a, b) -> a));
+
+        List<Map<String, Object>> result = new ArrayList<>(reviews.size());
         for (Review r : reviews) {
-            Map<String, Object> map = new HashMap<>();
+            Anime anime = byId.get(r.getSubjectId());
+            Map<String, Object> map = new LinkedHashMap<>();
             map.put("id", r.getId());
             map.put("subjectId", r.getSubjectId());
+            map.put("animeTitle", anime == null ? null : displayName(anime));
             map.put("username", r.getUser().getUsername());
             map.put("userId", r.getUser().getId());
             map.put("rating", r.getRating());
             map.put("content", r.getContent());
-            // 赞数: 管理端拿它判断"这条是不是该被处理的热评". 列在 review 表上, 读实体
-            // 就顺手带回来了, 不额外发查询(与评论列表那条走批量查询的理由不同 ——
-            // 那里是每行都要问一次"我赞过没有", 这里只是读同一行的列).
+            // 赞数与回复数: 管理端拿它们判断"这条是不是该被处理的热评".
+            // 两列都在 review 表上(V7/V8 建的非空冗余列), 读实体就顺手带回来了,
+            // 不额外发查询(与用户侧评论列表那条不同 —— 那里每行都要问一次"我赞过没有").
             map.put("likeCount", r.getLikeCount());
+            map.put("replyCount", r.getReplyCount());
             map.put("createdAt", r.getCreatedAt());
             result.add(map);
         }

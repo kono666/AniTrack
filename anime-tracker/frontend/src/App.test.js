@@ -18,7 +18,12 @@ vi.mock('./api', async (importOriginal) => {
     login: vi.fn(list),
     getDashboard: vi.fn(() => Promise.resolve({ data: { code: 200, data: {} } })),
     getAdminUsers: vi.fn(() => Promise.resolve({ data: { code: 200, data: [] } })),
-    getAdminReviews: vi.fn(list),
+    // 评论列表这一轮从裸数组换成了分页信封. 这条用例只断言外壳的元素同一性,
+    // 所以旧形状(裸数组)不会让它红 —— 页面会把 `body.list` 读成 undefined 再
+    // 退回空数组, 一切照常. 正因为不会红, 才要在这里就改成新形状: 留着旧形状
+    // 就是留一个"接口换了而这里没换"的哑弹.
+    getAdminReviews: vi.fn(() => Promise.resolve(
+      { data: { code: 200, data: { list: [], total: 0, page: 1 } } })),
     toggleUserStatus: vi.fn(list),
     setUserRole: vi.fn(list),
     unlockUser: vi.fn(list),

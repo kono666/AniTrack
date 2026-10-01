@@ -172,13 +172,16 @@ describe('scrollBehavior: 同 path 只换 query', () => {
     expect(scrollBehavior(users('/admin/users?page=2'), users('/admin/users'), null)).toBe(false)
   })
 
-  it('路由表里 /admin/users 确实带着这个标记', () => {
+  it('路由表里后台那两页列表都带着这个标记, 概览页没有', () => {
     // 上一条验的是 scrollBehavior 认这个标记; 这一条验的是**路由真的挂上了它**.
     // 少了这一条, 谁把 meta 里的 scrollOnQueryChange 删掉, 上面那条照样绿,
     // 而线上照旧回顶 —— 那正是这次加这条规则要修的东西
     expect(router.resolve('/admin/users').meta.scrollOnQueryChange).toBe(false)
-    // 对照: 另外两条后台路由没有这个标记, 不该被例外波及
+    // 评论管理页与用户管理页同一条理由, 同一轮加的(它的搜索/筛选/排序/翻页
+    // 也全写在 query 上). 这条**不是**顺手加的对照项: 漏挂在那里表现为
+    // "翻页后页面被扔回最上面", 而那正是这两页各自要找的东西
+    expect(router.resolve('/admin/reviews').meta.scrollOnQueryChange).toBe(false)
+    // 对照: 概览页没有这个标记, 不该被例外波及 —— 它没有 query 可言
     expect(router.resolve('/admin').meta.scrollOnQueryChange).toBeUndefined()
-    expect(router.resolve('/admin/reviews').meta.scrollOnQueryChange).toBeUndefined()
   })
 })

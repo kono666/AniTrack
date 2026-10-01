@@ -276,7 +276,12 @@ export const resetUserPassword = (targetUserId, newPassword) =>
  * 在前端做白名单校验。
  */
 export const getAdminActions = (params) => api.get('/admin/actions', { params })
-export const getAdminReviews = () => api.get('/admin/reviews')
+/**
+ * 评论列表. 参数全部可选, 值为 undefined 的键会被 axios 丢掉(同 getAdminUsers).
+ *
+ * 改前这个函数**一个参数都没有**, 后端也是 —— 一次拿回整张评论表.
+ */
+export const getAdminReviews = (params) => api.get('/admin/reviews', { params })
 export const adminDeleteReview = (reviewId) =>
   api.delete(`/admin/reviews/${reviewId}`)
 
