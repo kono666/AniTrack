@@ -55,9 +55,10 @@
 - [x] **Git tag**：`v0.1.0` … `v0.10.0` 已打到对应提交并推送（让「做完了」有边界）
 - [x] **GitHub Issues** 接管「待办」（2026-10-02）：本文件写阶段，Issues 写可勾选的细项
 - [x] **GitHub Milestones**：M1–M4 各一个已建，M1 的 6 条 Issue 已归属
+- [x] **GitHub Releases**：`v0.1.0` … `v0.10.0` 各一条（2026-10-02），正文取自 CHANGELOG 对应段落
 
-> GitHub 的 **Releases**（带发版说明的那种）还没有建 —— tag 已经有了，Release 可以随时
-> 从 tag 生成（10 个，发版说明直接用 CHANGELOG 里对应的段落）。
+> ⚠️ Release 的正文是**从 CHANGELOG 切出来的一份拷贝，不是引用** —— 以后改了 CHANGELOG，
+> 已经建好的 10 条 Release **不会跟着变**，要同步得手动改 Release。
 
 ### 2.3 完成标准
 
