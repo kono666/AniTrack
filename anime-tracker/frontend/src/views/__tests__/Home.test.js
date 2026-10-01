@@ -353,6 +353,46 @@ describe('首页「继续看」', () => {
   })
 
   /**
+   * 这一条钉的是一个真实根因, 不是边界情况。
+   *
+   * `anime.total_episodes` 来自 Bangumi 的 `total_episodes`, 而上游对绝大多数条目
+   * **填的就是 0**(2026-10-02 实测 29379 条里 29322 条). 改前这里直接拿它当分母, 于是
+   * `ProgressBar` 的 `v-if="total > 0"` 恒假 —— 首页「继续看」里九成九的卡片没有进度条,
+   * 只有碰巧声明值非 0 的那一两张有, 看上去像"随机坏掉".
+   *
+   * 现在声明值为 0 时退到本地收齐的条数(后端新带的 `episodeTotal`)。
+   */
+  it('声明总集数是 0(上游没公布)时, 退到本地收齐的条数, 进度条照画', async () => {
+    getContinueWatching.mockResolvedValue({
+      data: { data: [{ ...CONTINUE_ROW, totalEpisodes: 0, episodeTotal: 12 }] },
+    })
+
+    const wrapper = mountHome({ token: 'jwt' })
+    await flushPromises()
+
+    expect(wrapper.find('.pb-bar').exists()).toBe(true)
+    expect(wrapper.find('.pb-fill').attributes('style')).toContain('width: 42%')
+    expect(wrapper.find('.cw-card').text()).toContain('/ 共 12 集')
+
+    wrapper.unmount()
+  })
+
+  it('声明总集数有值时仍然用它, 不被本地条数压小', async () => {
+    // 犬夜叉这种: 声明 181, 本地真收齐 167。本地优先的话这里会显示「/ 共 167 集」
+    getContinueWatching.mockResolvedValue({
+      data: { data: [{ ...CONTINUE_ROW, progress: 5, totalEpisodes: 181, episodeTotal: 167 }] },
+    })
+
+    const wrapper = mountHome({ token: 'jwt' })
+    await flushPromises()
+
+    expect(wrapper.find('.cw-card').text()).toContain('/ 共 181 集')
+    expect(wrapper.find('.cw-card').text()).not.toContain('167')
+
+    wrapper.unmount()
+  })
+
+  /**
    * 这一条是「继续看**不写进** homeCache」的守卫, 而且只有第二次挂载才看得见.
    *
    * loadHome() 命中缓存时会在函数开头直接 return. 把继续看的请求挂在那个 return

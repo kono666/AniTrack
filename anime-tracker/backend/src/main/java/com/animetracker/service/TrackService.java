@@ -232,7 +232,18 @@ public class TrackService {
             if (a != null) {
                 map.put("animeTitle", a.getTitleCn() != null ? a.getTitleCn() : a.getTitle());
                 map.put("animeCover", a.getCoverUrl());
+                // 两个集数都发. **不是一个字段的两种写法, 别合并** —— 语义见 Anime 实体上那段:
+                // totalEpisodes 是条目接口的声明值, episodeTotal 是我们真收齐的条数.
+                //
+                // 为什么要多发 episodeTotal: 声明值在 Bangumi 上**绝大多数条目就是 0**
+                // (官方没公布总集数; 2026-10-02 实测 29379 条里 29322 条是 0), 于是前端拿它
+                // 当分母时 `v-if="total > 0"` 恒假 —— 首页与个人页的进度条对 99.8% 的番
+                // **整根不渲染**, 详情页的「超出总集数就封顶」也整个失效(0 是 falsy).
+                // 本地收齐的条数虽然与声明值不等(长篇上恒更小), 但它是唯一对得上的那个数,
+                // 所以在声明值缺位时由前端拿它兜底 —— 兜底的顺序(声明优先)写在
+                // 前端 utils/episodes.js 一处, 服务端这里只负责把两个数都送到.
                 map.put("totalEpisodes", a.getTotalEpisodes());
+                map.put("episodeTotal", a.getEpisodeTotal());
             }
 
             result.add(map);

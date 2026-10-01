@@ -37,9 +37,9 @@
             <!-- 本地没缓存过这部番时后端**不发** animeTitle 这个键(不是给个 null),
                  兜底文案与个人页保持一致 -->
             <div class="cw-title">{{ item.animeTitle || '番剧 #' + item.subjectId }}</div>
-            <ProgressBar :value="item.progress" :total="item.totalEpisodes" />
+            <ProgressBar :value="item.progress" :total="totalOf(item)" />
             <div class="cw-ep">
-              第 {{ item.progress || 0 }} 集<template v-if="item.totalEpisodes"> / 共 {{ item.totalEpisodes }} 集</template>
+              第 {{ item.progress || 0 }} 集<template v-if="totalOf(item)"> / 共 {{ totalOf(item) }} 集</template>
             </div>
           </div>
         </HorizontalScroll>
@@ -179,6 +179,7 @@ import PhStar from '@icons/PhStar.vue.mjs'
 import { getRanking, getCalendar, getContinueWatching } from '../api'
 import { useUserStore } from '../stores/user'
 import { loadErrorMessage } from '../utils/loadError'
+import { effectiveEpisodes } from '../utils/episodes'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
 import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
@@ -213,6 +214,14 @@ const visibleToday = computed(() =>
 /** 打开详情页. 首页三类卡片都用它 —— 同一段跳转原先在模板里写了 4 遍,
  *  补键盘支持时要写 12 遍, 这正是该收成一个函数的时候 */
 function open(id) { $router.push(`/anime/${id}`) }
+
+/** 「继续看」每张卡的分母(集数).
+ *
+ *  为什么不能直接用 `item.totalEpisodes`: 那是条目接口的**声明值**, 而 Bangumi 对
+ *  绝大多数条目填的就是 0(实测 29379 条里 29322 条), 于是 `ProgressBar` 的
+ *  `v-if="total > 0"` 恒假、进度条整根不画 —— 只有极少数几条才画得出来, 看上去
+ *  像"随机坏掉". 兜底与顺序写在 utils/episodes.js 一处。 */
+const totalOf = (item) => effectiveEpisodes(item.totalEpisodes, item.episodeTotal)
 
 /** 给人看的一行日期. 这里的「周三」是**显示用**的中文简写, 不是拿去匹配的键 ——
  *  匹配用的是 bgmWeekdayId(), 那是另一套写法, 理由见它上面那段 */

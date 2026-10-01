@@ -137,6 +137,31 @@ describe('个人页的统计口径与 +1 封顶', () => {
     await flushPromises()
     expect(saveTracking).toHaveBeenCalledWith(expect.objectContaining({ progress: 100 }))
   })
+
+  /**
+   * 声明总集数是 0 时, 进度条退到本地收齐的条数 —— 这条只改**显示**。
+   *
+   * 为什么需要: `total_episodes` 上游对绝大多数条目就是 0, 改前 `v-if="item.totalEpisodes"`
+   * 恒假, 追番列表里九成九的行**根本没有进度条**。
+   *
+   * ⚠️ 同时钉住「`+1` 的闸门不跟着改」: 那一页的本地条数来自库里的旧数据、这一页不刷新,
+   *    连载中的番只收到已播的 8 集时, 拿它禁用 `+1` 会把正常的「看下一集」挡掉。
+   *    所以这里 `progress=3 < 12`, 按钮**必须仍然可点**; 若哪天有人把 atLastEpisode
+   *    也改成读本地条数, 这条会红。
+   */
+  it('声明总集数是 0 时进度条退到本地条数, 但 +1 的闸门不动', async () => {
+    getTrackingList.mockResolvedValue({
+      data: { code: 200, data: [{ id: 8, subjectId: 108, animeTitle: '本地有条数', status: 'watching', progress: 3, totalEpisodes: 0, episodeTotal: 12 }] },
+    })
+    const wrapper = await mountProfile()
+
+    const card = wrapper.findAll('.p-card').find(c => c.text().includes('本地有条数'))
+    expect(card.find('.pc-progress').exists()).toBe(true)
+    expect(card.find('.pc-prog-text').text()).toBe('3/12')
+    expect(card.find('.pc-fill').attributes('style')).toContain('width: 25%')
+
+    expect(plusOneOf(wrapper, '本地有条数').attributes('disabled')).toBeUndefined()
+  })
 })
 
 /**

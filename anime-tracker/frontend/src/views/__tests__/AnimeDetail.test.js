@@ -69,6 +69,11 @@ const router = createRouter({
 
 const SUBJECT = { id: 7, nameCn: '某番', totalEpisodes: 12, images: { large: 'x.jpg' } }
 
+/** n 集剧集列表(那一排瓷砖). 形状抄 /episodes 的真响应 */
+const eps = n => Array.from({ length: n }, (_, i) => ({
+  id: 10000 + i, sort: i + 1, name: `Episode ${i + 1}`, nameCn: `第${i + 1}集`,
+}))
+
 async function mountDetail() {
   localStorage.setItem('anime_user', JSON.stringify({ id: 1, username: 'alice', token: 'jwt', role: 'USER' }))
   setActivePinia(createPinia())
@@ -182,6 +187,43 @@ describe('追番进度的封顶', () => {
     await flushPromises()
 
     expect(saveTracking).toHaveBeenCalledWith(expect.objectContaining({ progress: 999 }))
+  })
+
+  /**
+   * 声明总集数是 0 时, 上限退到**本页已取回的剧集条数** —— 就是那一排瓷砖的个数。
+   *
+   * 这条钉的是一个真实根因, 不是边界情况: `total_episodes` 来自 Bangumi 的
+   * `total_episodes`, 而上游对绝大多数条目**填的就是 0**(2026-10-02 实测 29379 条里
+   * 29322 条)。改前 `maxProgress = subject.totalEpisodes || 999` 一路退到 999 ——
+   * 封顶整个失效, 一部 12 集的番能把进度存成 18, 用户就是这么撞上的。
+   *
+   * ⚠️ 下面那条(声明值优先)是**这条的配对**: 光有兜底、没有优先级, 一个正在连载的番
+   *    只收到已播的 8 集时上限就会被压在 8 上, 反而挡住正常的「看到第 9 集」。
+   */
+  it('声明总集数是 0 时按本页取回的剧集条数封顶(12 集的番存不进 18)', async () => {
+    getAnimeDetail.mockResolvedValue({ data: { code: 200, data: { id: 7, nameCn: '某番', totalEpisodes: 0 } } })
+    getEpisodes.mockResolvedValue({ data: { code: 200, data: eps(12) } })
+    const wrapper = await mountDetail()
+    saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 11 } } })
+
+    await wrapper.find('.track-input-row input[type="number"]').setValue(18)
+    await wrapper.find('.d-btn-save').trigger('click')
+    await flushPromises()
+
+    expect(saveTracking).toHaveBeenCalledWith(expect.objectContaining({ progress: 12 }))
+  })
+
+  it('声明总集数有值时仍然用它 —— 连载中只收到已播的 8 集, 上限还是声明的 24', async () => {
+    getAnimeDetail.mockResolvedValue({ data: { code: 200, data: { id: 7, nameCn: '某番', totalEpisodes: 24 } } })
+    getEpisodes.mockResolvedValue({ data: { code: 200, data: eps(8) } })
+    const wrapper = await mountDetail()
+    saveTracking.mockResolvedValue({ data: { code: 200, data: { id: 11 } } })
+
+    await wrapper.find('.track-input-row input[type="number"]').setValue(20)
+    await wrapper.find('.d-btn-save').trigger('click')
+    await flushPromises()
+
+    expect(saveTracking).toHaveBeenCalledWith(expect.objectContaining({ progress: 20 }))
   })
 })
 

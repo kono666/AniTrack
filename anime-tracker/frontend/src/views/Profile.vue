@@ -128,9 +128,9 @@
               <span class="pc-type" v-if="item.animeType">{{ item.animeType }}</span>
               <span class="pc-year" v-if="item.animeYear">{{ item.animeYear }}</span>
             </div>
-            <div class="pc-progress" v-if="item.totalEpisodes">
+            <div class="pc-progress" v-if="totalOf(item)">
               <div class="pc-bar"><div class="pc-fill" :style="{ width: pct(item) + '%' }"></div></div>
-              <span class="pc-prog-text">{{ item.progress || 0 }}/{{ item.totalEpisodes }}</span>
+              <span class="pc-prog-text">{{ item.progress || 0 }}/{{ totalOf(item) }}</span>
             </div>
           </div>
           <div class="pc-actions" @click.stop>
@@ -265,6 +265,7 @@ import { useUserStore } from '../stores/user'
 import { useNotificationStore } from '../stores/notification'
 import { getTrackingList, getOverallStats, saveTracking, getNotifications, markNotificationsRead, changePassword, uploadAvatar, deleteAvatar } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
+import { effectiveEpisodes } from '../utils/episodes'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
 import PhUserCircle from '@icons/PhUserCircle.vue.mjs'
@@ -349,9 +350,24 @@ function fmtDate(d) {
 }
 
 function pct(item) {
-  if (!item.totalEpisodes) return 0
-  return Math.min(100, Math.round(((item.progress || 0) / item.totalEpisodes) * 100))
+  const total = totalOf(item)
+  if (!total) return 0
+  return Math.min(100, Math.round(((item.progress || 0) / total) * 100))
 }
+
+/**
+ * 这一行的分母(集数). 只用于**显示**(进度条与 "N/M" 文字).
+ *
+ * 为什么不能直接用 `item.totalEpisodes`: 那是条目接口的声明值, 而 Bangumi 对绝大多数
+ * 条目填的就是 0(实测 29379 条里 29322 条), 于是 `v-if="item.totalEpisodes"` 恒假,
+ * 追番列表里**九成九的行根本没有进度条**。兜底与顺序写在 utils/episodes.js 一处。
+ *
+ * ⚠️ 下面 `nextProgress` / `atLastEpisode` **刻意不跟着改**, 仍然读 `item.totalEpisodes`:
+ *  它们是「+1」的闸门(拦截输入), 而这里的本地条数来自库里的旧数据、这一页不刷新 ——
+ *  连载中的番只收到已播的 8 集时, 拿它当上限会把正常的「看下一集」挡掉。
+ *  详情页不一样: 它每次打开都回源刷新剧集列表, 所以那边的封顶用这个数。
+ */
+const totalOf = (item) => effectiveEpisodes(item.totalEpisodes, item.episodeTotal)
 
 /** 下一集的集数, 封顶在总集数.
  *  总集数未知(后端没给)时不封顶 —— 那种情况下任何上限都是我们编的.
