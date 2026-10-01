@@ -2,8 +2,10 @@ package com.animetracker.controller;
 
 import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
+import com.animetracker.dto.RequestDTO.ResetPasswordRequest;
 import com.animetracker.entity.User;
 import com.animetracker.service.AdminService;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import org.springframework.validation.annotation.Validated;
@@ -87,9 +89,9 @@ public class AdminController {
      * 把当前登录的管理员一起传下去, 是为了让「不能改自己的角色」这条规则有判断依据 ——
      * 在 service 里拿不到登录态, 只能由这里递进去.
      *
-     * 另外三个破坏性动作(toggle / unlock / deleteReview)现在也照这个形状把 actor 递下去,
-     * 理由从「判断依据」变成了「账本要记是谁按的」。四个一起看: 凡是改动了别人数据的动作,
-     * service 都必须拿到操作者。
+     * 另外四个破坏性动作(toggle / unlock / resetPassword / deleteReview)现在也照这个形状
+     * 把 actor 递下去, 理由从「判断依据」变成了「账本要记是谁按的」。五个一起看: 凡是改动了
+     * 别人数据的动作, service 都必须拿到操作者。
      */
     @PutMapping("/users/{targetUserId}/role")
     public ApiResponse<Void> setUserRole(
@@ -112,6 +114,26 @@ public class AdminController {
         adminService.checkAdmin(user);
         adminService.unlockUser(user, targetUserId);
         return ApiResponse.success("账号已解锁", null);
+    }
+
+    /**
+     * 重置某个用户的密码.
+     *
+     * <p>用 PUT 而不是 POST: 它把「这个人的密码」设成一个确定的新值, 重复调用结果相同
+     * (幂等), 与 {@link #unlockUser} 同一条理由。
+     *
+     * <p><b>没有 {@code oldPassword} 参数, 这是刻意的</b> —— 管理员是在用户拿不出旧密码
+     * 时替他换一把, 要求管理员知道旧密码这个东西就没有意义了。代价靠 service 那侧的两条
+     * 约束抵掉: 必须记一条 {@code USER_PASSWORD_RESET} 的账, 且不能用来重置自己
+     * (理由见 {@code AdminService.resetPassword})。
+     */
+    @PutMapping("/users/{targetUserId}/password")
+    public ApiResponse<Void> resetPassword(@CurrentUser User user,
+                                           @PathVariable Long targetUserId,
+                                           @Valid @RequestBody ResetPasswordRequest req) {
+        adminService.checkAdmin(user);
+        adminService.resetPassword(user, targetUserId, req.getNewPassword());
+        return ApiResponse.success("密码已重置", null);
     }
 
     /** 获取所有评论 */

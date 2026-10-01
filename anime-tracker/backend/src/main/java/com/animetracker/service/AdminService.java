@@ -15,6 +15,7 @@ import com.animetracker.util.SearchPatterns;
 import com.animetracker.util.TextSnippet;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -32,12 +33,12 @@ import java.util.stream.Collectors;
  *   <li>读路径({@link #getUserPage} / {@link #getDashboard} 等)本来就不需要事务.</li>
  * </ul>
  * 需要「多个写同生共死」的地方, 用 {@link IsolatedInsert#attempt} 显式圈出那一段 ——
- * 本类的四个破坏性动作都是这个形状(动作 + 记账)。
+ * 本类的五个破坏性动作都是这个形状(动作 + 记账)。
  *
- * <p><b>四个破坏性动作都必须留下一条账。</b> 这条不变式的落点是 {@link #recordAction}:
+ * <p><b>五个破坏性动作都必须留下一条账。</b> 这条不变式的落点是 {@link #recordAction}:
  * 它没有 actor 就抛 403, 于是「有动作、没账本」在结构上不可能出现。别把记账挪到
  * controller 去 —— 那样「service 成功了、记账抛了」就变成一次无痕的封禁, 而且将来
- * 从 Agent 工具或别的入口调这四个方法时, 那条路径会绕过账本。
+ * 从 Agent 工具或别的入口调这五个方法时, 那条路径会绕过账本。
  */
 @Service
 public class AdminService {
@@ -93,19 +94,22 @@ public class AdminService {
     private final AnimeRepository animeRepository;
     private final AdminActionLogRepository adminActionLogRepository;
     private final IsolatedInsert isolatedInsert;
+    private final PasswordEncoder passwordEncoder;
 
     public AdminService(UserRepository userRepository,
                         ReviewRepository reviewRepository,
                         TrackingRepository trackingRepository,
                         AnimeRepository animeRepository,
                         AdminActionLogRepository adminActionLogRepository,
-                        IsolatedInsert isolatedInsert) {
+                        IsolatedInsert isolatedInsert,
+                        PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
         this.reviewRepository = reviewRepository;
         this.trackingRepository = trackingRepository;
         this.animeRepository = animeRepository;
         this.adminActionLogRepository = adminActionLogRepository;
         this.isolatedInsert = isolatedInsert;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /** 校验管理员身份 */
@@ -410,6 +414,56 @@ public class AdminService {
             userRepository.save(target);
             recordAction(actor, AdminActionLog.USER_ROLE, AdminActionLog.TARGET_USER, target.getId(),
                     "把用户 " + target.getUsername() + " 的角色从 " + from + " 改为 " + role);
+            return null;
+        });
+    }
+
+    // ========== 重置密码 ==========
+
+    /**
+     * 管理员替某个用户重置密码.
+     *
+     * <p><b>为什么不验旧密码。</b> 这正是「重置」与「修改」的分界: 用户自己改要走
+     * {@code UserService.changePassword} 并验旧密码, 因为那条路只凭一张 token 就能进;
+     * 管理员这条路是**管理权限**授权的, 而它的使用场景恰恰是用户拿不出旧密码的时候
+     * (忘了、或者账号被盗需要夺回)。要求管理员知道旧密码, 这个功能就没有存在意义了。
+     *
+     * <p>代价是这个端点很重, 所以它有两道约束:
+     * <ul>
+     *   <li><b>必须记账</b> —— 它不改变权限, 却是唯一一个能把人挡在门外的非权限动作:
+     *       重置之后那个人手上所有 token 立刻作废, 而能不能再进来取决于有没有人
+     *       把新密码告诉他。滥用它的后果与封禁接近;</li>
+     *   <li><b>不能重置自己</b> —— 自己走用户侧那条(要验旧密码)。这既是防呆, 也让
+     *       「管理员能不能绕过旧密码校验改掉自己的密码」这个问题根本不存在, 少一条
+     *       需要论证的路径。</li>
+     * </ul>
+     *
+     * <p>密码强度校验不在这里做: {@code ResetPasswordRequest} 上的 {@code @Size} +
+     * {@code @Pattern} 已经在校验层拦过一道, 且那两个注解引用的是 {@code PasswordPolicy}
+     * 的常量 —— 从这里再抄一份判断, 就会出现两处阈值各自演化的裂缝。
+     *
+     * <p>走 {@code IsolatedInsert} 而不是 {@code @Transactional}: 「改密 + 记账」是两次写,
+     * 必须同生共死(理由见类注释)。少了记账这件事不会有人发现, 而它正是这个动作最该
+     * 留下的东西。
+     */
+    public void resetPassword(User actor, Long targetUserId, String newPassword) {
+        isolatedInsert.attempt(() -> {
+            User target = userRepository.findById(targetUserId)
+                    .orElseThrow(() -> BusinessException.notFound("用户不存在"));
+
+            if (actor != null && actor.getId() != null && actor.getId().equals(target.getId())) {
+                throw BusinessException.badRequest("请使用个人中心的修改密码");
+            }
+
+            target.setPassword(passwordEncoder.encode(newPassword));
+            // 与 UserService.changePassword 同一件事、同一理由: 写密码和写时刻分开就没有
+            // 意义了 —— 只改密码不记时刻, 被盗账号上那张旧 token 会一直活到 7 天过期,
+            // 而「强制重置」要的正是把它掐掉
+            target.setPasswordChangedAt(LocalDateTime.now());
+            userRepository.save(target);
+
+            recordAction(actor, AdminActionLog.USER_PASSWORD_RESET, AdminActionLog.TARGET_USER,
+                    target.getId(), "重置了用户 " + target.getUsername() + " 的密码");
             return null;
         });
     }

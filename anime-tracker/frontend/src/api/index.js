@@ -88,6 +88,15 @@ export const login = (data) => api.post('/user/login', data)
 export const getUserInfo = (userId) => api.get(`/user/info/${userId}`)
 export const getCurrentUser = () => api.get('/user/me')
 
+/**
+ * 改自己的密码.
+ *
+ * <p><b>返回值里的 {@code data.token} 是新的, 必须存回去。</b> 改密会让改密之前签发的
+ * token 全部作废, 而手上这张正在其中 —— 不存新的, 下一个请求就是 401, 用户看到的是
+ * 「我刚改完密码就被登出了」。这不是可选的收尾动作, 是这个接口契约的一半。
+ */
+export const changePassword = (data) => api.put('/user/password', data)
+
 // ========== Bangumi 番剧 ==========
 /** 搜索每页条数. 后端 limit 的上限是 50(BangumiController 的 @Max), 20 是本项目的口径;
  *  导出它是为了让 Search.vue 算「共几页」时用的是同一个数, 而不是自己再抄一份 20. */
@@ -208,6 +217,12 @@ export const unlockUser = (targetUserId) =>
   api.put(`/admin/users/${targetUserId}/unlock`)
 export const setUserRole = (targetUserId, role) =>
   api.put(`/admin/users/${targetUserId}/role`, null, { params: { role } })
+/**
+ * 重置某个用户的密码. **没有 oldPassword** —— 管理员是在用户拿不出旧密码时替他换一把。
+ * 后端会记一条 USER_PASSWORD_RESET 的账(理由见 AdminService.resetPassword)。
+ */
+export const resetUserPassword = (targetUserId, newPassword) =>
+  api.put(`/admin/users/${targetUserId}/password`, { newPassword })
 
 /**
  * 管理端的操作日志(账本).

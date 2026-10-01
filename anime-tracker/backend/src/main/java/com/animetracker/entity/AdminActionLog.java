@@ -44,6 +44,14 @@ public class AdminActionLog {
     public static final String USER_ROLE = "USER_ROLE";
     /** 解除登录失败锁定 */
     public static final String USER_UNLOCK = "USER_UNLOCK";
+    /**
+     * 管理员重置某个用户的密码.
+     *
+     * <p>它是四个动作之外唯一一个**不改变权限、却能把人挡在门外**的动作: 重置之后
+     * 那个人手上的所有 token 立刻作废, 而他能不能再进来, 取决于有没有人把新密码告诉他。
+     * 滥用它的后果与「封禁」很接近, 所以它必须和其它四个一样留下一条账。
+     */
+    public static final String USER_PASSWORD_RESET = "USER_PASSWORD_RESET";
     /** 管理员删除别人的评论 */
     public static final String REVIEW_DELETE = "REVIEW_DELETE";
 
@@ -61,7 +69,8 @@ public class AdminActionLog {
      * 或者被测试断言顺序的地方都会随启动漂移。
      */
     public static final Set<String> ACTIONS = Collections.unmodifiableSet(
-            new LinkedHashSet<>(List.of(USER_BAN, USER_UNBAN, USER_ROLE, USER_UNLOCK, REVIEW_DELETE)));
+            new LinkedHashSet<>(List.of(USER_BAN, USER_UNBAN, USER_ROLE, USER_UNLOCK,
+                    USER_PASSWORD_RESET, REVIEW_DELETE)));
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

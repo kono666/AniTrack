@@ -12,6 +12,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Date;
 
@@ -111,6 +112,24 @@ public class JwtUtil {
     /** 从 Token 提取 userId */
     public Long getUserIdFromToken(String token) {
         return Long.valueOf(parseClaims(token).getSubject());
+    }
+
+    /**
+     * 从 Token 提取签发时刻.
+     *
+     * <p>唯一的用途是「改密之后旧 token 立即失效」那条判断(见 {@code JwtAuthFilter})。
+     *
+     * <p><b>注意精度</b>: 这个值是**秒**级的(JWT 规范里 iat 是 NumericDate, 也就是
+     * 以秒为单位的 epoch), 而库里的 {@code password_changed_at} 是微秒。两边的比较
+     * 必须先把微秒截掉, 否则同一秒内「改密 → 立刻用新 token」会被误拒 ——
+     * 而那恰恰是常态, 不是边界情况。
+     *
+     * <p>返回 {@code Instant} 而不是 {@code Date}: 比较的另一侧是从
+     * {@code LocalDateTime} 换算过来的, 中途经过 {@code Date} 只会再多一次无损转换。
+     */
+    public Instant getIssuedAtFromToken(String token) {
+        Date issuedAt = parseClaims(token).getIssuedAt();
+        return issuedAt == null ? null : issuedAt.toInstant();
     }
 
     // 这里原本还有 getUsernameFromToken / getRoleFromToken 两个方法, 已删.

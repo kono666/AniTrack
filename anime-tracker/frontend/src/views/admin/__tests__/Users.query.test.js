@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 vi.mock('../../../api', () => ({
@@ -79,6 +80,9 @@ function deferred() {
 let mounted = []
 
 async function mountAt(fullPath) {
+  // 这一页要读一次登录态(「重置密码」对自己那一行不显示), 而 useUserStore()
+  // 要求有一个 active pinia —— 少了它挂载当场抛. 与 adminLoadError.test.js 同一个写法.
+  setActivePinia(createPinia())
   router = makeRouter()
   // 先落在 '/' 再走一步: 历史栈里得先有"上一页", 后退那一条才有地方退
   await router.push('/')

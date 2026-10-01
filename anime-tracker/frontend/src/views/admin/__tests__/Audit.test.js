@@ -139,6 +139,19 @@ describe('操作日志: 筛选 / 分页', () => {
     expect(lastParams()).toEqual({ action: 'REVIEW_DELETE', page: 1, limit: 20 })
   })
 
+  /**
+   * 下拉的选项与 ACTION_LABELS 是同一份(ACTIONS = Object.keys(ACTION_LABELS)),
+   * 所以这条既验"新动作进了下拉", 也守着那层联动: 哪天有人把 ACTIONS 改成另写一份
+   * 字面量, 新加的动作就会**出现在列表里、却筛不出来**.
+   */
+  it('筛选下拉里有 c90 新加的「重置密码」', async () => {
+    const wrapper = await mountAt('/admin/actions')
+
+    const values = selectByLabel(wrapper, '按操作类型筛选').findAll('option')
+      .map(o => o.attributes('value'))
+    expect(values).toContain('USER_PASSWORD_RESET')
+  })
+
   it('换每页条数回到第 1 页, 页数按新条数算', async () => {
     const wrapper = await mountAt('/admin/actions')
     // 250 条 / 20 = 13 页
@@ -223,13 +236,31 @@ describe('操作日志: 列内容', () => {
     expect(cells[4]).toBe('删了条评论')
   })
 
-  it('没见过的 action 显示原样的码, 不是一片空白', async () => {
-    // 后端加了第六个动作而前端还没跟上时, 一行操作记录**看上去像没写操作**
-    // 才是最糟的失败方式 —— 宁可显示 USER_PASSWORD_RESET 让人去查
-    getAdminActions.mockResolvedValue(pageResult([row(1, { action: 'USER_PASSWORD_RESET' })], 1))
+  /**
+   * 重置密码是 c90 加上去的第五个动作, 它与另外四个在**危险度**上是一类 ——
+   * 不改变任何权限, 却能把一个人挡在门外(他手上所有 token 立刻作废, 而能不能
+   * 再进来取决于有没有人把新密码告诉他). 所以它必须和封禁同色, 而不是中性色.
+   */
+  it('重置密码显示成人话, 并按危险动作着色', async () => {
+    getAdminActions.mockResolvedValue(pageResult([
+      row(1, { action: 'USER_PASSWORD_RESET', targetType: 'USER', targetId: 5, detail: '重置了用户 u1 的密码' }),
+    ], 1))
     const wrapper = await mountAt('/admin/actions')
 
-    expect(wrapper.text()).toContain('USER_PASSWORD_RESET')
+    const badge = wrapper.find('tbody tr .action-badge')
+    expect(badge.text()).toBe('重置密码')
+    expect(badge.classes()).toContain('badge-danger')
+  })
+
+  it('没见过的 action 显示原样的码, 不是一片空白', async () => {
+    // 后端加了第七个动作而前端还没跟上时, 一行操作记录**看上去像没写操作**
+    // 才是最糟的失败方式 —— 宁可显示 USER_IMPERSONATE 让人去查.
+    // (这条原先拿 USER_PASSWORD_RESET 举例, c90 把它收进 ACTION_LABELS 之后
+    //  它就不再是"没见过的", 于是这条断言失去意义 —— 换一个后端也还没有的码.)
+    getAdminActions.mockResolvedValue(pageResult([row(1, { action: 'USER_IMPERSONATE' })], 1))
+    const wrapper = await mountAt('/admin/actions')
+
+    expect(wrapper.text()).toContain('USER_IMPERSONATE')
   })
 
   it('detail 为空时说「（无详情）」而不是留一个空格子', async () => {

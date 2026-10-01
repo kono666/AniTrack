@@ -2,6 +2,7 @@ package com.animetracker.service;
 
 import com.animetracker.config.JwtUtil;
 import com.animetracker.config.LoginProtectionProperties;
+import com.animetracker.dto.RequestDTO.ChangePasswordRequest;
 import com.animetracker.dto.RequestDTO.LoginRequest;
 import com.animetracker.dto.RequestDTO.RegisterRequest;
 import com.animetracker.entity.User;
@@ -406,6 +407,125 @@ class UserServiceTest {
         userService.login(loginReq("  alice  ", "abcd1234"));
 
         verify(userRepository).findByUsername("alice");
+    }
+
+    // ========== 改密码 ==========
+
+    /**
+     * 编码器为**新密码**吐出来的那个串, 与注册/登录用的 DUMMY_HASH 刻意不同。
+     *
+     * <p>不同是必须的: 这组用例要断言"写进 password 列的是新密码的密文", 而如果新旧
+     * 密文是同一个常量, 那么「把旧密码重新编码存回去」这个 bug 也会让断言通过。
+     */
+    private static final String NEW_HASH = "$2a$10$brand-new-hash-for-the-new-password";
+
+    private static ChangePasswordRequest changeReq(String oldPassword, String newPassword) {
+        ChangePasswordRequest req = new ChangePasswordRequest();
+        req.setOldPassword(oldPassword);
+        req.setNewPassword(newPassword);
+        return req;
+    }
+
+    /**
+     * 旧密码不对 → 400, <b>而且一个字节都没写</b>。
+     *
+     * <p>「什么都没写」那一半比状态码重要: 这条路径的失效方式是"先改了密码、再抛出
+     * 异常说旧密码不对" —— 调用方看到的是 400(与正确实现一模一样), 而密码已经换了,
+     * 用户再也登不进来。所以这里同时验 save 没被调用、以及实体上两个字段都没动。
+     */
+    @Test
+    @DisplayName("旧密码不正确时拒绝, 且密码与 passwordChangedAt 都没被改")
+    void rejectsWrongOldPassword() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        when(passwordEncoder.matches("wrong-old", DUMMY_HASH)).thenReturn(false);
+
+        assertThatThrownBy(() -> userService.changePassword(user, changeReq("wrong-old", "newpass1")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(400))
+                .hasMessageContaining("原密码");
+
+        verify(userRepository, never()).save(any(User.class));
+        assertThat(user.getPassword()).isEqualTo(DUMMY_HASH);
+        assertThat(user.getPasswordChangedAt())
+                .as("只写 passwordChangedAt 的话, 一次失败的改密会把这个人所有设备踢下线")
+                .isNull();
+    }
+
+    /**
+     * 新密码与原密码相同 → 400。
+     *
+     * <p>不加这条的话, 这个操作会**把别处所有登录踢掉而密码一个字符都没变** —— 用户以为
+     * 自己加固了账号, 实际只是被登出了一次, 而界面上显示的是一句「修改成功」。
+     */
+    @Test
+    @DisplayName("新密码与原密码相同则拒绝, 同样什么都不写")
+    void rejectsUnchangedPassword() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        when(passwordEncoder.matches("samepass1", DUMMY_HASH)).thenReturn(true);
+
+        assertThatThrownBy(() -> userService.changePassword(user, changeReq("samepass1", "samepass1")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能与原密码相同");
+
+        verify(userRepository, never()).save(any(User.class));
+        assertThat(user.getPasswordChangedAt()).isNull();
+    }
+
+    /**
+     * 成功那一路: 新密码被编码写入、{@code passwordChangedAt} 被写入、<b>并回一张新 token</b>。
+     *
+     * <p>三次 {@code verify} 各钉住一件不能少的事:
+     * <ul>
+     *   <li>{@code encode("newpass1")} —— 而且是 {@code never().encode("oldpass1")}。少了
+     *       后面那一句, 「把旧密码编码后存回 password 列」这种写法也会让前面那句通过;</li>
+     *   <li>{@code passwordChangedAt} 非空 —— 它是「旧 token 失效」这条性质的**唯一来源**。
+     *       只改密码不记时刻, 那个被偷走的 token 会一直活到过期, 而"改密码"在服务端等于
+     *       什么都没发生;</li>
+     *   <li>返回里带一张新 token —— 否则当前这台设备会被自己这次改动登出。</li>
+     * </ul>
+     */
+    @Test
+    @DisplayName("改密成功: 写新密文 + 记时刻 + 回一张新 token")
+    void changesPasswordAndReturnsAFreshToken() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        when(passwordEncoder.matches("oldpass1", DUMMY_HASH)).thenReturn(true);
+        when(passwordEncoder.matches("newpass1", DUMMY_HASH)).thenReturn(false);
+        when(passwordEncoder.encode("newpass1")).thenReturn(NEW_HASH);
+        LocalDateTime before = LocalDateTime.now();
+
+        Map<String, Object> payload = userService.changePassword(user, changeReq("oldpass1", "newpass1"));
+
+        assertThat(user.getPassword()).isEqualTo(NEW_HASH);
+        assertThat(user.getPasswordChangedAt())
+                .isNotNull()
+                .isAfterOrEqualTo(before);
+        verify(userRepository).save(user);
+        verify(passwordEncoder, never()).encode("oldpass1");
+        // 回的是与登录同一个出口(buildAuthPayload), 形状必须一致 —— 前端拿它 setUser
+        assertThat(payload)
+                .containsEntry("token", "signed-token")
+                .containsEntry("id", 1L)
+                .containsEntry("username", "alice");
+        verify(jwtUtil).generateToken(1L, "alice", "USER");
+    }
+
+    /**
+     * 旧密码的校验必须**先于**新密码的强度/相同性判断。
+     *
+     * <p>顺序反过来就会出现一种很难解释的界面: 一个还没证明自己是本人的人, 能从回包文案里
+     * 分辨出"新密码合法吗"。这条不是安全问题(两者都是 400), 而是"哪句话更该被先说出来"
+     * —— 一个连旧密码都填错的请求, 报「新密码不能与原密码相同」是答非所问。
+     */
+    @Test
+    @DisplayName("旧密码不对在先: 它压过「与原密码相同」那条判断")
+    void checksTheOldPasswordFirst() {
+        User user = existingUser("alice", "a@x.com", DUMMY_HASH);
+        // 编码器对谁都说不匹配 —— 于是「新密码==原密码」那条若被先判, 它也不会触发,
+        // 而这里要看的恰恰是**哪一条被报出来**
+        when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+
+        assertThatThrownBy(() -> userService.changePassword(user, changeReq("oldpass1", "oldpass1")))
+                .hasMessageContaining("原密码");
     }
 
     /** 取业务异常里的提示语, 用来比较两条错误路径是否完全一致 */

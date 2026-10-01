@@ -14,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,6 +26,7 @@ import java.util.function.Supplier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -50,10 +52,20 @@ import static org.mockito.Mockito.when;
  */
 class AdminServiceTest {
 
+    /**
+     * 假编码器吐出来的「密文」.
+     *
+     * <p>它是**常量**, 不是 {@code encode(明文)} —— 于是断言里出现它就意味着
+     * 「这一列确实是被 {@code encode} 的返回值写进去的」, 而不是明文原样落库。
+     * 这类断言只有在这个值跟任何明文都不一样时才成立。
+     */
+    private static final String ENCODED_PASSWORD = "$2a$10$encoded-by-mock";
+
     private UserRepository userRepository;
     private ReviewRepository reviewRepository;
     private AdminActionLogRepository adminActionLogRepository;
     private TrackingIsolatedInsert isolatedInsert;
+    private PasswordEncoder passwordEncoder;
     private AdminService adminService;
 
     @BeforeEach
@@ -65,9 +77,11 @@ class AdminServiceTest {
         // 换成 mock 之后四个动作会一起变成空操作, 而那一组用例的断言全都还在,
         // 于是它们会以「什么都没发生」的形式静默失真. 子类只是多记一个「回调开着呢」.
         isolatedInsert = new TrackingIsolatedInsert();
+        passwordEncoder = mock(PasswordEncoder.class);
+        when(passwordEncoder.encode(anyString())).thenReturn(ENCODED_PASSWORD);
         adminService = new AdminService(userRepository, reviewRepository,
                 mock(TrackingRepository.class), mock(AnimeRepository.class),
-                adminActionLogRepository, isolatedInsert);
+                adminActionLogRepository, isolatedInsert, passwordEncoder);
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -630,6 +644,100 @@ class AdminServiceTest {
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
 
         verify(adminActionLogRepository, never()).save(any(AdminActionLog.class));
+    }
+
+    // ========== 重置密码 ==========
+    //
+    // 第五个破坏性动作. 它不改变权限, 却是唯一一个能把人挡在门外的非权限动作:
+    // 重置之后那个人手上所有 token 立刻作废, 而能不能再进来取决于有没有人把新密码
+    // 告诉他 —— 滥用它的后果与封禁最接近, 所以它和另外四个一样要留下一条账.
+
+    @Test
+    @DisplayName("重置密码: 写入新密文、记下时刻, 并记一条 USER_PASSWORD_RESET")
+    void resettingAPasswordRecordsTheAction() {
+        User target = user(2L, "bob", "USER");
+        when(userRepository.findById(2L)).thenReturn(Optional.of(target));
+
+        adminService.resetPassword(user(1L, "admin", "ADMIN"), 2L, "brand-new-1");
+
+        assertThat(target.getPassword())
+                .as("存的必须是编码器的返回值, 不是明文")
+                .isEqualTo(ENCODED_PASSWORD);
+        assertThat(target.getPasswordChangedAt())
+                .as("不记时刻的话, 这次重置等于没发生 —— 被盗账号上那张旧 token 会活到过期")
+                .isNotNull();
+        verify(passwordEncoder).encode("brand-new-1");
+
+        AdminActionLog log = onlyAuditRow();
+        assertThat(log.getAction()).isEqualTo(AdminActionLog.USER_PASSWORD_RESET);
+        assertThat(log.getTargetType()).isEqualTo(AdminActionLog.TARGET_USER);
+        assertThat(log.getTargetId()).isEqualTo(2L);
+        assertThat(log.getDetail()).isEqualTo("重置了用户 bob 的密码");
+    }
+
+    /** 账里**不能**出现新密码本身: 账本是长期留存、多人可读的东西, 明文密码不该进去 */
+    @Test
+    @DisplayName("账本里不写新密码本身, 只写「重置了谁的密码」")
+    void theAuditRowNeverContainsTheNewPassword() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "bob", "USER")));
+
+        adminService.resetPassword(user(1L, "admin", "ADMIN"), 2L, "brand-new-1");
+
+        assertThat(onlyAuditRow().getDetail()).doesNotContain("brand-new-1");
+    }
+
+    /**
+     * 不能重置自己 —— 自己那条路要验旧密码, 是另一件事.
+     *
+     * <p>这条既是防呆, 也让「管理员能不能绕过旧密码校验改掉自己的密码」这个问题在结构上
+     * 不存在。没有它的话, 一个只是「登录着」的管理员就能凭一张 token 换掉自己的密码 ——
+     * 而那正是 {@code UserService.changePassword} 花力气防的那件事。
+     */
+    @Test
+    @DisplayName("重置自己: 400 并指回个人中心, 且什么都没写")
+    void refusesToResetOwnPassword() {
+        User me = user(1L, "admin", "ADMIN");
+        me.setPassword(ENCODED_PASSWORD);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(me));
+
+        assertThatThrownBy(() -> adminService.resetPassword(me, 1L, "brand-new-1"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(400))
+                .hasMessageContaining("个人中心");
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(adminActionLogRepository, never()).save(any(AdminActionLog.class));
+        assertThat(me.getPassword()).isEqualTo(ENCODED_PASSWORD);
+    }
+
+    /** 目标不存在 → 404, 且不产生账 —— 账本里不该出现「重置了一个不存在的用户」 */
+    @Test
+    @DisplayName("重置一个不存在的用户: 404, 不记账")
+    void resettingAnUnknownUserIsNotFound() {
+        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> adminService.resetPassword(user(1L, "admin", "ADMIN"), 99L, "x1y2z3a4"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(404));
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(adminActionLogRepository, never()).save(any(AdminActionLog.class));
+    }
+
+    /** 与另外四个动作同一条约定: 改密与记账在同一个事务里 */
+    @Test
+    @DisplayName("重置密码的记账也发生在事务边界之内")
+    void resetAuditRowIsWrittenInsideTheTransaction() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(user(2L, "bob", "USER")));
+        AtomicBoolean insideWhenLogged = new AtomicBoolean();
+        when(adminActionLogRepository.save(any(AdminActionLog.class))).thenAnswer(inv -> {
+            insideWhenLogged.set(isolatedInsert.isInside());
+            return inv.getArgument(0);
+        });
+
+        adminService.resetPassword(user(1L, "admin", "ADMIN"), 2L, "brand-new-1");
+
+        assertThat(insideWhenLogged).isTrue();
     }
 
     // ========== 操作日志: 参数夹取与筛选 ==========

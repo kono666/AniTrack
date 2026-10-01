@@ -131,6 +131,7 @@ const ACTION_LABELS = {
   USER_UNBAN: '启用用户',
   USER_ROLE: '修改角色',
   USER_UNLOCK: '解除锁定',
+  USER_PASSWORD_RESET: '重置密码',
   REVIEW_DELETE: '删除评论',
 }
 
@@ -139,8 +140,14 @@ const TARGET_LABELS = { USER: '用户', REVIEW: '评论' }
 /** 下拉里能选的与 readQuery 认可的必须是**同一份**, 否则 URL 上会出现一个选不中也清不掉的筛选 */
 const ACTIONS = Object.keys(ACTION_LABELS)
 
-/** 三档语义色. 判据是"这个动作有多该被查", 不是"它是不是危险" —— 提权看着最无害, 实际最该被查 */
-const DANGEROUS = ['USER_BAN', 'REVIEW_DELETE']
+/**
+ * 三档语义色. 判据是"这个动作有多该被查", 不是"它是不是危险" —— 提权看着最无害, 实际最该被查.
+ *
+ * 重置密码与封禁同一档, 虽然它**什么权限都没改**: 它会把那个人手上所有 token 立刻作废,
+ * 而能不能再进来取决于有没有人把新密码告诉他 —— 后果与封禁最接近, 也是账号被盗时
+ * 攻击者最先想用的那一下。它归到"中性"里就等于把这页最该被看见的一类操作藏起来了。
+ */
+const DANGEROUS = ['USER_BAN', 'USER_PASSWORD_RESET', 'REVIEW_DELETE']
 const PRIVILEGE = ['USER_ROLE']
 
 const logs = ref([])

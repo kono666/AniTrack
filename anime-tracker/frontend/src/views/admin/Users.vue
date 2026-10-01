@@ -39,6 +39,33 @@
     <span v-if="!loading && !error" class="admin-result-count">共 {{ total }} 个用户</span>
   </div>
 
+  <!-- 重置密码的小面板.
+       为什么不像其它三个动作那样一句 confirm 就完事: 那三个的"新值"是给定的一两个
+       选项(启用/禁用、设为管理员、解锁), 而这里要让管理员**输入一个字符串**, 且不能是
+       window.prompt —— 那个框里的内容是不遮的, 站旁边的人一眼就能看见新密码.
+       面板留在工具栏下面而不是做成模态: 只有一格输入, 挡住整张表不划算. -->
+  <div v-if="resetTarget" class="reset-panel">
+    <span class="reset-title">
+      为 <b>{{ resetTarget.username }}</b> 设置新密码
+    </span>
+    <input
+      v-model="resetPassword"
+      class="admin-input"
+      type="password"
+      placeholder="至少8位，需含字母和数字"
+      autocomplete="new-password"
+      aria-label="新密码"
+      @keyup.enter="submitReset"
+    />
+    <button class="action-btn reset-ok" :disabled="resetBusy" @click="submitReset">
+      {{ resetBusy ? '提交中...' : '确认重置' }}
+    </button>
+    <button class="action-btn" :disabled="resetBusy" @click="cancelReset">取消</button>
+    <!-- 失败原因就地显示, 不弹 toast: 这一格是唯一要改的地方, 提示挨着它最省事 -->
+    <span v-if="resetError" class="reset-error">{{ resetError }}</span>
+    <span v-else class="reset-hint">该用户当前的登录会全部失效，需用新密码重新登录</span>
+  </div>
+
   <LoadingSpinner v-if="loading" />
 
   <!-- 加载失败. 改前一失败就是空表格, 和「这个站还没有用户」长得一模一样 ——
@@ -124,6 +151,15 @@
                 class="action-btn btn-purple"
                 @click="handleSetAdmin(u)"
               >设为管理员</button>
+              <!-- 自己那一行不给这个按钮: 服务端也会拒(「请使用个人中心的修改密码」),
+                   但一个点了必然报错的按钮不该摆在那儿 —— 自己改密码那条路要验旧密码,
+                   是另一件事. 对**别的**管理员显示: 管理员互相救号(有人把密码忘了、
+                   或者账号被盗)是这条路径最正当的用法. -->
+              <button
+                v-if="u.id !== myId"
+                class="action-btn btn-warn"
+                @click="startReset(u)"
+              >重置密码</button>
             </td>
           </tr>
         </tbody>
@@ -164,10 +200,11 @@ import { useRoute, useRouter } from 'vue-router'
 import PhCaretUp from '@icons/PhCaretUp.vue.mjs'
 import PhCaretDown from '@icons/PhCaretDown.vue.mjs'
 import {
-  getAdminUsers, toggleUserStatus, setUserRole, unlockUser,
+  getAdminUsers, toggleUserStatus, setUserRole, unlockUser, resetUserPassword,
   ADMIN_PAGE_SIZES, ADMIN_PAGE_SIZE,
 } from '../../api'
 import { useToast } from '../../composables/useToast'
+import { useUserStore } from '../../stores/user'
 import { useLatestOnly } from '../../composables/useLatestOnly'
 import { loadErrorMessage } from '../../utils/loadError'
 import { strParam, pageParam } from '../../utils/query'
@@ -194,6 +231,14 @@ const route = useRoute()
 const router = useRouter()
 const { show: toast } = useToast()
 const request = useLatestOnly()
+
+/**
+ * 当前登录管理员的 id, 只有一个用途: 自己那一行不显示「重置密码」.
+ *
+ * 拿 store 而不是从列表里认: 列表是分页的, 自己不一定在**这一页**上. 缺失时是
+ * undefined, 于是那个按钮对每一行都显示 —— 服务端仍然会拒, 失败方向是安全的.
+ */
+const myId = useUserStore().user?.id
 
 /** 排序口径的白名单, 与后端 AdminService 那两个常量同源 */
 const SORT_CREATED = 'createdAt'
@@ -423,6 +468,54 @@ async function handleUnlock(u) {
   } catch (e) { toast(e.response?.data?.message || '操作失败', 'error') }
 }
 
+// ==================== 重置密码 ====================
+
+/** 正在被重置的那个人; null 表示面板收着. 面板一次只开一个, 所以它是一个对象而不是 id */
+const resetTarget = ref(null)
+const resetPassword = ref('')
+const resetError = ref('')
+const resetBusy = ref(false)
+
+/** 与后端 PasswordPolicy + 两个表单同一份口径. 前端这一道只是省一次往返, 后端是权威 */
+const PASSWORD_LETTER_AND_DIGIT = /^(?=.*[A-Za-z])(?=.*\d).*$/
+
+function startReset(u) {
+  resetTarget.value = u
+  resetPassword.value = ''
+  resetError.value = ''
+}
+
+function cancelReset() {
+  resetTarget.value = null
+  resetPassword.value = ''
+  resetError.value = ''
+}
+
+async function submitReset() {
+  // 面板收着的状态下回车不该发请求 —— 按钮那时也不在 DOM 里, 但键盘事件不是
+  if (!resetTarget.value) return
+  resetError.value = ''
+  if (resetPassword.value.length < 8) { resetError.value = '密码至少 8 位'; return }
+  if (!PASSWORD_LETTER_AND_DIGIT.test(resetPassword.value)) {
+    resetError.value = '密码必须同时包含字母和数字'
+    return
+  }
+  resetBusy.value = true
+  const target = resetTarget.value
+  try {
+    await resetUserPassword(target.id, resetPassword.value)
+    // 成功就把输入清掉再收面板: 明文密码在 DOM 里多留一秒都是白留的
+    cancelReset()
+    toast(`已重置 "${target.username}" 的密码`, 'success')
+    /* 不重取列表: 这个动作改的是密码列, 而这张表根本不显示密码 —— 重取一次
+       (带上当前的筛选与页码)换不来任何界面上看得见的变化. 其它三个动作都重取,
+       是因为它们改的字段就在表里(状态、角色). */
+  } catch (e) {
+    resetError.value = e.response?.data?.message || '重置失败，请稍后重试'
+  }
+  resetBusy.value = false
+}
+
 // ==================== 改条件 ====================
 
 let debounceTimer = null
@@ -571,6 +664,24 @@ onUnmounted(cancelPendingSearch)
    拿来当描边色会在深色底上直接看不见。 */
 .btn-purple { border: 1px solid var(--primary-line); color: var(--primary); }
 .btn-warn { border: 1px solid var(--badge-amber-fg); color: var(--badge-amber-fg); }
+
+/* ── 重置密码面板 ── */
+/* 与工具栏同一行样式, 于是它看起来是工具栏的延伸(一个"当前正在做的事"),
+   而不是表上浮出来的一块 */
+.reset-panel {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 12px;
+  background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius);
+}
+.reset-title { font-size: 13px; color: var(--text); }
+.reset-title b { color: var(--primary); }
+/* 输入框吃掉剩余宽度, 但给一个下限: 太窄的密码框看不清自己打了几个字符 */
+.reset-panel .admin-input { flex: 1; min-width: 200px; }
+.reset-ok { border: 1px solid var(--primary-line); color: var(--primary); }
+.reset-ok:disabled, .reset-panel .action-btn:disabled { opacity: .5; cursor: not-allowed; }
+/* 失败原因要压过下面那句"会全部失效"的说明 —— 两句同时出现时, 用户要读的是前一句 */
+.reset-error { font-size: 12px; color: var(--danger); }
+.reset-hint { font-size: 12px; color: var(--text-muted); }
 
 /* 「清除筛选」是个普通按钮(不带语义色): 它是一个中性动作, 而不是"危险"或"主要" */
 .admin-toolbar .action-btn { border: 1px solid var(--border); color: var(--text-secondary); }

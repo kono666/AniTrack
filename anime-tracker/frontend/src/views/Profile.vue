@@ -154,6 +154,55 @@
         只显示最近 {{ RECEIVED_LIMIT }} 条
       </div>
     </section>
+
+    <!-- 改密码.
+         刻意**不看** error: error 说的是"追番列表没拉到", 而这个表和它没有关系 ——
+         列表挂了就不让人改密码, 是拿另一件事的失败去关掉一个入口.
+         也刻意不做成弹窗: 改密是一个低频、需要想一想的动作, 塞进模态框里
+         反而更容易点错; 页面底部这个位置本来也没人路过会误触. -->
+    <section class="p-security">
+      <h2 class="pr-title">账号安全</h2>
+      <form class="sec-form" @submit.prevent="handleChangePassword">
+        <label class="sec-label" for="sec-old">原密码</label>
+        <!-- current-password / new-password 不是可省的装饰: 说成同一个值,
+             浏览器会把已存的旧密码填进"新密码"那一栏, 或者反过来 -->
+        <input
+          id="sec-old"
+          v-model="pwd.oldPassword"
+          class="sec-input"
+          type="password"
+          autocomplete="current-password"
+          placeholder="当前使用的密码"
+        />
+        <label class="sec-label" for="sec-new">新密码</label>
+        <input
+          id="sec-new"
+          v-model="pwd.newPassword"
+          class="sec-input"
+          type="password"
+          autocomplete="new-password"
+          placeholder="至少8位，需含字母和数字"
+          minlength="8"
+          maxlength="100"
+        />
+        <label class="sec-label" for="sec-confirm">确认新密码</label>
+        <!-- 确认栏是这个表单里最该有的一格: 新密码打错一个字符, 服务端照样
+             接受, 而**下一次登录才会发现** —— 那时人已经在门外了 -->
+        <input
+          id="sec-confirm"
+          v-model="pwd.confirmPassword"
+          class="sec-input"
+          type="password"
+          autocomplete="new-password"
+          placeholder="再次输入新密码"
+        />
+        <div v-if="pwdError" class="sec-error">{{ pwdError }}</div>
+        <div v-else class="sec-hint">改完之后其它设备上的登录会失效，需要重新登录</div>
+        <button class="sec-submit" type="submit" :disabled="pwdLoading">
+          {{ pwdLoading ? '提交中...' : '修改密码' }}
+        </button>
+      </form>
+    </section>
   </div>
 
   <div v-else class="page-container">
@@ -162,10 +211,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
-import { getTrackingList, getOverallStats, saveTracking, getReceivedReplies } from '../api'
+import { getTrackingList, getOverallStats, saveTracking, getReceivedReplies, changePassword } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
@@ -270,6 +319,61 @@ async function quickUpdate(item, field, val) {
 }
 
 onMounted(loadProfile)
+
+// ── 改密码 ──
+
+/**
+ * 与后端 PasswordPolicy + {@code Register.vue} 同一份口径. 后端那份是权威,
+ * 这份只是为了在提交前就把问题拦下来, 省掉一次往返。
+ *
+ * <p>与 Register.vue 的那一份**没有抽成公共模块**, 是已知的一处重复: 两处都是
+ * 「前端复述后端规则」, 而抄错的表现是拦不下(服务端仍然兜住)或多拦一下,
+ * 不是数据坏掉。为它建一个模块的收益比不上让两个表单各自读起来是完整的。
+ */
+const PASSWORD_LETTER_AND_DIGIT = /^(?=.*[A-Za-z])(?=.*\d).*$/
+
+const pwd = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const pwdError = ref('')
+const pwdLoading = ref(false)
+
+function validatePassword() {
+  if (!pwd.oldPassword) return '请输入原密码'
+  if (pwd.newPassword !== pwd.confirmPassword) return '两次密码输入不一致'
+  if (pwd.newPassword.length < 8) return '密码至少 8 位'
+  if (!PASSWORD_LETTER_AND_DIGIT.test(pwd.newPassword)) return '密码必须同时包含字母和数字'
+  // 服务端也会拦这一条(它才是权威), 但这两种错误在服务端是同一段文案,
+  // 前端先拦一次能让"哪一格填错了"更明确
+  if (pwd.newPassword === pwd.oldPassword) return '新密码不能与原密码相同'
+  return ''
+}
+
+async function handleChangePassword() {
+  pwdError.value = ''
+  const problem = validatePassword()
+  if (problem) {
+    pwdError.value = problem
+    return
+  }
+  pwdLoading.value = true
+  try {
+    const res = await changePassword({
+      oldPassword: pwd.oldPassword,
+      newPassword: pwd.newPassword,
+    })
+    /* 把响应里那张新 token 存回去. 这一行不是"顺手更新一下" —— 改密会让改密之前
+       签发的 token 全部作废, 手上这张正在其中; 不存新的, 下一个请求就是 401,
+       用户看到的是「我刚改完密码就被登出了」。 */
+    userStore.setUser(res.data.data)
+    pwd.oldPassword = ''
+    pwd.newPassword = ''
+    pwd.confirmPassword = ''
+    toast('密码已修改，其它设备需重新登录', 'success')
+  } catch (e) {
+    // 走服务端的原话(「原密码不正确」等) —— 那些文案比前端能编的更准
+    pwdError.value = e.response?.data?.message || '修改失败，请稍后重试'
+  }
+  pwdLoading.value = false
+}
 
 // 单独取名是为了让错误态上的「重试」能重新跑这整段(账号信息来自 store,
 // 失败的是列表和统计这两个接口)
@@ -407,9 +511,37 @@ async function loadProfile() {
 }
 .pr-text { font-size: 13px; line-height: 1.6; color: var(--text-secondary); word-break: break-word; }
 
+/* ── 账号安全 ── */
+/* 与 .p-replies 同宽同边距, 理由同那条 —— 三块的左边缘不在一条线上就像两页拼的 */
+.p-security { max-width: 1000px; margin: 32px auto 0; padding: 0 32px; }
+/* 表单本身不铺满 1000px: 输入框横跨整行会让人以为要填很长一段内容,
+   而这里只有三格短文本 */
+.sec-form { display: flex; flex-direction: column; max-width: 360px; }
+.sec-label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+/* 只有第一格需要上方间距, 后面每一格的间距由 label 的 margin-top 给,
+   这样"标签贴着它自己的输入框"这件事不会因为间距写错而串位 */
+.sec-form .sec-label:not(:first-child) { margin-top: 12px; }
+.sec-input {
+  padding: 9px 12px; border-radius: 8px; font-size: 13px; font-family: inherit;
+  border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text);
+  transition: border-color var(--transition);
+}
+.sec-input:focus { outline: none; border-color: var(--primary); }
+.sec-error { font-size: 12px; color: var(--danger); margin-top: 10px; }
+.sec-hint { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+.sec-submit {
+  align-self: flex-start; margin-top: 14px; padding: 9px 20px; border: none;
+  border-radius: 8px; font-size: 13px; font-weight: 600; font-family: inherit;
+  background: var(--primary); color: var(--primary-foreground); cursor: pointer;
+  transition: opacity var(--transition);
+}
+.sec-submit:hover:not(:disabled) { opacity: .88; }
+.sec-submit:disabled { opacity: .5; cursor: not-allowed; }
+
 @media (max-width: 768px) {
   .p-header { padding: 0 16px; gap: 16px; }
   .p-replies { padding: 0 16px; }
+  .p-security { padding: 0 16px; }
   .p-avatar { width: 72px; height: 72px; }
   .p-info { padding-top: 36px; }
   .p-name { font-size: 20px; }

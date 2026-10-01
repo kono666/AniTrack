@@ -124,6 +124,27 @@ public class UserController {
         return ApiResponse.success(reviewReplyService.getReceivedReplies(user));
     }
 
+    /**
+     * 改自己的密码.
+     *
+     * <p><b>响应里回的是一张新 token, 不是一句「修改成功」。</b> 改密会让改密之前签发的
+     * token 全部作废({@code JwtAuthFilter.isStaleAfterPasswordChange}), 而当前这台设备
+     * 手上那张正是其中之一 —— 只回一句成功, 用户改完密码立刻被登出, 那看起来就是个
+     * bug。回一张新的, 当前会话无缝续上, 别处的旧 token 照常失效。前端要把 data.token
+     * 存回去, 不存就等于自己把自己登出了。
+     *
+     * <p>它**不在** SecurityConfig 的公开清单里(与 {@link #getReceivedReplies} 同一条
+     * 理由: 要改的是「我」的密码, 必须知道我是谁), 下面判空是兜底不是主防线。
+     */
+    @PutMapping("/password")
+    public ApiResponse<Map<String, Object>> changePassword(@CurrentUser User user,
+                                                          @Valid @RequestBody ChangePasswordRequest req) {
+        if (user == null) {
+            throw BusinessException.unauthorized("未登录");
+        }
+        return ApiResponse.success("密码修改成功", userService.changePassword(user, req));
+    }
+
     /** 获取当前登录用户信息 */
     @GetMapping("/me")
     public ApiResponse<Map<String, Object>> getCurrentUser(@CurrentUser User user) {

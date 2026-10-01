@@ -72,6 +72,25 @@ public class User {
     /** 锁定截止时间; 为空表示当前未锁定. 锁定期满即自动失效, 不需要定时任务去清扫 */
     private LocalDateTime lockedUntil;
 
+    /**
+     * 最后一次修改密码的时刻; 为空表示从未改过密码.
+     *
+     * <p><b>它唯一的用途是让「改密之前签发的 token」失效。</b> 本仓的 JWT 是无状态的、
+     * 不带 jti, 改完密码旧 token 本来能一直用到 7 天过期 —— 而改密码最常见的两个触发点
+     * (用户怀疑账号被盗、管理员强制重置) 的全部意义就是把别人手里那把钥匙作废。
+     * 判断落在 {@code JwtAuthFilter} 上, 每次请求多看一眼这一列, 不额外发查询
+     * (那个用户本来就是现查的)。
+     *
+     * <p><b>为什么可空。</b> 与 {@code failedAttempts} 同一条理由: 给已有表加 NOT NULL 列
+     * 会因为没有 DEFAULT 而迁移失败。语义上也正好 —— NULL 读作「从未改过密码」,
+     * 于是存量用户一个都不会被踢下线。
+     *
+     * <p>比较时注意<b>精度</b>: 这一列是 {@code TIMESTAMP(6)} 微秒, 而 JWT 的 {@code iat}
+     * 只有**秒**。直接比会把「同一秒内改密、立刻用新 token」误拒, 所以那一侧先把这一列
+     * 向下取整到秒再比, 见 {@code JwtAuthFilter.isStaleAfterPasswordChange}。
+     */
+    private LocalDateTime passwordChangedAt;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 

@@ -223,6 +223,52 @@ public class UserService {
         return "密码错误次数过多，账号已锁定，请 " + minutes + " 分钟后再试";
     }
 
+    // ========== 改密码 ==========
+
+    /**
+     * 用户改自己的密码, 成功时**顺带回一张新 token**.
+     *
+     * <p><b>为什么必须验旧密码.</b> 这个端点认的是 Bearer token, 而 token 可能在很多
+     * 地方留着(别人电脑上没退的登录、被 XSS 偷走的一张)。只看「登录态」就允许改密码的话,
+     * 一次凭证泄漏就升级成**永久账号接管** —— 攻击者改掉密码, 真正的用户再也进不来。
+     * 验过一次旧密码, 那张 token 能做的事就仅限于「在本人不在场时改密」这一件,
+     * 而它被挡住了。
+     *
+     * <p><b>为什么成功要回一张新 token。</b> 改密会把 {@code passwordChangedAt} 写到现在,
+     * 于是**改密之前签发的 token 全部作废** {@code (JwtAuthFilter.isStaleAfterPasswordChange)}。
+     * 当前这台设备手上那张正是其中之一 —— 不回新的, 用户改完密码立刻被登出, 那看起来
+     * 就是个 bug(「我改了个密码, 网站把我踢了」)。回一张新的, 当前会话无缝续上,
+     * 而**别处的**旧 token 全部失效, 这正是改密码该有的效果。
+     *
+     * <p>时序上要注意: 新 token 的 {@code iat} 是**秒**级, 而 {@code passwordChangedAt}
+     * 是微秒。两者落在同一秒是常态, 所以那边比较时必须先把微秒截掉 ——
+     * 那条注释写在 {@code JwtAuthFilter} 里, 这里再提一次是因为**这个方法的返回值就是
+     * 那个坑的另一半**: 它回的 token 必须能立刻用。
+     *
+     * <p>不加 {@code @Transactional}: 这里只有一次 {@code save}, 单条 save 自身就是原子的
+     * (与 {@code AdminService} 不带类级事务是同一条判断)。
+     */
+    public Map<String, Object> changePassword(User user, ChangePasswordRequest req) {
+        if (!passwordEncoder.matches(req.getOldPassword(), user.getPassword())) {
+            // 与登录失败不同, 这里可以明说是"原密码不对": 调用方已经通过鉴权了,
+            // 不存在"用这个接口枚举用户名"的问题
+            throw BusinessException.badRequest("原密码不正确");
+        }
+        if (passwordEncoder.matches(req.getNewPassword(), user.getPassword())) {
+            // 不加这一条的话, 这次改动会把所有别的登录踢掉、而密码一个字符都没变 ——
+            // 用户以为自己加固了账号, 实际只是被登出了一次
+            throw BusinessException.badRequest("新密码不能与原密码相同");
+        }
+
+        user.setPassword(passwordEncoder.encode(req.getNewPassword()));
+        // 与 setPassword 同一时刻写: 这两件事分开就没有意义了 —— 只改密码不记时刻,
+        // 旧 token 照样能用; 只记时刻不改密码, 那是把所有会话平白踢掉
+        user.setPasswordChangedAt(LocalDateTime.now());
+        userRepository.save(user);
+
+        return buildAuthPayload(user);
+    }
+
     // ========== 其它 ==========
 
     /** 获取用户信息 */

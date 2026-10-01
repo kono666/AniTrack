@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 const { toastSpy } = vi.hoisted(() => ({ toastSpy: vi.fn() }))
@@ -73,6 +74,10 @@ const FULL_PARAMS = {
 }
 
 async function mountAt(fullPath, list) {
+  // 这一页要读一次登录态(「重置密码」对自己那一行不显示), 而 useUserStore()
+  // 要求有一个 active pinia —— 少了它挂载当场抛, 23 条用例一起红.
+  // 与 adminLoadError.test.js / Profile.test.js 同一个写法.
+  setActivePinia(createPinia())
   router = makeRouter()
   await router.push('/')
   await router.isReady()
