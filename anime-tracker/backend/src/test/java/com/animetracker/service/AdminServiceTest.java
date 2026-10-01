@@ -1,11 +1,14 @@
 package com.animetracker.service;
 
 import com.animetracker.entity.AdminActionLog;
+import com.animetracker.entity.Anime;
+import com.animetracker.entity.AnimeTracking;
 import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
+import com.animetracker.repository.EpisodeWatchedRepository;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.TrackingRepository;
@@ -66,6 +69,11 @@ class AdminServiceTest {
     private UserRepository userRepository;
     private ReviewRepository reviewRepository;
     private AdminActionLogRepository adminActionLogRepository;
+    // 下面三个只有 getUserDetail 那一组用得上, 但一样提成字段: 留在构造调用里内联
+    // mock 的话, 新用例就没有办法给它们打桩了.
+    private TrackingRepository trackingRepository;
+    private AnimeRepository animeRepository;
+    private EpisodeWatchedRepository episodeWatchedRepository;
     private TrackingIsolatedInsert isolatedInsert;
     private PasswordEncoder passwordEncoder;
     private AdminService adminService;
@@ -75,6 +83,9 @@ class AdminServiceTest {
         userRepository = mock(UserRepository.class);
         reviewRepository = mock(ReviewRepository.class);
         adminActionLogRepository = mock(AdminActionLogRepository.class);
+        trackingRepository = mock(TrackingRepository.class);
+        animeRepository = mock(AnimeRepository.class);
+        episodeWatchedRepository = mock(EpisodeWatchedRepository.class);
         // 用真的那个, 不用 mock: IsolatedInsert.attempt 的语义就是「把回调跑一遍」,
         // 换成 mock 之后四个动作会一起变成空操作, 而那一组用例的断言全都还在,
         // 于是它们会以「什么都没发生」的形式静默失真. 子类只是多记一个「回调开着呢」.
@@ -82,8 +93,9 @@ class AdminServiceTest {
         passwordEncoder = mock(PasswordEncoder.class);
         when(passwordEncoder.encode(anyString())).thenReturn(ENCODED_PASSWORD);
         adminService = new AdminService(userRepository, reviewRepository,
-                mock(TrackingRepository.class), mock(AnimeRepository.class),
-                adminActionLogRepository, mock(ReviewReportRepository.class), isolatedInsert, passwordEncoder);
+                trackingRepository, animeRepository,
+                adminActionLogRepository, mock(ReviewReportRepository.class),
+                episodeWatchedRepository, isolatedInsert, passwordEncoder);
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -850,10 +862,18 @@ class AdminServiceTest {
 
     // ========== 操作日志: 参数夹取与筛选 ==========
 
-    /** 默认桩: 计数给个非零值, 否则取页那一段会因为"越界"而根本不执行 */
+    /**
+     * 默认桩: 计数给个非零值, 否则取页那一段会因为"越界"而根本不执行.
+     *
+     * <p>三个 {@code any()} 对的是仓储那条语句的三个筛选参数(action / targetType /
+     * targetId). 后两个从 {@code getActionPage} 过来时**恒为 null**(target 筛是详情页的
+     * 内部能力, 不从 {@code /api/admin/actions} 暴露) —— 打桩用 {@code any()} 而不是
+     * {@code isNull()} 只是不想让"桩"也跟着复述一遍那个实现细节; 「列表页传的就是 null」
+     * 这件事由下面 {@code actionPageIgnoresTheTargetFilter} 单独钉.
+     */
     private void stubActionPage(long matched) {
-        when(adminActionLogRepository.countPage(any())).thenReturn(matched);
-        when(adminActionLogRepository.findPage(any(), any())).thenReturn(List.of());
+        when(adminActionLogRepository.countPage(any(), any(), any())).thenReturn(matched);
+        when(adminActionLogRepository.findPage(any(), any(), any(), any())).thenReturn(List.of());
     }
 
     @Test
@@ -865,7 +885,7 @@ class AdminServiceTest {
 
         // 原样下发的话 WHERE action = 'BOGUS' 匹配零行 —— 界面上是"没有操作记录",
         // 而接口 200, 没有任何东西报错. 与用户列表对未知 role 的口径一致.
-        verify(adminActionLogRepository).countPage(isNull());
+        verify(adminActionLogRepository).countPage(isNull(), isNull(), isNull());
     }
 
     @Test
@@ -877,7 +897,7 @@ class AdminServiceTest {
 
         // 这五个值是**我们自己写进库的字面量**, 不是用户输入 —— 归一化只会让
         // "user_ban 也认"这种宽容反过来掩盖一次拼错
-        verify(adminActionLogRepository).countPage(AdminActionLog.USER_BAN);
+        verify(adminActionLogRepository).countPage(eq(AdminActionLog.USER_BAN), isNull(), isNull());
     }
 
     @Test
@@ -887,13 +907,14 @@ class AdminServiceTest {
 
         adminService.getActionPage(null, 0, 0);
         ArgumentCaptor<Pageable> first = ArgumentCaptor.forClass(Pageable.class);
-        verify(adminActionLogRepository).findPage(isNull(), first.capture());
+        verify(adminActionLogRepository).findPage(isNull(), isNull(), isNull(), first.capture());
         assertThat(first.getValue().getPageNumber()).isZero();
         assertThat(first.getValue().getPageSize()).isEqualTo(20);
 
         adminService.getActionPage(null, 1, 100000);
         ArgumentCaptor<Pageable> second = ArgumentCaptor.forClass(Pageable.class);
-        verify(adminActionLogRepository, times(2)).findPage(isNull(), second.capture());
+        verify(adminActionLogRepository, times(2))
+                .findPage(isNull(), isNull(), isNull(), second.capture());
         assertThat(second.getValue().getPageSize()).isEqualTo(100);
     }
 
@@ -906,7 +927,7 @@ class AdminServiceTest {
 
         assertThat(result.get("total")).isEqualTo(30);
         assertThat((List<?>) result.get("list")).isEmpty();
-        verify(adminActionLogRepository, never()).findPage(any(), any());
+        verify(adminActionLogRepository, never()).findPage(any(), any(), any(), any());
     }
 
     /**
@@ -919,8 +940,8 @@ class AdminServiceTest {
     @Test
     @DisplayName("日志行的七个键来自账本本身, 不回表查目标名字")
     void actionRowsCarryTheLedgerFields() {
-        when(adminActionLogRepository.countPage(any())).thenReturn(1L);
-        when(adminActionLogRepository.findPage(any(), any())).thenReturn(List.of(
+        when(adminActionLogRepository.countPage(any(), any(), any())).thenReturn(1L);
+        when(adminActionLogRepository.findPage(any(), any(), any(), any())).thenReturn(List.of(
                 AdminActionLog.builder().id(7L).actorId(1L).actorName("admin")
                         .action(AdminActionLog.USER_BAN).targetType(AdminActionLog.TARGET_USER)
                         .targetId(2L).detail("禁用用户 bob")
@@ -940,5 +961,177 @@ class AdminServiceTest {
                 .containsEntry("targetType", AdminActionLog.TARGET_USER)
                 .containsEntry("targetId", 2L)
                 .containsEntry("detail", "禁用用户 bob");
+    }
+
+    /**
+     * 账本多了「按 target 筛」这两个谓词之后, <b>列表页的行为必须一个字都不变</b>。
+     *
+     * <p>这条守的是那个 {@code null, null}: 谓词是
+     * {@code :targetType IS NULL OR l.targetType = :targetType}, 而传 null 让它恒真。
+     * 将来谁把谓词从 {@code IS NULL OR} 写成直接的 {@code AND l.targetType = :targetType},
+     * 账本列表页会**静默变成空页** —— 接口 200、没有异常、上面那些用例也全绿
+     * (它们打的是 {@code any()} 桩, 不关心参数)。只有这一条会红。
+     */
+    @Test
+    @DisplayName("账本列表页不做按 target 筛: 两个谓词都被传成 null")
+    void actionPageIgnoresTheTargetFilter() {
+        stubActionPage(1);
+
+        adminService.getActionPage(null, 1, 20);
+
+        verify(adminActionLogRepository).countPage(isNull(), isNull(), isNull());
+        verify(adminActionLogRepository).findPage(isNull(), isNull(), isNull(), any(Pageable.class));
+    }
+
+    // ========== 用户详情 ==========
+
+    @Test
+    @DisplayName("用户不存在: 404, 一条读语句都不发")
+    void userDetailOfMissingUserIsNotFound() {
+        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> adminService.getUserDetail(99L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("用户不存在");
+
+        verify(trackingRepository, never()).countByUser(any());
+        verify(reviewRepository, never()).countByUserAndDeletedAtIsNull(any());
+    }
+
+    @Test
+    @DisplayName("四个计数各自走自己的聚合, 不在 Java 里数")
+    void userDetailCountsComeFromAggregates() {
+        User target = user(7L, "bob", "USER");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(target));
+        when(trackingRepository.countByUser(target)).thenReturn(12L);
+        when(reviewRepository.countByUserAndDeletedAtIsNull(target)).thenReturn(4L);
+        when(reviewRepository.countByUserAndDeletedAtIsNotNull(target)).thenReturn(1L);
+        when(episodeWatchedRepository.countByUser(target)).thenReturn(37L);
+
+        Map<String, Object> detail = adminService.getUserDetail(7L);
+
+        assertThat(detail.get("counts")).isEqualTo(Map.of(
+                "trackings", 12L, "reviewsAlive", 4L,
+                "reviewsRemoved", 1L, "episodesWatched", 37L));
+        // 在架与被移除各数各的: 相减会在两次查询之间留下窗口, 而这两个数字在界面上
+        // 是并排显示的, 对不上就会被当成 bug 报回来.
+        verify(reviewRepository).countByUserAndDeletedAtIsNull(target);
+        verify(reviewRepository).countByUserAndDeletedAtIsNotNull(target);
+    }
+
+    @Test
+    @DisplayName("锁定的判据与列表行同源: 过期的 lockedUntil 不算锁定")
+    void userDetailUsesTheSameLockedVerdictAsTheListRow() {
+        User target = User.builder().id(7L).username("bob").role("USER").status("ACTIVE")
+                .lockedUntil(LocalDateTime.of(2000, 1, 1, 0, 0)).build();
+        when(userRepository.findById(7L)).thenReturn(Optional.of(target));
+
+        Map<String, Object> detail = adminService.getUserDetail(7L);
+
+        assertThat(detail).containsEntry("locked", false).containsEntry("lockedUntil", null);
+    }
+
+    /**
+     * 「有没有 N+1」的结构性证明: 番剧名/封面**只查一次**, 且入参是两个列表 subjectId 的
+     * <b>并集</b>。
+     *
+     * <p>比数语句更稳 —— 数语句只能证明"这一轮是 9 条", 而这一条证明的是"将来追番和评论
+     * 撞上同一部番时不会去查两遍"。分两次查的写法在今天的测试数据上语句数是一样的。
+     */
+    @Test
+    @DisplayName("番剧信息只批量查一次, 入参是追番与评论 subjectId 的并集")
+    void userDetailFetchesAnimeMetadataOnceForTheUnion() {
+        User target = user(7L, "bob", "USER");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(target));
+        when(trackingRepository.findByUserOrderByUpdatedAtDesc(eq(target), any(Pageable.class)))
+                .thenReturn(List.of(
+                        AnimeTracking.builder().subjectId(100).status("WATCHING").progress(5).build(),
+                        AnimeTracking.builder().subjectId(200).status("PLAN").progress(0).build()));
+        when(reviewRepository.findPageByUserOrderByCreatedAtDesc(eq(target), any(), any(Pageable.class)))
+                .thenReturn(List.of(
+                        Review.builder().id(9L).subjectId(100).rating(8).build(),
+                        Review.builder().id(10L).subjectId(300).rating(6).build()));
+        when(animeRepository.findAllById(any())).thenReturn(List.of(
+                Anime.builder().id(100).titleCn("进击的巨人").coverUrl("c100").build(),
+                Anime.builder().id(200).title("ONE PIECE").build()));
+
+        Map<String, Object> detail = adminService.getUserDetail(7L);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Integer>> captor = ArgumentCaptor.forClass(List.class);
+        // 只被调用一次 —— 追番与评论各查一次的话这里就是 times(2)
+        verify(animeRepository, times(1)).findAllById(captor.capture());
+        assertThat(captor.getValue()).containsExactlyInAnyOrder(100, 200, 300);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> trackings = (List<Map<String, Object>>) detail.get("trackings");
+        assertThat(trackings).hasSize(2);
+        assertThat(trackings.get(0)).containsEntry("animeTitle", "进击的巨人")
+                .containsEntry("animeCover", "c100");
+        // 本地没缓存过的那部(200)回退成日文原名; 而 300 根本没在 animeRepository 里 —— 见下一条
+        assertThat(trackings.get(1)).containsEntry("animeTitle", "ONE PIECE")
+                .containsEntry("animeCover", null);
+    }
+
+    /**
+     * 本地没缓存过的番剧给 {@code null}, <b>不用「未知作品」兜底</b>。
+     *
+     * <p>编一个假名字比空着更糟: 几条不同 subjectId 的记录会挤在同一个假名字下面, 而
+     * 「这部番还没进本地库」本身是真信息。前端拿到 null 时退化成「番剧 #656083」。
+     */
+    @Test
+    @DisplayName("本地没缓存过的番剧: animeTitle 为 null, 不是「未知作品」")
+    void userDetailLeavesUnknownAnimeTitleNull() {
+        User target = user(7L, "bob", "USER");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(target));
+        when(reviewRepository.findPageByUserOrderByCreatedAtDesc(eq(target), any(), any(Pageable.class)))
+                .thenReturn(List.of(Review.builder().id(9L).subjectId(656083).rating(8).build()));
+        when(animeRepository.findAllById(any())).thenReturn(List.of());
+
+        Map<String, Object> detail = adminService.getUserDetail(7L);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> reviews = (List<Map<String, Object>>) detail.get("reviews");
+        assertThat(reviews).hasSize(1);
+        assertThat(reviews.get(0)).containsEntry("animeTitle", null)
+                .containsEntry("subjectId", 656083);
+    }
+
+    /**
+     * 三个列表都是**数组**, 空的时候是空数组而不是缺键。
+     *
+     * <p>缺键会让前端的 {@code list.length} 落到 undefined 上, 看着与空数组一样 ——
+     * 但「服务端没发这个键」这种真实故障就再也看不出来了。
+     */
+    @Test
+    @DisplayName("三个列表为空时是空数组, 不是缺键; 也从不提前返回")
+    void userDetailAlwaysCarriesThreeLists() {
+        User target = user(7L, "bob", "USER");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(target));
+
+        Map<String, Object> detail = adminService.getUserDetail(7L);
+
+        assertThat(detail).containsKeys("trackings", "reviews", "actions");
+        assertThat(detail.get("trackings")).isEqualTo(List.of());
+        assertThat(detail.get("reviews")).isEqualTo(List.of());
+        assertThat(detail.get("actions")).isEqualTo(List.of());
+        // 空的账号也走完同样多的查询: findById 收到空集合会直接返回空表、不发 SQL,
+        // 所以这里是 8 条而不是 9 条 —— 但代码里**不允许**为它补一次空查询或者加早退,
+        // 那会把常数 9 变成一个随数据变的值, 语句计数用例从此不守卫任何东西.
+        verify(animeRepository).findAllById(any());
+    }
+
+    @Test
+    @DisplayName("账本列表按 target 筛到这一个用户, 且复用列表页那一份 WHERE")
+    void userDetailScopesTheLedgerToThisUser() {
+        User target = user(7L, "bob", "USER");
+        when(userRepository.findById(7L)).thenReturn(Optional.of(target));
+
+        adminService.getUserDetail(7L);
+
+        verify(adminActionLogRepository)
+                .findPage(isNull(), eq(AdminActionLog.TARGET_USER), eq(7L), any(Pageable.class));
+        // 详情页不走 getActionPage: 那会白算一次 count 再把信封丢掉
+        verify(adminActionLogRepository, never()).countPage(any(), any(), any());
     }
 }

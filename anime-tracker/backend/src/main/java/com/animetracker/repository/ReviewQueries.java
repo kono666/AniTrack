@@ -124,6 +124,28 @@ final class ReviewQueries {
 
     static final String PAGE_HOT_DESC = SELECT_PAGE + ORDER_HOT_DESC;
 
+    // ==================== 后台 · 用户详情页的「最近评论」 ====================
+
+    /**
+     * 某一个用户写的短评, 按时间倒序 —— 服务的是后台用户详情页。
+     *
+     * <p><b>刻意含被移除的</b>(所以没有 {@code r.deletedAt IS NULL} 这个条件)。详情页上
+     * 「被移除评论 1」那个计数与这个列表必须说同一件事: 管理员刚移除一条评论, 计数涨了而
+     * 列表里找不到那一条的话, 他没法从这个页面确认自己刚做的事做成了。
+     *
+     * <p><b>为什么不给 {@code findByUserAndDeletedAtIsNullOrderByCreatedAtDesc} 加一个
+     * 带 Pageable 的重载</b>: 那个方法名把 {@code DeletedAtIsNull} 写进了名字, 给它加一个
+     * 「其实不具该语义」的重载, 读名字读不出来 —— 调用方会以为自己拿到的是在架的那些。
+     * 另外派生查询配 {@code Pageable} 会先发一条 count, 而详情页只要前 20 条、不要 total。
+     * 旧方法原样留着, 它服务的是用户自己的评论列表(那边要的就是「自己数得出的条数」)。
+     *
+     * <p><b>刻意不写 {@code JOIN FETCH r.user}</b>: 详情页的评论行不需要作者名(作者就是
+     * 这一页的主角), 行构造器完全不碰 {@code r.getUser()}。带了 fetch join 只是白读一次
+     * 用户表; 不带也没有懒加载 —— 因为根本没有代码去碰那个关联。
+     */
+    static final String PAGE_USER_CREATED_DESC =
+            "SELECT r FROM Review r WHERE r.user = :user" + ORDER_CREATED_DESC;
+
     // ==================== 管理端(后台评论管理) ====================
     //
     // 上面的片段服务的是「某部番的评论区」, 下面这一组服务的是「全站评论的后台列表」.

@@ -78,6 +78,25 @@ public class AdminController {
                 adminService.getUserPage(keyword, role, status, sort, order, page, limit));
     }
 
+    /**
+     * 单个用户的详情：账号事实 + 四个计数 + 追番/评论/账本三个小列表。
+     *
+     * <p>与上面的 {@code /users} 段数不同、与下面四个 {@code PUT /users/{id}/…} 动词不同,
+     * 所以不冲突。{@code /users/abc} 由 Spring 在参数绑定阶段抛
+     * {@code MethodArgumentTypeMismatchException} → 400 —— 这是可接受的答复(手改地址栏
+     * 本来就是错输入), 但前端要在发请求**之前**就挡住它, 否则页面会显示成一个可以无限
+     * 重试的「加载失败」。
+     *
+     * <p><b>读操作, 所以不继承任何写入限制</b>: 被禁用、被锁定的账号照样能打开详情 ——
+     * 管理员要处理的往往正是这些号, 打不开就等于这一页在最需要它的时候不可用。
+     */
+    @GetMapping("/users/{userId}")
+    public ApiResponse<Map<String, Object>> getUserDetail(@CurrentUser User user,
+                                                          @PathVariable Long userId) {
+        adminService.checkAdmin(user);
+        return ApiResponse.success(adminService.getUserDetail(userId));
+    }
+
     /** 禁用/启用用户 */
     @PutMapping("/users/{targetUserId}/toggle")
     public ApiResponse<Void> toggleUser(@CurrentUser User user, @PathVariable Long targetUserId) {

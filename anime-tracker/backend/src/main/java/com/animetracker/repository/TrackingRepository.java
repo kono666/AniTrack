@@ -25,6 +25,17 @@ public interface TrackingRepository extends JpaRepository<AnimeTracking, Long> {
     List<AnimeTracking> findByUserOrderByUpdatedAtDesc(User user, Pageable pageable);
     List<AnimeTracking> findByUserAndStatus(User user, String status);
     long countByUserAndStatus(User user, String status);
+
+    /**
+     * 该用户追了多少部 —— 后台用户详情页四个计数之一.
+     *
+     * <p>为什么不复用 {@code findByUserOrderByUpdatedAtDesc(user).size()}: 那是把每一行
+     * 都读成实体再数个数, 追番几百部的人就是白读几百行 —— 与
+     * {@code findSubjectTrackingCounts} 上面那句注释是同一条理由. 而详情页那三次
+     * 取页都已经被 {@code DETAIL_LIST_LIMIT} 封顶, 这里的计数是唯一一个「想要全部」的数字,
+     * 更不能靠把全部读进来得到.
+     */
+    long countByUser(User user);
     long countBySubjectIdAndStatus(Integer subjectId, String status);
     long countBySubjectId(Integer subjectId);
 

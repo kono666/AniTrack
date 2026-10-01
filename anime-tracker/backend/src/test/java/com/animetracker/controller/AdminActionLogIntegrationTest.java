@@ -241,6 +241,31 @@ class AdminActionLogIntegrationTest {
     }
 
     /**
+     * 账本仓储多了「按 target 筛」两个谓词之后, <b>这个接口的行为必须一个字都不变</b>。
+     *
+     * <p>谓词写的是 {@code :targetType IS NULL OR l.targetType = :targetType}, 而
+     * {@code getActionPage} 恒传 null, 于是两个分支短路成真。将来谁把 {@code IS NULL OR}
+     * 去掉、只留 {@code AND l.targetType = :targetType}, 这个接口会**静默变成空页**:
+     * 200、没有异常、{@code total} 是 0 —— 而 {@code AdminServiceTest} 里那一组用的是
+     * {@code any()} 桩, 参数本身不参与匹配, 它们会全绿。
+     *
+     * <p>所以这条必须走 HTTP: 只有把真语句交给 H2 编译、把真数据对着看, 才看得见那个
+     * 「一条都没有」。
+     */
+    @Test
+    @DisplayName("不带 target 参数时仍返回全部账, 不是空页")
+    void listingIsUnaffectedByTheNewTargetPredicates() throws Exception {
+        long target = seedUser(PREFIX + "target", "ACTIVE");
+        request(put("/api/admin/users/" + target + "/toggle")).andExpect(status().isOk());
+        request(put("/api/admin/users/" + target + "/unlock")).andExpect(status().isOk());
+
+        JsonNode all = actions();
+
+        assertThat(all.path("total").asInt()).isEqualTo(2);
+        assertThat(actionsOf(all)).containsExactlyInAnyOrder("USER_BAN", "USER_UNLOCK");
+    }
+
+    /**
      * 越界页: 200 + 空 list + **真实 total**。
      *
      * <p>total 报 0 是最容易写出来的错(取页返回空, 顺手拿 {@code list.size()} 当总数),

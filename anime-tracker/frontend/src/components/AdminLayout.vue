@@ -19,7 +19,18 @@
         <router-link to="/admin" class="admin-nav-link" exact-active-class="active" @click="closeSidebar">
           <PhChartLine :size="16" weight="bold" /> 仪表盘
         </router-link>
-        <router-link to="/admin/users" class="admin-nav-link" active-class="active" @click="closeSidebar">
+        <!-- 这一条除了 active-class 还手写了一个 :class, 因为 /admin/users 与
+             /admin/users/:id 是**兄弟路由**而不是父子(见 router/index.js 里那条注释).
+             已读 vue-router 5.3.1 的 activeRecordIndex 逐行确认: 从列表点进详情后
+             active-class 不会亮 —— 它会去找 /admin/users 这条记录、在 currentMatched
+             里找不到, 回退拿 '/admin/users' 去比父级路径 '/admin' 也不相等.
+             症状是"进了详情页, 侧栏里用户管理变成未选中", 看起来像"我不在后台这个区里了";
+             而链接是手写的, **不会有任何测试或报错提示这一点**.
+
+             startsWith 同时覆盖 /admin/users 本身与它的子路径, 不需要额外判等.
+             两处(active-class 与这个 :class)说的必须是同一件事. -->
+        <router-link to="/admin/users" class="admin-nav-link" active-class="active"
+          :class="{ active: route.path.startsWith('/admin/users') }" @click="closeSidebar">
           <PhUsers :size="16" weight="bold" /> 用户管理
         </router-link>
         <router-link to="/admin/reviews" class="admin-nav-link" active-class="active" @click="closeSidebar">

@@ -74,6 +74,23 @@ const routes = [
         meta: { title: '用户管理', scrollOnQueryChange: false },
       },
       {
+        // 仓里第一个带 :id 的后台子路由. 三条不能想当然的事:
+        //
+        // 一、**它与上面的 users 是兄弟, 不是父子.** 直接把 :id 挂在 users 底下
+        //   (users 不带 component、下挂 '' 与 ':id')也能让 active-class 天然生效,
+        //   但那会让 /admin/users 的 matched 长度从 2 变 3, 而 guard.test.js 钉着这个
+        //   数字, 且"外壳在哪一层"会多出一层歧义. 代价是侧栏高亮要手写一句 —— 见
+        //   AdminLayout.vue 上那条 :class 的注释.
+        // 二、**meta 只有 title**. 不做"标题里带用户名": 那要页面自己写 document.title,
+        //   与 afterEach 的 setDocumentTitle 抢同一格, 卸载时还会留下脏标题.
+        // 三、**不加 scrollOnQueryChange: false**. 这一页一个 query 参数都没有, 那条策略
+        //   挂在 query 变化上等于永不触发; 加在这里只会让后人以为这一页也有 URL 状态.
+        path: 'users/:id',
+        name: 'AdminUserDetail',
+        component: () => import('../views/admin/UserDetail.vue'),
+        meta: { title: '用户详情' },
+      },
+      {
         path: 'reviews',
         name: 'AdminReviews',
         component: () => import('../views/admin/Reviews.vue'),

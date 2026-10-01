@@ -15,7 +15,7 @@ vi.mock('../../../api', () => ({
 }))
 
 import Users from '../Users.vue'
-import { getAdminUsers } from '../../../api'
+import { getAdminUsers, toggleUserStatus } from '../../../api'
 
 /**
  * 用户管理的 URL 同步、筛选/排序/分页的交互, 以及竞态.
@@ -39,6 +39,10 @@ function makeRouter() {
     routes: [
       { path: '/', component: { template: '<div />' } },
       { path: '/admin/users', component: Users },
+      // 详情地址也要在: 用户名现在是个 <router-link>, 目标不在路由表里的话
+      // vue-router 会 warn 一句 "No match found" 并渲染出一个**点不动的** href ——
+      // 而"链接长得对、点下去什么都不发生"正是这里最容易漏掉的失败方式
+      { path: '/admin/users/:id', component: { template: '<div />' } },
     ],
   })
 }
@@ -425,5 +429,94 @@ describe('用户管理: 空态与竞态', () => {
     // 上一个请求的失败提示, 而那个请求早就没人关心了
     expect(wrapper.text()).toContain('u33')
     expect(wrapper.text()).not.toContain('失败')
+  })
+})
+
+/**
+ * 用户名是一个**链接**, 那一行其余部分不是.
+ *
+ * c97 把用户名包进 `<router-link>` 时, 最省事的替代写法是"整行可点"(给 `<tr>` 挂
+ * 一个 @click). 那条路要多做三件事才不出问题: 四个动作按钮各自 stopPropagation
+ * (漏一个就是"我点禁用, 结果进了详情页")、`cursor: pointer` 要盖住整行、
+ * 还要处理"Tab 到按钮按回车"与"回车进详情"撞在一起.
+ *
+ * 链接只包用户名则天然可聚焦、可回车、可右键新标签页打开, 一个事件处理都不用写.
+ * 所以下面这一组既钉"链接在", 也钉"那一行**没有**被改成整行可点".
+ */
+describe('用户管理: 用户名进详情', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setActivePinia(createPinia())
+  })
+
+  it('用户名单元格里是一条指详情页的链接', async () => {
+    getAdminUsers.mockResolvedValue(pageResult([user(1)]))
+    const wrapper = await mountAt('/admin/users')
+
+    const link = wrapper.find('.username-cell .username-link')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toBe('u1')
+    // href 而不是"点了之后路由变了": 可右键新标签页打开、可被读屏念成链接,
+    // 全是 `<a href>` 白拿的, 而 @click 那种写法一个都没有
+    expect(link.attributes('href')).toBe('/admin/users/1')
+  })
+
+  it('每一行的链接指向**自己**那一行的 id', async () => {
+    getAdminUsers.mockResolvedValue(pageResult([user(1), user(7), user(9)], 3))
+    const wrapper = await mountAt('/admin/users')
+
+    expect(wrapper.findAll('.username-link').map((a) => a.attributes('href')))
+      .toEqual(['/admin/users/1', '/admin/users/7', '/admin/users/9'])
+  })
+
+  it('点用户名真的进得了详情页', async () => {
+    getAdminUsers.mockResolvedValue(pageResult([user(1)]))
+    const wrapper = await mountAt('/admin/users')
+
+    await wrapper.find('.username-link').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/admin/users/1')
+  })
+
+  /**
+   * 四个动作按钮仍然各自可用 —— 这一条其实是在钉"那一行**没有**被改成整行可点".
+   *
+   * 整行可点的话, 点按钮会**先**触发行的 click, 于是"我点禁用, 结果进了详情页",
+   * 而且动作根本没发出去. 这里点的是「禁用」, 断言的是 toggleUserStatus 被调用、
+   * 路由**没动** —— 两半缺一不可.
+   */
+  it('点行内的动作按钮只做那个动作, 不会顺带跳进详情页', async () => {
+    // jsdom 里的 confirm 是空实现(返回 undefined), 不打这一桩的话"禁用"会在
+    // 确认那一步被拦下, 于是接口一次都没调 —— 而红的是下面那句
+    // toHaveBeenCalledWith, 看起来像按钮坏了
+    vi.stubGlobal('confirm', () => true)
+    getAdminUsers.mockResolvedValue(pageResult([user(1)]))
+    const wrapper = await mountAt('/admin/users')
+    expect(router.currentRoute.value.path).toBe('/admin/users')
+
+    toggleUserStatus.mockResolvedValue({ data: { code: 200 } })
+    const banButton = wrapper.findAll('tbody .action-btn').find((b) => b.text() === '禁用')
+    expect(banButton).toBeTruthy()
+
+    await banButton.trigger('click')
+    await flushPromises()
+
+    expect(toggleUserStatus).toHaveBeenCalledWith(1)
+    // 行上挂了 @click 的话这里会变成 /admin/users/1, 而那个跳转把用户从
+    // "刚点了禁用" 带去了另一个页面, 他会以为按钮点错了
+    expect(router.currentRoute.value.path).toBe('/admin/users')
+  })
+
+  it('用户名不再是一个纯文本单元格', async () => {
+    getAdminUsers.mockResolvedValue(pageResult([user(1)]))
+    const wrapper = await mountAt('/admin/users')
+
+    // .username-cell 这个 class 名刻意保留(既有测试与样式都指着它), 所以只钉
+    // "里面是链接"会漏掉"改成整行可点、把 <a> 挪走"这种改动 —— 那时
+    // .username-cell 还在, 但用户名已经不在里面了
+    const cell = wrapper.find('td.username-cell')
+    expect(cell.find('a').exists()).toBe(true)
+    expect(cell.text()).toBe('u1')
   })
 })

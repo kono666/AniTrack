@@ -5,6 +5,7 @@ import com.animetracker.entity.Review;
 import com.animetracker.entity.User;
 import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
+import com.animetracker.repository.EpisodeWatchedRepository;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.TrackingRepository;
@@ -84,6 +85,7 @@ class AdminServiceReviewPageTest {
                 animeRepository,
                 mock(AdminActionLogRepository.class),
                 reviewReportRepository,
+                mock(EpisodeWatchedRepository.class),
                 new IsolatedInsert(),
                 mock(PasswordEncoder.class));
     }

@@ -2,11 +2,13 @@ package com.animetracker.service;
 
 import com.animetracker.entity.AdminActionLog;
 import com.animetracker.entity.Anime;
+import com.animetracker.entity.AnimeTracking;
 import com.animetracker.entity.User;
 import com.animetracker.entity.Review;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.repository.AdminActionLogRepository;
 import com.animetracker.repository.AnimeRepository;
+import com.animetracker.repository.EpisodeWatchedRepository;
 import com.animetracker.repository.UserRepository;
 import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.ReviewRepository;
@@ -22,6 +24,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 管理端的所有动作.
@@ -120,6 +123,16 @@ public class AdminService {
     private static final int MAX_PAGE_SIZE = 100;
 
     /**
+     * 用户详情页那三个小列表各取多少条. **无分页** —— 它们是「这个人干了什么」的样张,
+     * 不是列表页, 所以没有 page 参数可以喂给它。
+     *
+     * <p>取值与列表页的默认每页同数: 这一页要让管理员一眼看出「这个号是活的还是死的」,
+     * 20 条足够看出行为模式。真正想翻遍一个人的全部评论, 那要的是「按 userId 维度筛评论」,
+     * 属于另一个需求(见提交说明里写的范围边界)。
+     */
+    private static final int DETAIL_LIST_LIMIT = 20;
+
+    /**
      * {@code COALESCE(u.createdAt, :epoch)} 的兜底值.
      *
      * <p>它的**值无所谓** —— 排序的第一键已经把缺时间的行分到最后一组, 组内第二键
@@ -134,6 +147,7 @@ public class AdminService {
     private final AnimeRepository animeRepository;
     private final AdminActionLogRepository adminActionLogRepository;
     private final ReviewReportRepository reviewReportRepository;
+    private final EpisodeWatchedRepository episodeWatchedRepository;
     private final IsolatedInsert isolatedInsert;
     private final PasswordEncoder passwordEncoder;
 
@@ -143,6 +157,7 @@ public class AdminService {
                         AnimeRepository animeRepository,
                         AdminActionLogRepository adminActionLogRepository,
                         ReviewReportRepository reviewReportRepository,
+                        EpisodeWatchedRepository episodeWatchedRepository,
                         IsolatedInsert isolatedInsert,
                         PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
@@ -151,6 +166,7 @@ public class AdminService {
         this.animeRepository = animeRepository;
         this.adminActionLogRepository = adminActionLogRepository;
         this.reviewReportRepository = reviewReportRepository;
+        this.episodeWatchedRepository = episodeWatchedRepository;
         this.isolatedInsert = isolatedInsert;
         this.passwordEncoder = passwordEncoder;
     }
@@ -373,6 +389,153 @@ public class AdminService {
         // 「这个账号没登录过」和「服务端没发这个键」, 而前端要按前者渲染成「-」.
         map.put("lastLoginAt", u.getLastLoginAt());
         return map;
+    }
+
+    /**
+     * 单个用户的详情: 账号事实 + 四个计数 + 三个小列表.
+     *
+     * <p><b>为什么要有这一页。</b> 列表页能回答「有哪些人」, 回答不了「这个人干了什么」。
+     * 管理员面对一个举报或者一个可疑的号, 之前能做的只有翻列表 —— 而列表里没有追番、
+     * 没有评论、没有「别人对他做过什么」。这一条把这三样凑齐, 于是走查第 8 条
+     * 「用户画像点不进去」有了去处。
+     *
+     * <p><b>{@code locked} 与列表行用同一套判据({@code u.isLocked()})</b>, 不另写一个
+     * 「lockedUntil 非空即锁定」: 那两处一旦分叉, 列表说「正常」而详情说「已锁定」,
+     * 或者反过来, 而两边看着都像是对的。理由与 {@link #toAdminUserRow} 里那段相同。
+     *
+     * <p><b>语句条数是 9, 与数据无关。</b> 一次 findById + 四次 count + 三次取页 +
+     * 一次 findAllById(番剧名/封面)。三次取页都固定取 {@code DETAIL_LIST_LIMIT} 条,
+     * 所以追番 500 部的人和追番 3 部的人代价一样。
+     *
+     * <p>唯一一处随数据变的是最后那次 {@code findAllById}: <b>收到空集合时 Spring Data
+     * 直接返回空表、一条 SQL 都不发</b>, 于是「既没追番又没评论」的账号是 8 条。
+     * 语句计数用例按有数据的账号钉 9 —— <b>不要为了凑常数在代码里补一次空查询</b>,
+     * 也不要在这里加「两个列表都空就提前返回」的早退: 那会把 9 变成 8, 然后有人把断言
+     * 放宽成「≤ 9」, 那条用例从此不再守卫任何东西。
+     *
+     * <p><b>三个列表都是数组, 空的时候是空数组而不是缺键。</b> 缺键会让前端的
+     * {@code list.length} 落到 undefined 上, 看着与空数组一样, 但「服务端没发这个键」
+     * 这种真实的故障就再也看不出来了。
+     *
+     * <p><b>不复用 {@link #toAdminReviewRows}</b>, 尽管键长得很像。那个方法会
+     * (一)按这一页的 id 白跑一次举报聚合(详情页不展示举报), (二)读 {@code r.getUser()}
+     * 取作者名 —— 而这一页的作者就是主角本人。而这里的评论查询刻意没有
+     * {@code JOIN FETCH r.user}(见 {@code ReviewQueries.PAGE_USER_CREATED_DESC}),
+     * 那一句要么多触发一次懒加载、要么直接抛 {@code LazyInitializationException}。
+     *
+     * @throws com.animetracker.exception.BusinessException 404, 用户不存在
+     */
+    public Map<String, Object> getUserDetail(Long userId) {
+        User u = userRepository.findById(userId)
+                .orElseThrow(() -> BusinessException.notFound("用户不存在"));
+
+        // 四个计数. 在架与被移除分开数, 不相减 —— 相减要求两个数来自同一瞬间(见
+        // ReviewRepository.countByUserAndDeletedAtIsNotNull 的注释).
+        Map<String, Object> counts = new LinkedHashMap<>();
+        counts.put("trackings", trackingRepository.countByUser(u));
+        counts.put("reviewsAlive", reviewRepository.countByUserAndDeletedAtIsNull(u));
+        counts.put("reviewsRemoved", reviewRepository.countByUserAndDeletedAtIsNotNull(u));
+        counts.put("episodesWatched", episodeWatchedRepository.countByUser(u));
+
+        Pageable first = PageRequest.of(0, DETAIL_LIST_LIMIT);
+        List<AnimeTracking> trackings = trackingRepository.findByUserOrderByUpdatedAtDesc(u, first);
+        List<Review> reviews = reviewRepository.findPageByUserOrderByCreatedAtDesc(u, EPOCH, first);
+        // 别人对这个账号做过的动作. 走的是与账本列表页同一条语句、同一份行构造器, 只是
+        // 把 target 那两个谓词填上 —— 于是「管理员在这里看到的」与「账本里记的」必然一致.
+        List<AdminActionLog> actions =
+                adminActionLogRepository.findPage(null, AdminActionLog.TARGET_USER, userId, first);
+
+        // 番剧名/封面: 两个列表的 subjectId **合并成一次查询**. 分两次查也能用, 但那样
+        // 「详情页发几条语句」就多出一个与数据无关的常数, 语句计数用例会变成在数实现细节.
+        //
+        // distinct() 不能省: 同一个用户追着又评论过的番会同时出现在两个列表里, 不去重就
+        // 白读一遍那一行. 收集成 List 而不是 Set —— 与 TrackService.getUserTrackings 同形.
+        List<Integer> subjectIds = Stream.concat(
+                        trackings.stream().map(AnimeTracking::getSubjectId),
+                        reviews.stream().map(Review::getSubjectId))
+                .distinct()
+                .collect(Collectors.toList());
+        Map<Integer, Anime> byId = animeRepository.findAllById(subjectIds).stream()
+                .collect(Collectors.toMap(Anime::getId, a -> a, (a, b) -> a));
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", u.getId());
+        data.put("username", u.getUsername());
+        data.put("email", u.getEmail());
+        data.put("avatar", u.getAvatar());
+        data.put("role", u.getRole());
+        data.put("status", u.getStatus());
+        data.put("createdAt", u.getCreatedAt());
+        data.put("lastLoginAt", u.getLastLoginAt());
+        data.put("locked", u.isLocked());
+        data.put("lockedUntil", u.isLocked() ? u.getLockedUntil() : null);
+        data.put("counts", counts);
+        data.put("trackings", toUserDetailTrackingRows(trackings, byId));
+        data.put("reviews", toUserDetailReviewRows(reviews, byId));
+        data.put("actions", toActionRows(actions));
+        return data;
+    }
+
+    /**
+     * 详情页的追番行.
+     *
+     * <p>比 {@code TrackService.getUserTrackings} 少了 {@code score}/{@code notes}:
+     * 详情页是「他追了什么」的样张, 而私密的评语与打分不属于管理员要看的账号事实。
+     * 与 {@link #toAdminReviewRows} 里「不一起给 deletedBy」是同一条取舍。
+     */
+    private static List<Map<String, Object>> toUserDetailTrackingRows(
+            List<AnimeTracking> trackings, Map<Integer, Anime> byId) {
+        List<Map<String, Object>> result = new ArrayList<>(trackings.size());
+        for (AnimeTracking t : trackings) {
+            Anime anime = byId.get(t.getSubjectId());
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("subjectId", t.getSubjectId());
+            map.put("animeTitle", anime == null ? null : animeTitleOf(anime));
+            map.put("animeCover", anime == null ? null : anime.getCoverUrl());
+            map.put("status", t.getStatus());
+            map.put("progress", t.getProgress());
+            map.put("updatedAt", t.getUpdatedAt());
+            result.add(map);
+        }
+        return result;
+    }
+
+    /**
+     * 详情页的评论行. {@code deletedAt} 非空就是「已移除」, 由前端打徽章。
+     *
+     * <p>没有 {@code username}/{@code userId}: 作者就是这一页的主角。也没有点赞/回复/
+     * 举报数 —— 那些是「该不该处理这条评论」的依据, 属于评论管理页, 而详情页要看的是
+     * 「这个人写了些什么」。
+     */
+    private static List<Map<String, Object>> toUserDetailReviewRows(
+            List<Review> reviews, Map<Integer, Anime> byId) {
+        List<Map<String, Object>> result = new ArrayList<>(reviews.size());
+        for (Review r : reviews) {
+            Anime anime = byId.get(r.getSubjectId());
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("id", r.getId());
+            map.put("subjectId", r.getSubjectId());
+            map.put("animeTitle", anime == null ? null : animeTitleOf(anime));
+            map.put("rating", r.getRating());
+            map.put("content", r.getContent());
+            map.put("deletedAt", r.getDeletedAt());
+            map.put("createdAt", r.getCreatedAt());
+            result.add(map);
+        }
+        return result;
+    }
+
+    /**
+     * 番剧名, <b>查不到就给 null</b>。
+     *
+     * <p>刻意**不用** {@link #displayName} 的「未知作品」兜底: 本地没缓存过那部番是
+     * <b>真信息</b>(番剧是按需从外部 API 拉进 {@code anime} 表的), 编一个假名字比空着
+     * 更糟 —— 几条不同 subjectId 的记录会挤在同一个假名字下面。前端拿到 null 时退化成
+     * 「番剧 #656083」。这一条与 {@link #toAdminReviewRows} 的口径一致。
+     */
+    private static String animeTitleOf(Anime anime) {
+        String cn = anime.getTitleCn();
+        return (cn != null && !cn.isBlank()) ? cn : anime.getTitle();
     }
 
     /**
@@ -887,7 +1050,11 @@ public class AdminService {
         int safePage = Math.max(page, 1);
         int safeLimit = limit < 1 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
 
-        long matched = adminActionLogRepository.countPage(actionFilter);
+        // 后两个参数恒为 null: 「按 target 筛」是用户详情页的内部能力, **刻意不从
+        // GET /api/admin/actions 暴露** —— 本轮没有前端在用, 而多一个公开口子就要多一份
+        // 守卫。仓储层那两个谓词于是各自短路成真, 这一页的效果与它们不存在时逐字相同。
+        // 真要按目标查账的那一天, 从这里把签名改回去即可, 仓储那边一个字不用动。
+        long matched = adminActionLogRepository.countPage(actionFilter, null, null);
         int total = (int) Math.min(matched, Integer.MAX_VALUE);
 
         long offset = (long) (safePage - 1) * safeLimit;
@@ -897,7 +1064,7 @@ public class AdminService {
 
         Pageable pageable = PageRequest.of(safePage - 1, safeLimit);
         return PageResults.of(
-                toActionRows(adminActionLogRepository.findPage(actionFilter, pageable)),
+                toActionRows(adminActionLogRepository.findPage(actionFilter, null, null, pageable)),
                 total, safePage);
     }
 

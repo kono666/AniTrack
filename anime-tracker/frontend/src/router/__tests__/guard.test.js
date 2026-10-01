@@ -121,3 +121,50 @@ describe('后台路由的形状', () => {
     expect(users.matched[1].components.default).not.toBe(reviews.matched[1].components.default)
   })
 })
+
+/**
+ * 用户详情: 仓里第一个带 :id 的后台子路由.
+ *
+ * 它在路由表上最常见的一种写法是**错的** —— 把 users 改成不带 component 的父记录、
+ * 下挂 '' 与 ':id' 两条. 那样 active-class 会天然生效, 但 /admin/users 的 matched
+ * 长度会从 2 变成 3, 而"外壳在哪一层"会多出一层歧义. 这里选的是兄弟路由,
+ * 代价是侧栏高亮要手写一句(见 AdminLayout.vue).
+ *
+ * 所以这三条要一起看: 名字/标题落在子记录上、权限来自父记录、**层数仍是 2**.
+ */
+describe('用户详情路由', () => {
+  it('/admin/users/3 落在 AdminUserDetail 上, 权限与页面名都对', () => {
+    const resolved = router.resolve('/admin/users/3')
+
+    expect(resolved.name).toBe('AdminUserDetail')
+    expect(resolved.meta.title).toBe('用户详情')
+    // 与 /admin/users 一样从父路由继承 —— 少了它, 详情页就是敞开的大门
+    expect(resolved.meta.requiresAdmin).toBe(true)
+    expect(resolved.meta.requiresAuth).toBe(true)
+  })
+
+  it('它是 users 的**兄弟**, 不是子路由: 层数仍是 2 且共用同一个外壳', () => {
+    const list = router.resolve('/admin/users')
+    const detail = router.resolve('/admin/users/3')
+
+    // 变成 3 就是把 users 改成了不带 component 的空壳父记录 —— 那正是本页
+    // 刻意不选的那条路(代价见文件顶部那条注释)
+    expect(detail.matched).toHaveLength(2)
+    expect(detail.matched[0].components.default).toBe(list.matched[0].components.default)
+    expect(detail.matched[1].components.default).not.toBe(list.matched[1].components.default)
+  })
+
+  it('参数真的解出来了 —— 路由匹配到了但 :id 是空的话, 页面会去请求一个空 id', () => {
+    expect(router.resolve('/admin/users/3').params.id).toBe('3')
+  })
+
+  it('普通用户访问用户详情 -> 回首页', async () => {
+    localStorage.clear()
+    await router.push('/')
+    localStorage.setItem('anime_user', JSON.stringify({ username: 'u', token: 'jwt', role: 'USER' }))
+
+    await router.push('/admin/users/3')
+
+    expect(router.currentRoute.value.path).toBe('/')
+  })
+})

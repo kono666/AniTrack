@@ -294,6 +294,18 @@ export const ADMIN_PAGE_SIZE = ADMIN_PAGE_SIZES[0]
  * 服务端日志里少一堆空参数总是更好读.
  */
 export const getAdminUsers = (params) => api.get('/admin/users', { params })
+/**
+ * 单个用户的详情: 账号事实 + 四个计数 + 追番/评论/账本三个小列表.
+ *
+ * **没有参数**, 也没有分页 —— 三个列表都由后端封顶在 20 条(见
+ * AdminService.DETAIL_LIST_LIMIT)。这一页唯一的状态是 :id, 它本来就在路径上,
+ * 所以这里也不做 query 同步。
+ *
+ * 后端对 `/admin/users/abc` 回 400(路径参数绑不上), 而调用方**必须在发请求之前**
+ * 自己校验 id —— 否则一个手改的地址会变成"加载失败 + 一个点了必然再失败的重试按钮",
+ * 而正确答案是"这个用户不存在"。
+ */
+export const getAdminUserDetail = (userId) => api.get(`/admin/users/${userId}`)
 export const toggleUserStatus = (targetUserId) =>
   api.put(`/admin/users/${targetUserId}/toggle`)
 export const unlockUser = (targetUserId) =>

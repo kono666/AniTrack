@@ -43,6 +43,9 @@ const router = createRouter({
       children: [
         { path: '', name: 'AdminDashboard', component: child('dashboard'), meta: { title: '后台概览' } },
         { path: 'users', name: 'AdminUsers', component: child('users'), meta: { title: '用户管理' } },
+        // 详情是 users 的**兄弟**, 与真路由逐字同形 —— 侧栏那条手写的
+        // :class 补丁(AdminLayout.vue)正是为这个形状写的, 少了这一条就测不到它
+        { path: 'users/:id', name: 'AdminUserDetail', component: child('user-detail'), meta: { title: '用户详情' } },
         { path: 'reviews', name: 'AdminReviews', component: child('reviews'), meta: { title: '评论管理' } },
       ],
     },
@@ -128,6 +131,35 @@ describe('后台外壳', () => {
 
     expect(activeLinks(wrapper)).toHaveLength(1)
     expect(activeLinks(wrapper)[0].text()).toContain('仪表盘')
+  })
+
+  /**
+   * 从列表点进详情之后, 「用户管理」**必须还是选中态**.
+   *
+   * 这是 c97 那条手写 `:class` 补丁唯一的哨兵, 少不得 —— 已读 vue-router 5.3.1
+   * 的 activeRecordIndex 逐行确认: /admin/users 与 /admin/users/:id 是**兄弟**
+   * 路由, 父级回退分支拿 '/admin/users' 去比父记录路径 '/admin' 不相等, 于是
+   * `active-class="active"` 在详情页上不会亮. 症状是"进了详情页, 侧栏里用户管理
+   * 变成未选中", 看起来像"我不在后台这个区里了" —— 而链接是手写的,
+   * **没有任何别的测试或报错会提示这一点**.
+   *
+   * 两条断言缺一不可: 只数条数的话, "两条都亮" 会漏过去; 只看文案的话,
+   * "用户管理与评论管理一起亮" 会漏过去.
+   */
+  it('在用户详情页上「用户管理」仍然是选中态, 而且只有它一条', async () => {
+    const wrapper = await mountAt('/admin/users/3')
+
+    expect(activeLinks(wrapper)).toHaveLength(1)
+    expect(activeLinks(wrapper)[0].text()).toContain('用户管理')
+  })
+
+  it('用户详情页的标题来自它自己的 meta.title', async () => {
+    // AdminLayout 的 <h1> 与 router.afterEach 的 document.title 读的是同一个
+    // meta.title —— 这一页刻意不做"标题里带用户名", 那会与 setDocumentTitle 抢
+    // 同一格, 卸载时还会留下脏标题
+    const wrapper = await mountAt('/admin/users/3')
+
+    expect(wrapper.find('.admin-main h1').text()).toBe('用户详情')
   })
 
   it('标题行显示的是当前子页的 meta.title', async () => {

@@ -135,7 +135,13 @@
         <tbody>
           <tr v-for="u in users" :key="u.id">
             <td>{{ u.id }}</td>
-            <td class="username-cell">{{ u.username }}</td>
+            <!-- 用户名是**链接**, 不是"整行可点". 这一行有四个动作按钮, 整行可点就必须给
+                 每个按钮 stopPropagation, 而且「Tab 到按钮」与「回车进详情」会撞在一起.
+                 链接只包用户名则天然可聚焦、可回车、可右键新标签页打开, 一行事件处理都不用写.
+                 保留 .username-cell 这个 class 名: 既有测试与样式都指着它. -->
+            <td class="username-cell">
+              <router-link class="username-link" :to="`/admin/users/${u.id}`">{{ u.username }}</router-link>
+            </td>
             <td class="email-cell">{{ u.email || '-' }}</td>
             <td>
               <span class="role-badge" :class="u.role === 'ADMIN' ? 'role-admin' : 'role-user'">
@@ -666,6 +672,10 @@ onUnmounted(cancelPendingSearch)
    改了等于没改, 真正生效的一直是这里, 两处必须一起动. 现在那份重复已删掉,
    admin.css 是唯一的归属(外壳搬过去之后, 这张表的两条规则也不该再分家). */
 .username-cell { font-size: 14px; font-weight: 500; color: var(--text); }
+/* 用户名现在是指向详情页的链接. 只用 hover 下划线 —— 常态就带下划线的话, 这一列
+   会变成整张表里视觉最重的一格, 而它只是"点得进去"而已. */
+.username-link { color: inherit; text-decoration: none; }
+.username-link:hover { text-decoration: underline; }
 .email-cell { font-size: 13px; color: var(--text-secondary); }
 .time-cell { font-size: 12px; color: var(--text-muted); }
 /* 徽章与按钮的色值走 tokens.css 的语义变量. 改前这里是 10 个写死的色值,

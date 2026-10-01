@@ -64,6 +64,30 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     List<Review> findByUserAndDeletedAtIsNullOrderByCreatedAtDesc(User user);
 
     /**
+     * 某个用户的短评, 按时间倒序取一页 —— 后台用户详情页的「最近评论」.
+     *
+     * <p><b>含被移除的</b>(语句里没有 {@code deletedAt IS NULL}), 见
+     * {@link ReviewQueries#PAGE_USER_CREATED_DESC} 的长注释. 与上面那条的关系是
+     * 「口径不同」而不是「要不要分页」, 所以是另一个方法名, 不是重载.
+     */
+    @Query(ReviewQueries.PAGE_USER_CREATED_DESC)
+    List<Review> findPageByUserOrderByCreatedAtDesc(@Param("user") User user,
+                                                    @Param("epoch") LocalDateTime epoch,
+                                                    Pageable pageable);
+
+    /** 该用户在架的短评数 —— 用户详情页四个计数之一, 与下面的被移除数配成一对 */
+    long countByUserAndDeletedAtIsNull(User user);
+
+    /**
+     * 该用户被移除的短评数.
+     *
+     * <p>与在架数分开数、不写成 {@code countByUser} 再相减: 相减要求两个数来自同一瞬间,
+     * 而这是两次查询. 详情页上「4 条在架」与「1 条已移除」是要并排显示给人看的,
+     * 对不上就会被当成 bug 报回来.
+     */
+    long countByUserAndDeletedAtIsNotNull(User user);
+
+    /**
      * 在架短评总数 —— 管理端仪表盘上那个数字.
      *
      * <p>为什么不是继承来的 {@code count()}: 那个把被移除的也算进去, 于是仪表盘上

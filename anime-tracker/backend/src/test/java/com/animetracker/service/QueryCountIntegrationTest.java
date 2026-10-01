@@ -1885,4 +1885,91 @@ class QueryCountIntegrationTest {
                 .mapToInt(v -> ((Number) v).intValue()).sum();
         assertThat(byRoleSum).as("构成统计要覆盖全体, 否则它只是'前 30 个人的构成'").isEqualTo(all);
     }
+
+    // ========== 管理端用户详情 ==========
+
+    /**
+     * 用户详情页的代价是**常数** 9 条语句, 与这个账号有多少数据无关。
+     *
+     * <p>9 = findById 1 + 四个 count 4 + 三个小列表各 1(追番 / 评论 / 账本) + 番剧名
+     * 一次 {@code findAllById}。灌 60 条追番与 60 条评论, 断言仍然是 9 —— 追番 500 部
+     * 的人打开这一页的代价与追番 3 部的人一样。
+     *
+     * <p><b>两个方向的错法都要被这个数字挡住。</b> 多出来说明有人在循环里补查询
+     * (每条追番单独查一次番剧名, 或者读评论时碰了 {@code r.getUser()} 触发懒加载);
+     * 少下去则说明哪一块根本没查 —— 比如把四个 count 合并成一个"全读回来在内存里数",
+     * 那样数字小了、页面看着也对, 只是追番多的人打开会卡。
+     *
+     * <p><b>不要为了让它好写就改成 {@code <= 9} 或者 {@code isBetween(8, 9)}。</b>
+     * 空集合那条路确实少一条({@code findAllById} 收到空集合时 Spring Data 直接返回空表、
+     * 不发 SQL), 但这条用例灌了数据, 就该是 9; 放宽之后它不再守卫任何东西。同理,
+     * 也不要在 {@code getUserDetail} 里加"两个列表都空就提前返回"的早退去凑常数。
+     */
+    @Test
+    @DisplayName("用户详情: 不论灌多少数据都是 9 条语句")
+    void userDetailCostsAConstantNumberOfQueries() {
+        seedTrackings(60);
+        seedReviewsBy(60, user);
+        AtomicReference<Map<String, Object>> holder = new AtomicReference<>();
+
+        long statements = statementsFor(() -> holder.set(adminService.getUserDetail(user.getId())));
+
+        // 三个列表都封顶在 DETAIL_LIST_LIMIT, 所以"数据多"不该让代价变大
+        assertThat((List<?>) holder.get().get("trackings")).hasSize(20);
+        assertThat((List<?>) holder.get().get("reviews")).hasSize(20);
+        assertThat(statements)
+                .as("1 findById + 4 count + 3 取页 + 1 番剧名")
+                .isEqualTo(9);
+    }
+
+    /**
+     * 四个计数**不是**把行读回来在内存里数的。
+     *
+     * <p>与上面那条是同一件事的两面, 但这条更直接: 灌 60 条追番, 断言这次调用读进来的
+     * 实体数远小于 60。少了它, 把 {@code countByUser} 改成
+     * {@code findByUserOrderByUpdatedAtDesc(u).size()} 之后**语句数一条都不变**
+     * (还是那句查追番), 只有实体数会暴露出来 —— 而那正是"追番 500 部的人打开卡一下"
+     * 那个问题的形状。
+     *
+     * <p>上界取 60 而不是"20 上下": 封顶那一页本身就要读回 20 条追番和 20 部番剧
+     * (番剧名与封面), 加上用户是 41 个上下, 而这个数字会随 {@code DETAIL_LIST_LIMIT}
+     * 变 —— 钉死它等于把用例挂在那个常量上。全读回来的写法是 120 个上下, 两者差得很开,
+     * 取 60 这个中间值就够了, 且与那个常量无关。
+     */
+    @Test
+    @DisplayName("用户详情: 四个计数是库里的聚合, 不是把行读回来在内存里数")
+    void userDetailCountsDoNotLoadRows() {
+        seedTrackings(60);
+
+        Statistics stats = statsCleared();
+        Map<String, Object> detail = adminService.getUserDetail(user.getId());
+        long loaded = stats.getEntityLoadCount();
+
+        assertThat(((Map<?, ?>) detail.get("counts")).get("trackings")).isEqualTo(60L);
+        assertThat(loaded)
+                .as("60 条追番全读回来是 120 个上下的实体; 封顶那一页只该是 40 个上下")
+                .isLessThan(60);
+    }
+
+    /**
+     * 灌 n 条由指定作者写的短评, 每条配一部本地已缓存的番剧 —— 详情页要能取到名字.
+     *
+     * <p>番剧 id 用 {@code SUBJECT_BASE + 1000} 往后排: {@link #seedTrackings} 占的是
+     * {@code SUBJECT_BASE} 开头的连续区间, 而 {@code anime.id} 是主键 —— 两条种子用同一段
+     * id 的话, 同一个用例里先灌追番再灌评论会在第二条 insert 上撞主键, 报的却是
+     * "番剧重复", 看着与详情页毫无关系.
+     */
+    private void seedReviewsBy(int n, User author) {
+        for (int i = 0; i < n; i++) {
+            int subjectId = SUBJECT_BASE + 1000 + i;
+            jdbc.update("INSERT INTO anime (id, title, tags) VALUES (?, ?, ?)",
+                    subjectId, "番" + i, "科幻");
+            jdbc.update("INSERT INTO review (user_id, subject_id, rating, content, created_at) "
+                            + "VALUES (?, ?, 8, ?, ?)",
+                    author.getId(), subjectId, "c" + i,
+                    new java.sql.Timestamp(java.sql.Timestamp.valueOf("2030-01-01 00:00:00").getTime()
+                            + i * 60_000L));
+        }
+    }
+
 }
