@@ -97,6 +97,18 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     long countByDeletedAtIsNull();
 
     /**
+     * 某个时刻之后发表、且**仍在架**的短评数 —— 看板上「近 N 天新增评论」。
+     *
+     * <p>口径必须与上面那条累计数逐字一致（都是 {@code deletedAt IS NULL}），否则
+     * 「近 7 天新增」与「总评论数」会各算各的，看板上出现对不上的两个数时没人解释得清。
+     *
+     * <p>用 {@code createdAt} 而不是 {@code updatedAt}：这一项叫「新增」，
+     * 而 {@code updatedAt} 会因为一次点赞、一次编辑就跳到今天 —— 那样「近 7 天新增」
+     * 会随着老评论被点赞而往回涨。
+     */
+    long countByDeletedAtIsNullAndCreatedAtGreaterThanEqual(LocalDateTime since);
+
+    /**
      * 每个分数各有几条 —— 评分统计用, 返回的每行是 {@code [分数, 条数]}, 最多十行.
      *
      * <p>为什么是聚合而不是把该番的评论取回来在内存里数: 那个写法要走

@@ -70,12 +70,22 @@ public class UserController {
         return ApiResponse.success("注册成功", userService.register(req));
     }
 
-    /** 登录. 限流位置与理由同 register. */
+    /**
+     * 登录. 限流位置与理由同 register.
+     *
+     * <p>{@code getRemoteAddr()} 取两次(限流一次, 落事件一次)而不是取出来存一个局部变量:
+     * 它是一次没有副作用的取值, 而存变量就要给它起个名字、读的人还得回去看那个名字
+     * 是不是同一个意思. 两次调用之间也不会有东西改变它 —— 这个请求的地址是固定的.
+     *
+     * <p>它现在多了一个下游: {@code login_event.ip}. 那一列会长期留在库里, 所以顺带
+     * 说明**存的是地址而不是身份** —— 与 {@code X-Forwarded-For} 无关, 用的是容器
+     * 改写过的 {@code getRemoteAddr()}; 而用户名**刻意不存**(理由见 V16 的头部注释).
+     */
     @PostMapping("/login")
     public ApiResponse<Map<String, Object>> login(@Valid @RequestBody LoginRequest req,
                                                  HttpServletRequest http) {
         authRateLimiter.checkLogin(http.getRemoteAddr());
-        return ApiResponse.success("登录成功", userService.login(req));
+        return ApiResponse.success("登录成功", userService.login(req, http.getRemoteAddr()));
     }
 
     /**

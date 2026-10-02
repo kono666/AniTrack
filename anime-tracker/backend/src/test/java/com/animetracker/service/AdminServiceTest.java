@@ -105,7 +105,8 @@ class AdminServiceTest {
         adminService = new AdminService(userRepository, reviewRepository,
                 trackingRepository, animeRepository,
                 adminActionLogRepository, mock(ReviewReportRepository.class),
-                episodeWatchedRepository, isolatedInsert, passwordEncoder);
+                episodeWatchedRepository, isolatedInsert, passwordEncoder,
+                mock(LoginEventService.class));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

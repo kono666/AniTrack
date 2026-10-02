@@ -5,11 +5,21 @@ import com.animetracker.entity.User;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
 public interface TrackingRepository extends JpaRepository<AnimeTracking, Long> {
     Optional<AnimeTracking> findByUserAndSubjectId(User user, Integer subjectId);
+
+    /**
+     * 某个时刻之后新建的追番记录数 —— 看板上「近 N 天新增追番」。
+     *
+     * <p>用 {@code createdAt} 而不是 {@code updatedAt}：改进度、改状态都会动
+     * {@code updatedAt}，拿它当「新增」的话，一个老用户把十年前的番改了状态，
+     * 就会让「近 7 天新增」凭空涨一条。
+     */
+    long countByCreatedAtGreaterThanEqual(LocalDateTime since);
     List<AnimeTracking> findByUserOrderByUpdatedAtDesc(User user);
 
     /**

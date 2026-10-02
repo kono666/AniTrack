@@ -46,6 +46,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByRoleForUpdate(@Param("role") String role);
     long countByStatus(String status);
 
+    /**
+     * 某个时刻之后注册的人数 —— 看板上「近 N 天新增用户」。
+     *
+     * <p>{@code user.created_at} 是注册时刻（{@code @PrePersist} 里写的），与
+     * {@code last_login_at} 是两件事：这一列答的是「什么时候来的」，那一列答的是
+     * 「最后一次什么时候来」。看板上「新增用户」用的是前者。
+     */
+    long countByCreatedAtGreaterThanEqual(LocalDateTime since);
+
     // ==================== 管理端用户列表(筛选 + 排序 + 分页) ====================
     //
     // 四条取页 + 一条计数, 语句全在 UserQueries 里. 三点与 AnimeRepository 一致:

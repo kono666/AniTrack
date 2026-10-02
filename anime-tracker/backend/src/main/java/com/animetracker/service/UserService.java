@@ -36,6 +36,7 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final LoginProtectionProperties loginProps;
+    private final LoginEventService loginEventService;
 
     /**
      * 一个结构合法的 BCrypt 哈希, 只在「用户名不存在」时用来陪着空跑一次密码校验.
@@ -47,11 +48,13 @@ public class UserService {
     public UserService(UserRepository userRepository,
                        PasswordEncoder passwordEncoder,
                        JwtUtil jwtUtil,
-                       LoginProtectionProperties loginProps) {
+                       LoginProtectionProperties loginProps,
+                       LoginEventService loginEventService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtUtil = jwtUtil;
         this.loginProps = loginProps;
+        this.loginEventService = loginEventService;
         this.absentUserHash = passwordEncoder.encode("anitrack-absent-user-placeholder");
     }
 
@@ -108,23 +111,42 @@ public class UserService {
 
     // ========== 登录 ==========
 
-    /** 登录 */
-    public Map<String, Object> login(LoginRequest req) {
+    /**
+     * 登录.
+     *
+     * <p><b>{@code ip} 是从外面传进来的, 不是在这里取的</b> —— 取它的正确姿势
+     * ({@code http.getRemoteAddr()}, 以及为什么绝不能自己去读 {@code X-Forwarded-For})
+     * 是 HTTP 层的事, 写在 {@code UserController.login} 的注释里. 这一层只负责把它
+     * 转手交给 {@link LoginEventService}.
+     *
+     * <p><b>每一条出口都恰好在 {@code login_event} 里留一条记录</b> —— 成功、用户名不存在、
+     * 密码错、被锁、被禁用各一条, 一次请求对应一行, 没有例外也没有重复. 这条不变式值得
+     * 单独说, 是因为它有个特别容易踩的反例: 密码错误那一支里, 记事件必须写在
+     * {@code recordFailure} **之前** —— 后者到达阈值时会抛出「已锁定」, 写在它后面的话,
+     * 把账号打锁的那第 5 次尝试恰好不会落库, 而它正是最该被看见的那一次.
+     */
+    public Map<String, Object> login(LoginRequest req, String ip) {
         String username = req.getUsername().trim();
         User user = userRepository.findByUsername(username).orElse(null);
 
         if (user == null) {
             burnPasswordCheck(req.getPassword());
+            // userId 给 null: 用户名不存在时没有用户可挂, 但这一行仍然要记 ——
+            // 「同一个 IP 在一分钟里打了一堆不存在的用户名」正是扫账号的形状.
+            loginEventService.recordAttempt(null, ip, false);
             throw BusinessException.badRequest(LOGIN_FAILED);
         }
 
         // 锁定检查放在密码校验之前: 锁定期内连「密码对不对」都不该被回答,
         // 否则锁定就只是限速, 不是锁定.
         if (user.isLocked()) {
+            loginEventService.recordAttempt(user.getId(), ip, false);
             throw BusinessException.tooManyRequests(lockMessage(user.getLockedUntil()));
         }
 
         if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
+            // 先记事件, 再进 recordFailure —— 顺序不能反, 理由见方法注释.
+            loginEventService.recordAttempt(user.getId(), ip, false);
             // 达到阈值时 recordFailure 自己会抛出「已锁定」, 下面那行就不会执行
             recordFailure(user);
             throw BusinessException.badRequest(LOGIN_FAILED);
@@ -133,10 +155,12 @@ public class UserService {
         // 密码正确之后才看账号状态.
         // 顺序反过来就会把「这个账号存在、而且被禁用了」告诉一个还没通过密码校验的人.
         if ("DISABLED".equals(user.getStatus())) {
+            loginEventService.recordAttempt(user.getId(), ip, false);
             throw BusinessException.forbidden("账号已被禁用，请联系管理员");
         }
 
         markLoginSuccess(user);
+        loginEventService.recordAttempt(user.getId(), ip, true);
         return buildAuthPayload(user);
     }
 
