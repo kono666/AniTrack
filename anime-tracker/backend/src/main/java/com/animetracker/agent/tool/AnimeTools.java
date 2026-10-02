@@ -170,7 +170,13 @@ public class AnimeTools implements ToolProvider {
                         + "可以再加筛选条件(年份/季度/状态/标签)缩小范围。")
                 .access(Access.PUBLIC)
                 .stringParam("year", "年份，例如 2024。不限定则不传", false)
-                .stringParam("season", "季度，格式为 yyyy-MM，例如 2024-10。不限定则不传", false)
+                // 加 yyyy-Qn 是**追加**语义, 老的 yyyy-MM 一字未改(库里 season 存的就是
+                // 月份, 传月份仍是精确命中那一个月). 两个都写在这里而不是只写新的:
+                // 模型看见的选项越多越容易挑错, 所以要把"哪个更符合用户说的『秋季』"
+                // 讲清楚 —— 用户说季度时用 Qn, 说月份时才用 MM.
+                .stringParam("season", "季度，格式为 yyyy-MM（精确到某个月，例如 2024-10）"
+                        + "或 yyyy-Qn（整个季度，例如 2024-Q4 表示 10/11/12 月）。"
+                        + "用户说的是「秋季」「第四季度」这类季度时用 Qn 写法；不限定则不传", false)
                 .enumParam("status", "播出状态。不限定则不传", false, "finished", "airing")
                 .stringParam("tag", "标签名。不限定则不传", false)
                 .enumParam("sort", "排序方式，默认按评分", false, "rating", "date", "rank")

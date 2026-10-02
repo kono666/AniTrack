@@ -12,8 +12,9 @@
     </button>
 
     <div class="browse-layout">
-      <!-- 左栏: 六组条件. 四个多选组来自前端的封闭词表(constants/filterDimensions.js),
-           年份与状态是单选、来自 /filter-meta. -->
+      <!-- 左栏: 七组条件. 四个多选组来自前端的封闭词表(constants/filterDimensions.js);
+           年份与状态是单选、来自 /filter-meta; 季度也是单选, 但四个选项写死在前端
+           (一年永远四个季度, 让后端为它多算一份投影换不到任何东西). -->
       <aside class="filter-panel" :class="{ open: sidebarOpen }">
         <section v-for="group in FILTER_GROUPS" :key="group.key" class="filter-group">
           <div class="filter-group-head">
@@ -44,8 +45,8 @@
           </div>
         </section>
 
-        <!-- 年份 / 状态: 单选. 两个都来自 /filter-meta, 而不是写死 2026..2006 ——
-             明年不用改代码, 而且天然只列出库里真有数据的年份. -->
+        <!-- 年份 / 季度 / 状态: 单选. 年份与状态来自 /filter-meta, 而不是写死
+             2026..2006 —— 明年不用改代码, 而且天然只列出库里真有数据的年份. -->
         <section class="filter-group">
           <div class="filter-group-head">
             <h2>年份</h2>
@@ -67,6 +68,30 @@
               @click="toggleSingle('year', year)"
             >{{ year }}</button>
           </div>
+        </section>
+
+        <!-- 季度: 一年固定四个, 不来自 /filter-meta —— 所以这一组**没有**加载失败
+             这一说, 也就刻意不摆错误条(与上面两组不同). 它跟着年份走: 没选年份时
+             四个按钮都禁用, 因为按钮的值要拼成 `2024-Q4`, 缺了年份拼出来是 `-Q1` ——
+             后端认不出、只会静默筛空. -->
+        <section class="filter-group">
+          <div class="filter-group-head">
+            <h2>季度</h2>
+            <button v-if="selection.season" type="button" class="filter-clear" @click="clearGroup('season')">清除</button>
+          </div>
+          <div class="filter-options">
+            <button
+              v-for="quarter in SEASON_QUARTERS"
+              :key="quarter.q"
+              type="button"
+              class="filter-option"
+              :disabled="!selection.year"
+              :class="{ active: selection.season === quarterValue(quarter.q) }"
+              :aria-pressed="selection.season === quarterValue(quarter.q) ? 'true' : 'false'"
+              @click="toggleSingle('season', quarterValue(quarter.q))"
+            >{{ quarter.label }}</button>
+          </div>
+          <p v-if="!selection.year" class="filter-hint">先选年份</p>
         </section>
 
         <section class="filter-group">
@@ -121,7 +146,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { getFiltered, getFilterMeta } from '../api'
 import { loadErrorMessage } from '../utils/loadError'
 import { strParam, pageParam, arrParam } from '../utils/query'
-import { FILTER_GROUPS, MULTI_KEYS, tagNamesOf, labelsOf, isKnownValue } from '../constants/filterDimensions'
+import {
+  FILTER_GROUPS, MULTI_KEYS, SINGLE_KEYS, SEASON_QUARTERS,
+  tagNamesOf, labelsOf, isKnownValue, seasonYear,
+} from '../constants/filterDimensions'
 import { useLatestOnly } from '../composables/useLatestOnly'
 import { vReveal } from '../directives/reveal'
 import AnimeCard from '../components/AnimeCard.vue'
@@ -142,10 +170,18 @@ const YEAR_WINDOW = 20
 /**
  * 六组条件的当前值.
  *
- * 四个多选组是 slug 数组, 年份/状态是字符串(空串 = 没选) —— 语义不同, 所以
+ * 四个多选组是 slug 数组, 年份/季度/状态是字符串(空串 = 没选) —— 语义不同, 所以
  * 不硬凑成同一种形状. 这个对象是**唯一**的真相: URL 与请求都由它推导出来.
+ *
+ * 两半都按 key 表铺开而不是逐字写死: 加一个维度时 `MULTI_KEYS` / `SINGLE_KEYS`
+ * 各改一行, 而这五处(本对象 / readQuery / syncQuery / selectionKey / activeCount)
+ * 之所以都跟着动, 是因为它们都循环同一份 key 表. 逐字写死的话, 漏掉的那一处
+ * 不会报错, 只会让条件"选得上、读不回来".
  */
-const EMPTY_SELECTION = { genre: [], medium: [], source: [], region: [], year: '', status: '' }
+const EMPTY_SELECTION = {
+  ...Object.fromEntries(MULTI_KEYS.map((key) => [key, []])),
+  ...Object.fromEntries(SINGLE_KEYS.map((key) => [key, ''])),
+}
 const selection = ref({ ...EMPTY_SELECTION })
 
 const items = ref([])
@@ -167,10 +203,23 @@ const expandedGroups = ref({})
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
+/**
+ * 第 q 个季度(1..4)的按钮值 `yyyy-Qq`. 年份拼在里面而不是只存 `Q4` —— URL 要能
+ * 深链、也能被直接调 API 的人看懂(见 filterDimensions.js 的 SEASON_QUARTERS).
+ *
+ * ⚠️ 传进来的是**季度序号**不是月份: 传月份会拼出 `2024-Q10`, 后端按"认不出的值"
+ * 处理 → 静默筛空.
+ *
+ * 没选年份时会拼出 `-Q1`: 所以按钮 `:disabled` 且 pickSeason 自己也挡一道, 两道闸
+ * 各自都挡得住.
+ */
+function quarterValue(q) {
+  return `${selection.value.year}-Q${q}`
+}
+
 const activeCount = computed(
   () => MULTI_KEYS.reduce((n, key) => n + selection.value[key].length, 0)
-    + (selection.value.year ? 1 : 0)
-    + (selection.value.status ? 1 : 0),
+    + SINGLE_KEYS.filter((key) => selection.value[key]).length,
 )
 
 /** 空态文案说"用户点的那个词", 不是 slug —— 屏幕上没有 mecha 这个词 */
@@ -178,6 +227,11 @@ const emptyMessage = computed(() => {
   if (activeCount.value === 0) return '站里还没有可浏览的作品'
   const labels = MULTI_KEYS.flatMap((key) => labelsOf(key, selection.value[key]))
   if (selection.value.year) labels.push(selection.value.year)
+  if (selection.value.season) {
+    // 屏幕上没有 "2024-Q4" 这种东西 —— 说成「2024年10月」, 与按钮上那个标签一致
+    const q = SEASON_QUARTERS.find((x) => quarterValue(x.q) === selection.value.season)
+    labels.push(q ? `${seasonYear(selection.value.season)}年${q.label}` : selection.value.season)
+  }
   if (selection.value.status) {
     labels.push(statuses.value.find((s) => s.value === selection.value.status)?.label || selection.value.status)
   }
@@ -205,14 +259,21 @@ function readQuery() {
   for (const key of MULTI_KEYS) {
     next[key] = arrParam(route.query[key]).filter((slug) => isKnownValue(key, slug))
   }
-  next.year = strParam(route.query.year)
-  next.status = strParam(route.query.status)
+  for (const key of SINGLE_KEYS) {
+    next[key] = strParam(route.query[key])
+  }
+  // 季度自带年份(`2024-Q4`), 而 URL 上可能根本没写 year, 或者写的与它不一致
+  // (手改地址栏). 一律**以季度为准**: 按钮亮着的必须是真正生效的那一年, 否则会
+  // 出现"左边亮着 2023、结果却是 2024 年秋季"这种说不清的状态.
+  const fromSeason = seasonYear(next.season)
+  if (fromSeason) next.year = fromSeason
   return { selection: next, page: pageParam(route.query.page) }
 }
 
 /** 选择状态的比较键. 逐字段比对象太啰嗦, 而 JSON.stringify 对 key 顺序敏感 */
 function selectionKey(sel) {
-  return MULTI_KEYS.map((key) => sel[key].join(',')).join('|') + '#' + sel.year + '#' + sel.status
+  return MULTI_KEYS.map((key) => sel[key].join(',')).join('|')
+    + '#' + SINGLE_KEYS.map((key) => sel[key]).join('#')
 }
 
 /**
@@ -248,6 +309,7 @@ async function loadResults() {
       source: csvOf('source'),
       region: csvOf('region'),
       year: selection.value.year || undefined,
+      season: selection.value.season || undefined,
       status: selection.value.status || undefined,
       sort: 'date',
       page: page.value,
@@ -312,10 +374,10 @@ function syncQuery() {
     if (slugs.length > 0) next[key] = slugs.join(',')
     else delete next[key]
   }
-  if (selection.value.year) next.year = selection.value.year
-  else delete next.year
-  if (selection.value.status) next.status = selection.value.status
-  else delete next.status
+  for (const key of SINGLE_KEYS) {
+    if (selection.value[key]) next[key] = selection.value[key]
+    else delete next[key]
+  }
   if (page.value > 1) next.page = String(page.value)
   else delete next.page
   $router.replace({ query: next })
@@ -349,7 +411,26 @@ function scrollToResults() {
  * 顺序不能换: 写 URL 触发的那个 watch 靠"解析出来的值等于当前 ref"来早退,
  * ref 晚一步改就会多打一次请求.
  */
+/**
+ * 年份一变, 原来选中的季度就作废.
+ *
+ * 季度按钮的值是**拼出来的**(`${year}-Q${n}`), 所以换了年份之后旧值要么指向另一年
+ * 的同一个季度、要么指向一个年份按钮上已经不存在的年 —— 两种都是"季度按钮还亮着,
+ * 筛的却是用户没打算要的那几个月". 清掉才是"年份是季度前提"这个模型该有的行为.
+ *
+ * 放在 applySelectionChange 的**最前面**, 于是 toggleSingle('year') 与
+ * clearGroup('year') 两条路都覆盖到 —— 分别写在两个 handler 里的话, 漏掉的那条
+ * 不会报错, 只会留下一个对不上的季度.
+ */
+function pruneSeason() {
+  const { season, year } = selection.value
+  if (season && seasonYear(season) !== year) {
+    selection.value = { ...selection.value, season: '' }
+  }
+}
+
 async function applySelectionChange() {
+  pruneSeason()
   page.value = 1
   sidebarOpen.value = false
   syncQuery()
@@ -368,11 +449,17 @@ async function toggleOption(group, value) {
   await applySelectionChange()
 }
 
-/** 单选组(年份/状态): 再点一下取消选中, 而不是"选中就没法取消" */
+/** 单选组(年份/季度/状态): 再点一下取消选中, 而不是"选中就没法取消" */
 async function toggleSingle(key, value) {
   selection.value = { ...selection.value, [key]: selection.value[key] === value ? '' : value }
   await applySelectionChange()
 }
+
+/* 季度按钮的点击就是普通的单选组点击: `@click="toggleSingle('season', quarterValue(quarter.q))"`.
+   曾经在这里包过一个带 `if (!year) return` 的 handler 当"第二道闸" —— 反向验证时
+   发现它**不可证伪**: disabled 的按钮在真实浏览器与 jsdom 里都收不到 click, 那行
+   return 永远走不到, 删掉它没有任何用例会红. 挡"没选年份"的是模板上那一个
+   `:disabled`, 而它是能被测红的(去掉它唯一那条季度用例立刻红). */
 
 async function clearGroup(key) {
   selection.value = { ...selection.value, [key]: Array.isArray(selection.value[key]) ? [] : '' }
