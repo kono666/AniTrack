@@ -16,11 +16,16 @@ import { useUserStore } from '../../stores/user'
 import { useNotificationStore } from '../../stores/notification'
 
 /**
- * 导航栏的三项.
+ * 导航栏的四项.
  *
  * 分类原先挤在首页最底部, 现在整块搬成了独立页, 导航栏是它**唯一**的入口 ——
  * 这一项要是没了或指错了地方, 那个页面在站内就没有任何路径能到达. 所以这里
- * 给导航栏建第一个测试文件.
+ * 给导航栏建第一个测试文件. 放送表(第四项)是同一个故事: 后端那条日历接口一直
+ * 返回整周七天而只有首页用了当天, 新页做出来之后导航栏是它除了首页标题栏那个
+ * 「查看全部」之外唯一的入口.
+ *
+ * ⚠️ **项数变了就来改上面第一条断言, 别改成 toContain.** 它守的是"没有多余的项",
+ * 放宽之后第四项、第五项加进来都不会有人发现.
  *
  * ⚠️ 两个桩是必须的, 少了就挂载不起来:
  *   · matchMedia —— jsdom 里 `typeof window.matchMedia === 'undefined'`,
@@ -41,6 +46,7 @@ const router = createRouter({
   routes: [
     { path: '/', component: { template: '<div />' } },
     { path: '/tags', component: { template: '<div />' } },
+    { path: '/calendar', component: { template: '<div />' } },
     { path: '/assistant', component: { template: '<div />' } },
     { path: '/login', component: { template: '<div />' } },
     { path: '/register', component: { template: '<div />' } },
@@ -93,10 +99,37 @@ describe('导航栏', () => {
     vi.unstubAllGlobals()
   })
 
-  it('三项的顺序是 发现 / 分类 / AI 助手', async () => {
+  it('四项的顺序是 发现 / 分类 / 放送表 / AI 助手', async () => {
     const w = await mountAt('/')
 
-    expect(labels(w)).toEqual(['发现', '分类', 'AI 助手'])
+    // ⚠️ 这里**必须**是 toEqual 不能放宽成 toContain: toContain 只守"这四项在",
+    // 守不住"没有多余的项". 而这一条断言的另一半价值正是后者 —— 导航栏多出一项
+    // 是"首页又多了一个入口"那种没人会去核对的变化.
+    //
+    // 加第四项(放送表)时这条是**故意让它红**的: 它是那次改动的哨兵, 红了才说明
+    // 有人读到了这里. 顺序也有意义 —— 放送表与「发现」「分类」是同一类(浏览站内
+    // 已有的内容), AI 助手是另一类(对话), 所以插在它前面而不是追加到最后.
+    expect(labels(w)).toEqual(['发现', '分类', '放送表', 'AI 助手'])
+  })
+
+  it('「放送表」指向 /calendar, 并且带一个图标', async () => {
+    const w = await mountAt('/')
+
+    const link = w.findAll('.nav-link').find(a => a.attributes('href') === '/calendar')
+    expect(link, '导航栏上应当有一项指向 /calendar').toBeTruthy()
+    // 与「分类」同一条理由: ≤768px 时标签被隐藏, 图标是窄屏下唯一的含义来源
+    expect(link.find('svg').exists()).toBe(true)
+    expect(link.text()).toContain('放送表')
+  })
+
+  it('已经在 /calendar 上时只有那一项是选中态', async () => {
+    const w = await mountAt('/calendar')
+
+    const link = w.findAll('.nav-link').find(a => a.attributes('href') === '/calendar')
+    expect(link.classes()).toContain('nav-link--active')
+    // 「发现」用的是 exact-active-class, 而 /calendar 不是 / 的前缀匹配问题 —— 这条
+    // 顺带守住"加了第四项没有把别人的选中态搞坏"
+    expect(w.findAll('.nav-link--active')).toHaveLength(1)
   })
 
   it('「分类」指向 /tags, 并且带一个图标', async () => {

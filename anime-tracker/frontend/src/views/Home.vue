@@ -47,14 +47,16 @@
 
       <!-- Today's Schedule -->
       <section v-if="todayAnime.length > 0" class="home-block">
-        <SectionHeader title="今日放送" v-reveal>
+        <SectionHeader title="今日放送" more="/calendar" v-reveal>
           <template #extra>
             <span class="today-date">{{ todayLabel }}</span>
             <!-- 改前这里写死 slice(0, 8): 当天排片第 9 部起直接丢掉, 而页面上
                  没有任何地方提示"还有更多"。不是折叠, 是消失。
-                 修法上选了就地展开而不是「查看更多 →」: 站内没有一页能装下"今日放送",
-                 /search 的 view 只认 rank 和 date, 硬指过去只会把人送到一个不相干的
-                 列表。等真有那一页了再换成链接。 -->
+                 就地展开**保留** —— 它解决的是"当天第 9 部起消失", 而这个列表本来就
+                 在眼皮底下, 换成跳转会让人为了看同一批东西离开首页。
+                 「真有那一页了再换成链接」那句预留在 c116 兑现了, 但兑现的是
+                 **标题栏右侧**那个 more="/calendar"(整周七天) —— 与就地展开解决的是
+                 两件事, 所以不是替换关系。 -->
             <button
               v-if="todayAnime.length > TODAY_LIMIT"
               class="today-toggle"
@@ -180,6 +182,9 @@ import { getRanking, getCalendar, getContinueWatching } from '../api'
 import { useUserStore } from '../stores/user'
 import { loadErrorMessage } from '../utils/loadError'
 import { effectiveEpisodes } from '../utils/episodes'
+// 星期换算只有一份实现(见 utils/bgmWeekday.js 的文件头): 它错过一次, 而错法是
+// "区块整个消失且没有测试会红". 放送表页读的是同一份, 不抄第二遍.
+import { bgmWeekdayId } from '../utils/bgmWeekday'
 import { COVER_FALLBACK as fallbackImg } from '../utils/fallbackImg'
 // 缓存必须活在组件实例之外, 否则"5 分钟 TTL"等于没有 —— 见 utils/homeCache.js
 import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
@@ -230,27 +235,6 @@ const todayLabel = computed(() => {
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
   return `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`
 })
-
-/**
- * 「今天是星期几」在 Bangumi 日历里的编号.
- *
- * 日历是每天一格, 每格的 weekday 长这样: {en:'Mon', cn:'星期一', ja:'月曜日', id:1},
- * id 从 1(周一) 到 7(周日); 而 JS 的 getDay() 是 0(周日) 到 6(周六) —— 两者差一次换算,
- * 就是下面那一行.
- *
- * 改前比的是 cn, 拿 '周三' 去比接口回的 '星期三': 字符串对不上, find 永远返回
- * undefined, todayAnime 恒为空数组, 于是整个「今日放送」被 v-if 藏掉 —— 一块内容
- * 消失得悄无声息, 没有报错, 也没有任何测试会红(当时的假数据是用被测代码同一个
- * WEEKDAYS 常量拼的, 见 Home.test.js 里的 calendarForToday).
- *
- * 两边都 String(): 后端把 weekday 收成了 Map<String,String>(BangumiDTO.CalendarDay),
- * Jackson 会把 JSON 里的数字 3 强制转成字符串 "3" —— 所以这里拿到的是 "3" 不是 3.
- * 只把 cn 换成 id、写成 === 3 是不够的, 那样仍然对不上.
- */
-function bgmWeekdayId() {
-  const dow = new Date().getDay()
-  return String(dow === 0 ? 7 : dow)
-}
 
 onMounted(() => {
   // 两个各自跑、互不等待. 「继续看」**不进** loadHome 里那个 Promise.all: 一次超时

@@ -18,6 +18,14 @@ const routes = [
   // 与"在 /search 上再搜一次"也是同 path 的 query 变化, 那两处正是靠回顶让用户
   // 看到新结果的开头.
   { path: '/tags', name: 'Tags', component: () => import('../views/Tags.vue'), meta: { title: '分类浏览', scrollOnQueryChange: false } },
+  // 整周放送. 后端那条日历接口一直返回**七天**, 而此前只有首页 `find` 出今天那一格、
+  // 其余六天直接丢掉 —— 这一页就是把已经在手上的东西摆出来, 不新增任何上游调用
+  // (共用同一个 calendar 缓存)。
+  //
+  // 与 /tags、/admin/users 那些不同, 这一页**没有 query 参数**: 路由上不挂
+  // scrollOnQueryChange —— 那条策略挂在"同 path 只换 query"上, 这里等于永不触发,
+  // 加了只会让后人以为这一页也有 URL 状态(与 AdminUserDetail 同一条理由)。
+  { path: '/calendar', name: 'Calendar', component: () => import('../views/Calendar.vue'), meta: { title: '放送表' } },
   { path: '/anime/:id', name: 'AnimeDetail', component: () => import('../views/AnimeDetail.vue'), props: true, meta: { title: '番剧详情' } },
   // AI 助手刻意不要求登录: 访客能直接对话是公网 Demo 的重点,
   // 而服务端只会把公开工具暴露给访客, 不存在越权的可能

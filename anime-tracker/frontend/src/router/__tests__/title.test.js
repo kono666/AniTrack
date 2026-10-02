@@ -52,6 +52,13 @@ describe('标签页标题', () => {
     expect(document.title).toBe('分类浏览 · AniTrack')
   })
 
+  it('放送表页', async () => {
+    // 与分类页同一个故事: 新做出来的独立页, 首页标题栏那个「查看全部」与导航栏
+    // 是它仅有的两个入口 —— 漏了 meta.title 的话页面照常渲染, 只有标签页退回站名
+    await router.push('/calendar')
+    expect(document.title).toBe('放送表 · AniTrack')
+  })
+
   it('被守卫重定向掉的那一页, 标题不会先闪一下', async () => {
     // 未登录访问 /profile: 真的进去的是登录页. 标题必须是「登录」——
     // 用 beforeEach 改名的话这里会先写成「个人中心」再被覆盖, 标签页上闪一下

@@ -535,8 +535,29 @@ public class AnimeService {
      * <p>没有顺手把这 112 次提交并成一次: 并成一次就没有"某一条坏掉只丢它自己"了,
      * 而下面那个 per-item 的 {@code catch} 正是靠这一点成立的. 提交变少是省后台线程的
      * 时间, 不是省用户的 —— 该省的是前者之外的那个东西.
+     *
+     * <p><b>{@code unless} 与 key 的名字是这次补上的两处.</b> 改前这里只有
+     * {@code @Cacheable(value = "calendar", key = "'today'")} —— 少了 {@code getRanking}
+     * 上那道闸, 而 {@code BangumiApiClient.getCalendar()} 在上游异常时返回的是
+     * {@code Collections.emptyList()}: 于是上游抖一下, 这份**空列表**被原样缓存
+     * {@code anitrack.cache.calendar.ttl} 那么久, 放送表整块空着, 而日志里只有两小时前
+     * 那一条 warn. 与 {@code getRanking} 是同一句话: 空结果不是"数据就是这样", 是"这次
+     * 没取到", 缓存它等于把一次瞬时故障固化成一个产品状态.
+     *
+     * <p>代价也与 {@code getRanking} 一样, 一并写在这里: 上游**持续**挂掉时每次请求都会
+     * 打到上游(改前是两小时一次). 本轮不引入负缓存 —— 那要往 {@code CacheConfig} 的名单里
+     * 加第五个缓存名, 而那份名单被 {@code CacheConfigTest} 的
+     * {@code containsExactlyInAnyOrder} 与另外八个手工 {@code new ConcurrentMapCacheManager(...)}
+     * 的测试类同时钉着, 加一个要连改九处; 何况"多久算过期"本来就该由上游自己的
+     * {@code Cache-Control} 决定.
+     *
+     * <p>key 从 {@code 'today'} 改成 {@code 'week'}: 这个方法返回的一直是**整周七天**
+     * (前端 Home.vue 自己 find 出今天那一格, 其余六天原先直接丢掉), 旧名字是误导 ——
+     * 下一个人看到 'today' 会以为返回的是当天. 改名只是让旧条目变成孤儿, 两小时后自己
+     * 消失, 不需要清缓存.
      */
-    @Cacheable(value = "calendar", key = "'today'")
+    @Cacheable(value = "calendar", key = "'week'",
+            unless = "#result == null || #result.isEmpty()")
     public List<CalendarDay> getCalendar() {
         List<CalendarDay> days = bangumiApiClient.getCalendar();
         if (!days.isEmpty()) {

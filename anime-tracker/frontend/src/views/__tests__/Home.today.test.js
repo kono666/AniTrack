@@ -48,6 +48,9 @@ const router = createRouter({
   history: createMemoryHistory(),
   routes: [
     { path: '/', component: { template: '<div />' } },
+    // 「今日放送」标题栏那条 more 指向它. 不注册的话 vue-router 会打一句
+    // "No match found" 的警告, 而 href 仍然是 /calendar —— 断言照样绿, 但输出变脏
+    { path: '/calendar', component: { template: '<div />' } },
     { path: '/anime/:id', component: { template: '<div />' } },
   ],
 })
@@ -108,6 +111,20 @@ describe('首页「今日放送」的星期比对', () => {
     expect(wrapper.text()).toContain('今日番')
     // 而且要是**今天那一格**的片子, 不是数组里第一个
     expect(wrapper.text()).not.toContain('别的番')
+  })
+
+  it('区块标题栏带一条通往 /calendar 的「查看全部」', async () => {
+    getCalendar.mockResolvedValue({ data: { data: [day(WED, [TODAY_ITEM])] } })
+    const wrapper = mountAt()
+    await flushPromises()
+
+    // 这一条与上面那条「全部 N 部」的就地展开是**两件事**, 不是替换关系:
+    // 就地展开解决"当天第 9 部起消失", 这条链接去的是整周七天那一页.
+    // 后端那条日历接口一直回七天, 而首页只用今天那一格 —— 这一页做出来之前
+    // 另外六天在站内没有任何地方看得到.
+    const more = wrapper.find('.sec-more')
+    expect(more.exists()).toBe(true)
+    expect(more.attributes('href')).toBe('/calendar')
   })
 
   it('日历里今天那一格是空的时, 区块不显示(对照: 不是无条件渲染)', async () => {

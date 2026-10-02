@@ -42,6 +42,15 @@
         <PhTag :size="18" weight="bold" />
         <span class="nav-link-label">分类</span>
       </router-link>
+      <!-- 放送表. 排在 AI 助手**前面**: 它与「发现」「分类」是同一类东西(浏览站内已有的
+           内容), 而 AI 助手是另一类入口(对话), 把它留在最后当成一组里的尾巴。
+           图标用 PhCalendarDots 不用 PhCalendar: 后者是"一个月历页", 在 18px 下与
+           PhCalendarBlank / PhCalendarCheck 几乎分不出来; Dots 那几个点在这个尺寸
+           下是唯一还能被认出来的特征。 -->
+      <router-link to="/calendar" class="nav-link" active-class="nav-link--active" @click="closeMenu">
+        <PhCalendarDots :size="18" weight="bold" />
+        <span class="nav-link-label">放送表</span>
+      </router-link>
       <router-link to="/assistant" class="nav-link" active-class="nav-link--active" @click="closeMenu">
         <PhRobot :size="18" weight="bold" />
         <span class="nav-link-label">AI 助手</span>
@@ -140,6 +149,7 @@ import PhUser from '@icons/PhUser.vue.mjs'
 import PhSignOut from '@icons/PhSignOut.vue.mjs'
 import PhRobot from '@icons/PhRobot.vue.mjs'
 import PhFilmSlate from '@icons/PhFilmSlate.vue.mjs'
+import PhCalendarDots from '@icons/PhCalendarDots.vue.mjs'
 
 const router = useRouter()
 const route = useRoute()
