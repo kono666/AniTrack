@@ -87,7 +87,8 @@ class AdminServiceReviewPageTest {
                 reviewReportRepository,
                 mock(EpisodeWatchedRepository.class),
                 new IsolatedInsert(),
-                mock(PasswordEncoder.class));
+                mock(PasswordEncoder.class),
+                mock(LoginEventService.class));
     }
 
     /** 一次"没有筛选条件"的取页, 只关心它往仓储传了什么 */

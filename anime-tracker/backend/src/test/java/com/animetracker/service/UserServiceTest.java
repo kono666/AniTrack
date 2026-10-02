@@ -48,10 +48,20 @@ class UserServiceTest {
     /** 编码器是对 mock, 让它固定返回这个串, 好断言「登录失败时确实陪跑了一次校验」 */
     private static final String DUMMY_HASH = "$2a$10$placeholderplaceholderplaceholderplaceholderplaceholde";
 
+    /**
+     * 登录请求的来源地址.
+     *
+     * <p>用 203.0.113.0/24 —— 这一段是 RFC 5737 留给文档的测试网段, 不会与任何真实地址
+     * 撞上. 刻意<b>不是</b> 127.0.0.1: 拿回环地址当"随便一个地址"会让「ip 有没有真的被
+     * 透传下去」这件事看起来永远成立.
+     */
+    private static final String CLIENT_IP = "203.0.113.7";
+
     private UserRepository userRepository;
     private PasswordEncoder passwordEncoder;
     private JwtUtil jwtUtil;
     private LoginProtectionProperties loginProps;
+    private LoginEventService loginEventService;
     private UserService userService;
 
     @BeforeEach
@@ -59,6 +69,9 @@ class UserServiceTest {
         userRepository = mock(UserRepository.class);
         passwordEncoder = mock(PasswordEncoder.class);
         jwtUtil = mock(JwtUtil.class);
+        // 登录事件的写入是旁路: 这一层只需要知道「记了什么」, 它写不写得进
+        // 由 LoginEventServiceTest 用真 repository 去管.
+        loginEventService = mock(LoginEventService.class);
         loginProps = new LoginProtectionProperties();
         loginProps.setMaxFailures(5);
         loginProps.setLockMinutes(15);
@@ -68,7 +81,8 @@ class UserServiceTest {
         // save 要回它的入参: register/login 会拿返回值继续用
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        userService = new UserService(userRepository, passwordEncoder, jwtUtil, loginProps);
+        userService = new UserService(userRepository, passwordEncoder, jwtUtil, loginProps,
+                loginEventService);
     }
 
     // ========== 工具 ==========
@@ -192,8 +206,8 @@ class UserServiceTest {
                 .thenReturn(Optional.of(existingUser("alice", "a@x.com", DUMMY_HASH)));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
 
-        String ghostMessage = messageOf(() -> userService.login(loginReq("ghost", "abcd1234")));
-        String wrongMessage = messageOf(() -> userService.login(loginReq("alice", "abcd1234")));
+        String ghostMessage = messageOf(() -> userService.login(loginReq("ghost", "abcd1234"), CLIENT_IP));
+        String wrongMessage = messageOf(() -> userService.login(loginReq("alice", "abcd1234"), CLIENT_IP));
 
         assertThat(ghostMessage).isEqualTo(wrongMessage);
         assertThat(ghostMessage).isEqualTo("用户名或密码错误");
@@ -210,7 +224,7 @@ class UserServiceTest {
     void burnsPasswordCheckForUnknownUser() {
         when(userRepository.findByUsername("ghost")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.login(loginReq("ghost", "abcd1234")))
+        assertThatThrownBy(() -> userService.login(loginReq("ghost", "abcd1234"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class);
 
         verify(passwordEncoder).matches(eq("abcd1234"), eq(DUMMY_HASH));
@@ -234,7 +248,7 @@ class UserServiceTest {
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
         when(userRepository.readFailedAttempts(1L)).thenReturn(1);   // 自增之后读回来的值
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository).incrementFailedAttempts(1L);
@@ -252,7 +266,7 @@ class UserServiceTest {
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
         when(userRepository.readFailedAttempts(1L)).thenReturn(4);
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("用户名或密码错误");
 
@@ -274,7 +288,7 @@ class UserServiceTest {
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
         when(userRepository.readFailedAttempts(1L)).thenReturn(5);   // 已经错了 5 次
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(429))
                 .hasMessageContaining("已锁定");
@@ -297,7 +311,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(429))
                 .hasMessageContaining("已锁定");
@@ -315,7 +329,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
-        Map<String, Object> data = userService.login(loginReq("alice", "abcd1234"));
+        Map<String, Object> data = userService.login(loginReq("alice", "abcd1234"), CLIENT_IP);
 
         assertThat(data.get("token")).isEqualTo("signed-token");
         // 过期的锁定时间戳要顺手清掉, 否则管理端会把它显示成「已锁定」
@@ -330,7 +344,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
-        userService.login(loginReq("alice", "abcd1234"));
+        userService.login(loginReq("alice", "abcd1234"), CLIENT_IP);
 
         User saved = savedUser();
         assertThat(saved.getFailedAttempts()).isZero();
@@ -346,7 +360,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
-        userService.login(loginReq("alice", "abcd1234"));
+        userService.login(loginReq("alice", "abcd1234"), CLIENT_IP);
 
         assertThat(savedUser().getFailedAttempts()).isZero();
     }
@@ -367,7 +381,7 @@ class UserServiceTest {
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
         LocalDateTime before = LocalDateTime.now();
-        userService.login(loginReq("alice", "abcd1234"));
+        userService.login(loginReq("alice", "abcd1234"), CLIENT_IP);
 
         assertThat(savedUser().getLastLoginAt()).isNotNull().isAfterOrEqualTo(before);
     }
@@ -385,7 +399,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class);
 
         assertThat(user.getLastLoginAt()).isNull();
@@ -400,7 +414,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class);
 
         assertThat(user.getLastLoginAt()).isNull();
@@ -414,7 +428,7 @@ class UserServiceTest {
         user.setLockedUntil(LocalDateTime.now().plusMinutes(10));
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class);
 
         assertThat(user.getLastLoginAt()).isNull();
@@ -431,7 +445,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "abcd1234"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403))
                 .hasMessageContaining("禁用");
@@ -449,7 +463,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
 
-        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123")))
+        assertThatThrownBy(() -> userService.login(loginReq("alice", "wrong123"), CLIENT_IP))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("用户名或密码错误");
     }
@@ -461,7 +475,7 @@ class UserServiceTest {
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
 
-        userService.login(loginReq("  alice  ", "abcd1234"));
+        userService.login(loginReq("  alice  ", "abcd1234"), CLIENT_IP);
 
         verify(userRepository).findByUsername("alice");
     }

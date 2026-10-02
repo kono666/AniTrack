@@ -43,8 +43,12 @@ public class AdminTools implements ToolProvider {
     private ToolDefinition dashboard() {
         return ToolDefinition.builder()
                 .name("platform_dashboard")
-                .description("获取平台核心指标：用户总数、管理员数、启用/禁用数、评论总数、追番记录总数。"
-                        + "用户问「平台现在什么情况」「有多少人用」时使用。")
+                .description("获取平台核心指标：用户总数、管理员数、启用/禁用数、评论总数、追番记录总数，"
+                        + "外加时间维度（近 7/30 天新增用户、评论、追番）与活跃度"
+                        + "（今日活跃、近 7 天活跃、近 14 天活跃曲线、近 24 小时登录失败次数）。"
+                        + "累计值回答「一共多少」，时间维度回答「最近有没有人来」——"
+                        + "用户问「平台现在什么情况」「最近有人用吗」「有多少人用」时都要用到它，"
+                        + "回答时请把这两类数分开说，不要把累计值讲成「最近的」。")
                 .access(Access.ADMIN)
                 .executor((call, user) -> {
                     adminService.checkAdmin(user);
@@ -119,11 +123,13 @@ public class AdminTools implements ToolProvider {
     private ToolDefinition weeklyReport() {
         return ToolDefinition.builder()
                 .name("weekly_ops_report")
-                .description("一次性取回运营周报所需的全部数据：核心指标、热度榜、最新评论样本、用户构成。"
+                .description("一次性取回运营周报所需的全部数据：核心指标（含近 7/30 天增量与日活/周活）、"
+                        + "热度榜、最新评论样本、用户构成。"
                         + "用户要「周报」「整体分析」「运营情况总结」时优先用它，"
                         + "一次调用胜过分别查好几个工具。"
-                        + "注意：平台目前没有按时间分区的留存/增长数据，"
-                        + "所有指标都是累计值，写结论时不要把它描述成「本周新增」。")
+                        + "注意：metrics 里同时有累计值和时间维度的值，写「本周新增」这类话时"
+                        + "只能用 growth/activity 里的数，不要把 totalUsers 这种累计值说成周增。"
+                        + "平台仍然没有留存（次日/7 日回访）数据，不要编造。")
                 .access(Access.ADMIN)
                 .executor((call, user) -> {
                     adminService.checkAdmin(user);
@@ -139,8 +145,10 @@ public class AdminTools implements ToolProvider {
                     Map<String, Object> users = summarizeUsers(adminService.getUserList());
                     out.put("userBreakdown", users);
 
-                    out.put("caveat", "以上均为累计口径，不含时间维度（无日增/周增/留存数据）。"
-                            + "给出结论时请明确这是累计快照。");
+                    out.put("caveat", "metrics.totalUsers 那几个是累计快照，"
+                            + "metrics.growth（近 7/30 天新增）与 metrics.activity（今日/近 7 天活跃、"
+                            + "近 14 天曲线）才是时间维度的数，两者不要混着说。"
+                            + "另外仍然没有留存数据（次日/7 日回访），不要编。");
                     return out;
                 })
                 .build();

@@ -22,6 +22,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -151,6 +152,7 @@ public class AdminService {
     private final EpisodeWatchedRepository episodeWatchedRepository;
     private final IsolatedInsert isolatedInsert;
     private final PasswordEncoder passwordEncoder;
+    private final LoginEventService loginEventService;
 
     public AdminService(UserRepository userRepository,
                         ReviewRepository reviewRepository,
@@ -160,7 +162,8 @@ public class AdminService {
                         ReviewReportRepository reviewReportRepository,
                         EpisodeWatchedRepository episodeWatchedRepository,
                         IsolatedInsert isolatedInsert,
-                        PasswordEncoder passwordEncoder) {
+                        PasswordEncoder passwordEncoder,
+                        LoginEventService loginEventService) {
         this.userRepository = userRepository;
         this.reviewRepository = reviewRepository;
         this.trackingRepository = trackingRepository;
@@ -170,6 +173,7 @@ public class AdminService {
         this.episodeWatchedRepository = episodeWatchedRepository;
         this.isolatedInsert = isolatedInsert;
         this.passwordEncoder = passwordEncoder;
+        this.loginEventService = loginEventService;
     }
 
     /** 校验管理员身份 */
@@ -1139,7 +1143,21 @@ public class AdminService {
 
     // ========== 数据统计 ==========
 
-    /** 系统仪表盘数据 */
+    /**
+     * 系统仪表盘数据.
+     *
+     * <p>上面六个是**累计快照**（建站至今一共多少），下面两块是**时间维度**：
+     * {@code growth} 是近 7 / 30 天的增量（从各表已有的 {@code created_at} 推出来，
+     * 不需要新表），{@code activity} 是「谁在今天来过」（来自 {@code login_event}）。
+     *
+     * <p><b>为什么非要加时间维度。</b> 累计数有个很坏的性质：一个再也没人用的站点，
+     * 累计数会永远停在那个高位上，一路看着都很健康 —— 而「最近有没有人来」才是运营
+     * 真正要看的那个数。在此之前，Agent 的周报工具只能在 caveat 里写一句「以上均为
+     * 累计口径」，现在那句话可以撤掉了。
+     *
+     * <p><b>六个老键的名字、口径、位置一个都没动</b>（Agent 的 {@code platform_dashboard}
+     * 工具与前端看板都在读它们），新增的是并列的第二层。
+     */
     public Map<String, Object> getDashboard() {
         Map<String, Object> data = new HashMap<>();
         data.put("totalUsers", userRepository.count());
@@ -1148,7 +1166,38 @@ public class AdminService {
         data.put("disabledUsers", userRepository.countByStatus("DISABLED"));
         data.put("totalReviews", reviewRepository.countByDeletedAtIsNull());
         data.put("totalTrackings", trackingRepository.count());
+        data.put("growth", growth());
+        data.put("activity", loginEventService.activity());
         return data;
+    }
+
+    /**
+     * 近 7 天 / 近 30 天的新增用户、短评、追番。
+     *
+     * <p><b>「近 N 天」在这张看板上只有一个定义：含今天的 N 个自然日，起点是服务端本地
+     * 零点。</b> 它与 {@code LoginEventService.activity()} 里那个「周活」用的是同一个窗口
+     * —— 所以「近 7 天新增用户」和「周活」并排看是对得上的（新增的一定活跃过）。
+     * 用滚动 7×24 小时会差出小半天，而这点差异在界面上没人看得出来、只能靠翻代码解释。
+     *
+     * <p>短评那一项沿用 {@code countByDeletedAtIsNull} 的口径（**不含已移除的**）：
+     * 「近 7 天新增评论」与「总评论数」必须能对得上，一个含软删一个不含的话，
+     * 看板上会出现「新增比总数涨得还快」这种无法解释的组合。
+     */
+    private Map<String, Object> growth() {
+        LocalDateTime todayStart = LocalDate.now().atStartOfDay();
+        Map<String, Object> growth = new LinkedHashMap<>();
+        growth.put("last7d", newCounts(todayStart.minusDays(6)));
+        growth.put("last30d", newCounts(todayStart.minusDays(29)));
+        return growth;
+    }
+
+    private Map<String, Object> newCounts(LocalDateTime since) {
+        Map<String, Object> counts = new LinkedHashMap<>();
+        counts.put("users", userRepository.countByCreatedAtGreaterThanEqual(since));
+        counts.put("reviews",
+                reviewRepository.countByDeletedAtIsNullAndCreatedAtGreaterThanEqual(since));
+        counts.put("trackings", trackingRepository.countByCreatedAtGreaterThanEqual(since));
+        return counts;
     }
 
     /**
