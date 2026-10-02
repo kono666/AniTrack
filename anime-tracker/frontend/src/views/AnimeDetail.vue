@@ -121,8 +121,12 @@
       </section>
 
       <!-- Related -->
+      <!-- 标题从「相关推荐」改成「你可能也喜欢」: 它与下面新加的「关联作品」是两回事 ——
+           这一块是**按这部番的第一个标签**筛出来的同类型高分条目(一个猜测), 那一块是
+           上游明明白白标着关系的条目(一个事实)。两个都叫"相关", 用户没法知道该信哪个。
+           模板与 .related-* 样式一字未动, 所以键盘可达性那几条用例继续有效。 -->
       <section v-if="relatedAnime.length > 0" class="d-section">
-        <SectionHeader title="相关推荐" />
+        <SectionHeader title="你可能也喜欢" />
         <div class="related-scroll">
           <div
             v-for="item in relatedAnime"
@@ -142,6 +146,90 @@
             <div class="rc-year" v-if="item.date">{{ item.date.substring(0,4) }}</div>
           </div>
         </div>
+      </section>
+
+      <!-- 角色与制作人员
+
+           两排横向滚动, 角色那一排的卡片下面带 CV.
+
+           两块是**各自独立**的: 一部番有角色、而上游那次 persons 恰好挂了的时候,
+           该显示的是"角色出得来、制作人员那一行说加载失败", 而不是整块空掉 ——
+           所以它们各有各的取数状态(见 loadExtras).
+
+           「整段不渲染」与「一行加载失败」的分工: 完整取回但为空 → 这一行(两块都空
+           就是整段)不渲染, 因为一部确实没有角色数据的番, 底下挂一行"没有角色"只是
+           在提示用户这里本该有东西; 取不到且本地没有旧数据 → 才给出重试的出口. -->
+      <section v-if="showRoles" class="d-section">
+        <SectionHeader title="角色与制作人员" />
+
+        <div v-if="showCharacters" class="ex-row">
+          <div class="ex-row-hd">角色</div>
+          <HorizontalScroll v-if="extras.characters.items.length > 0">
+            <div v-for="c in extras.characters.items" :key="c.id" class="ex-card">
+              <div class="ex-cover">
+                <img :src="c.image || fallbackImg" :alt="c.name" @error="e=>e.target.src=fallbackImg" />
+              </div>
+              <div class="ex-name">{{ c.name }}</div>
+              <!-- 没有声优不是异常: 实测 128 条角色里 63 条就没有 —— 那种情况这一行不渲染 -->
+              <div v-if="(c.actors || []).length > 0" class="ex-sub">CV {{ actorLine(c) }}</div>
+            </div>
+          </HorizontalScroll>
+          <p v-else class="ex-error">
+            加载失败
+            <button class="ex-retry" @click="loadExtras(['characters'])">重试</button>
+          </p>
+        </div>
+
+        <div v-if="showStaff" class="ex-row">
+          <div class="ex-row-hd">制作人员</div>
+          <HorizontalScroll v-if="extras.staff.items.length > 0">
+            <div v-for="p in extras.staff.items" :key="p.id" class="ex-card">
+              <div class="ex-cover">
+                <img :src="p.image || fallbackImg" :alt="p.name" @error="e=>e.target.src=fallbackImg" />
+              </div>
+              <div class="ex-name">{{ p.name }}</div>
+              <div v-if="p.relation" class="ex-sub">{{ p.relation }}</div>
+            </div>
+          </HorizontalScroll>
+          <p v-else class="ex-error">
+            加载失败
+            <button class="ex-retry" @click="loadExtras(['staff'])">重试</button>
+          </p>
+        </div>
+      </section>
+
+      <!-- 关联作品
+
+           与上面「你可能也喜欢」不是一回事: 那一块是按这部番的第一个标签筛出来的同类型
+           条目(一个猜测), 这一块是上游明明白白标着关系的条目(一个事实) —— 前传 / 续集 /
+           剧场版 / 游戏, 所以角标上那个关系正是这一块唯一多说出来的信息.
+
+           结构与 .related-* 那套完全同形(它本来就是"一张封面 + 一行标题"), 所以直接复用
+           那几个类, 只多一个 .rc-badge; 键盘可达性那三条也照抄, 两个都要(enter 与 space). -->
+      <section v-if="showRelations" class="d-section">
+        <SectionHeader title="关联作品" />
+        <div v-if="extras.relations.items.length > 0" class="related-scroll">
+          <div
+            v-for="item in extras.relations.items"
+            :key="item.id"
+            class="related-card"
+            role="button"
+            tabindex="0"
+            @click="$router.push(`/anime/${item.id}`)"
+            @keydown.enter.prevent="$router.push(`/anime/${item.id}`)"
+            @keydown.space.prevent="$router.push(`/anime/${item.id}`)"
+          >
+            <div class="rc-cover">
+              <img :src="item.image || fallbackImg" :alt="item.nameCn || item.name" @error="e=>e.target.src=fallbackImg" />
+              <div v-if="item.relation" class="rc-badge">{{ item.relation }}</div>
+            </div>
+            <div class="rc-title">{{ item.nameCn || item.name }}</div>
+          </div>
+        </div>
+        <p v-else class="ex-error">
+          加载失败
+          <button class="ex-retry" @click="loadExtras(['relations'])">重试</button>
+        </p>
       </section>
 
       <!-- Reviews -->
@@ -410,6 +498,9 @@ import {
   getMyReview, saveReview, deleteMyReview as delReviewApi,
   getTrackingStatus, saveTracking, deleteTracking,
   getWatchedEpisodes, toggleEpisode, getAnimeHeat, getFiltered,
+  // 附属数据那三个(角色 / 制作人员 / 关联作品). 它们与上面几个不同的地方是
+  // **会按需回源**: 库里没有或标记过期时, 那次请求会真的打一趟上游
+  getSubjectCharacters, getSubjectStaff, getSubjectRelations,
   likeReview, unlikeReview, getReviewLikers,
   getReplies, addReply, editReply, deleteReply,
   likeReply, unlikeReply, getReplyLikers,
@@ -421,6 +512,7 @@ import { effectiveEpisodes } from '../utils/episodes'
 import { COVER_FALLBACK_CARD as fallbackImg } from '../utils/fallbackImg'
 import { useToast } from '../composables/useToast'
 import SectionHeader from '../components/SectionHeader.vue'
+import HorizontalScroll from '../components/HorizontalScroll.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Pagination from '../components/Pagination.vue'
@@ -674,6 +766,73 @@ async function load(){
     error.value = loadErrorMessage(e, '加载番剧')
   }
   loading.value=false
+}
+
+/* ── 附属数据: 角色与制作人员 / 关联作品 ──
+
+   这一块的取数路径与页面其余部分**刻意不同**: 那三个端点各自按需回源(库里没有、
+   或者标记过期才去上游抓一趟), 冷启动那一次会真的打上游. 所以它们绝不能挡住首屏 ——
+   loadExtras() 在核心那几条 load() 之后单独跑, 谁也不 await 谁.
+
+   三个请求**各自成败互不牵连**: 一部番有角色、而上游那次 persons 挂了的时候, 该
+   显示的是"角色出得来、制作人员那一行说加载失败", 而不是整块空掉. 所以这里用的是
+   Promise.allSettled 而不是 Promise.all —— all 只要有一个 reject 就在那一行跳出,
+   另外两块即使拿到了数据也一个字都不会写(它们的 status 还停在 loading, 于是整段
+   什么都不渲染). 这不是理论: 每一块都独立失败、独立重试, 隔离全靠这两个字的差别.
+
+   渲染规则(模板里那几条 v-if 是它的实现):
+     - 取回成功但为空 → 这一行不渲染(两块都空就是整段不渲染). 一部确实没有角色数据的
+       番, 底下挂一行"没有角色"只是在提示用户这里本该有东西;
+     - 取不到且本地没有旧数据 → 一行「加载失败 · 重试」. 后端此时回的是 502(有旧数据
+       才回 200), 所以"确实没有"与"这次没取到"在协议层就已经分开了;
+     - 取不到但已经有旧数据 → 照旧显示旧数据. 重试失败把已经看得见的内容换成一个错误
+       提示, 是纯粹的倒退(与后端"陈旧的角色表比一句报错有用"同一个取舍). */
+const EXTRA_SECTIONS = ['characters', 'staff', 'relations']
+
+/** 名字 → 取数函数. 用查表而不是 if/switch: 三个端点回的是同一个形状, 各自的差异
+ *  只有这一个映射 */
+const EXTRAS_FETCHERS = {
+  characters: getSubjectCharacters,
+  staff: getSubjectStaff,
+  relations: getSubjectRelations,
+}
+
+/** 每块各自 { items, status }: status 是 idle / loading / done / error */
+const extras = reactive({
+  characters: { items: [], status: 'idle' },
+  staff: { items: [], status: 'idle' },
+  relations: { items: [], status: 'idle' },
+})
+
+/** 这一块有东西可显示: 有数据, 或者取不到且没有旧数据(那种情况要给重试的出口) */
+const hasContent = box => box.items.length > 0 || box.status === 'error'
+const showCharacters = computed(() => hasContent(extras.characters))
+const showStaff = computed(() => hasContent(extras.staff))
+const showRoles = computed(() => showCharacters.value || showStaff.value)
+const showRelations = computed(() => hasContent(extras.relations))
+
+/** 声优那一行. 一条角色可以挂不止一个声优(实测 128 条角色里 63 条没有, 有的最多 2 个), 用 / 连起来 */
+const actorLine = c => (c.actors || []).map(a => a.name).filter(Boolean).join(' / ')
+
+/**
+ * 取其中几块(默认三块全取). 重试就靠它单独重取那一块 —— 一块挂了不必把另外两块
+ * 也重问一遍上游.
+ */
+async function loadExtras(sections = EXTRA_SECTIONS) {
+  sections.forEach(name => { extras[name].status = 'loading' })
+  const settled = await Promise.allSettled(
+    sections.map(name => EXTRAS_FETCHERS[name](sid))
+  )
+  settled.forEach((r, i) => {
+    const box = extras[sections[i]]
+    if (r.status === 'fulfilled') {
+      box.items = r.value?.data?.data || []
+      box.status = 'done'
+    } else {
+      // 刻意不清空 items: 见上面"取不到但已经有旧数据"那一条
+      box.status = 'error'
+    }
+  })
 }
 
 /**
@@ -1113,7 +1272,12 @@ async function toggleReplyLikers(reply){
   await fetchReplyLikers(reply.id)
 }
 
-onMounted(load)
+onMounted(() => {
+  // 附属数据排在正文之后: load() 自己吞掉异常(它不会 reject), 所以这个 .then
+  // 一定会跑到. 不 await 它的结果是"页面先完整出来, 那两块随后自己长出来" ——
+  // 反过来会让首屏陪着一起等一趟上游(那三个端点在冷启动时是真的要去抓的)
+  load().then(() => loadExtras())
+})
 </script>
 
 <style scoped>
@@ -1207,6 +1371,24 @@ onMounted(load)
 .rc-score{ position:absolute; bottom:4px; right:4px; padding:2px 6px; border-radius:4px; background:var(--cover-scrim); color:var(--cover-star); font-size:10px; font-weight:700; }
 .rc-title{ font-size:13px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .rc-year{ font-size:11px; color:var(--text-muted); }
+/* 「关联作品」那个关系角标(前传/续集/剧场版…). 压在封面上 → 与 .rc-score 同一组
+   --cover-* 变量, 不跟主题变; 位置在左上, 因为右下角那个位置是评分角的。 */
+.rc-badge{ position:absolute; top:4px; left:4px; max-width:calc(100% - 8px); padding:2px 6px; border-radius:4px; background:var(--cover-scrim); color:var(--cover-fg); font-size:10px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ====== 附属数据(角色与制作人员) ====== */
+/* 卡片比 .related-card 窄一档: 这两排是配角信息, 一屏能扫过去的张数比封面大小更要紧。
+   高度不固定 —— 有声优的卡比没有的多一行(实测 128 条角色里 63 条没有声优)。 */
+.ex-row{ margin-bottom:16px; }
+.ex-row-hd{ font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:8px; }
+.ex-card{ width:104px; flex-shrink:0; }
+.ex-cover{ aspect-ratio:3/4; border-radius:var(--radius-sm); overflow:hidden; background:var(--bg-secondary); margin-bottom:6px; }
+.ex-cover img{ width:100%; height:100%; object-fit:cover; }
+.ex-name{ font-size:12px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ex-sub{ font-size:11px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 「加载失败 · 重试」: 一块拉不到时的出口。刻意不用 EmptyState —— 那是一个居中的
+   大块(40px 图标 + 一句提示), 塞进一个分区里会把上下两块内容挤散。 */
+.ex-error{ margin:0; font-size:12px; color:var(--text-muted); }
+.ex-retry{ padding:0; border:none; background:none; color:var(--primary); font-size:12px; font-family:inherit; cursor:pointer; text-decoration:underline; }
 
 /* ====== REVIEWS ====== */
 .my-review{ background:var(--bg-secondary); border-radius:var(--radius); padding:16px; margin-bottom:20px; border:1px solid var(--border); }

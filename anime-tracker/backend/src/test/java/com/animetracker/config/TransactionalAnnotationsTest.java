@@ -5,6 +5,9 @@ import com.animetracker.repository.AnimeTagRepository;
 import com.animetracker.repository.EpisodeWatchedRepository;
 import com.animetracker.service.AdminService;
 import com.animetracker.service.IsolatedInsert;
+import com.animetracker.service.SubjectExtrasMapper;
+import com.animetracker.service.SubjectExtrasService;
+import com.animetracker.service.SubjectExtrasWriter;
 import com.animetracker.service.TagMigrationService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,6 +133,56 @@ class TransactionalAnnotationsTest {
                 .as("四个破坏性动作各自用 IsolatedInsert.attempt 圈出边界, 类级注解会把这层边界搅乱")
                 .isNull();
         assertThat(AdminService.class.getAnnotation(jakarta.transaction.Transactional.class))
+                .as("两套事务注解不要并存")
+                .isNull();
+    }
+
+    /**
+     * 附属数据的三个落库方法各挂一个 Spring 的 {@code @Transactional}, 传播行为是默认的
+     * {@code REQUIRED}。
+     *
+     * <p>它们守住的是"先删后插 + 写 marker"三件事同生共死。丢掉事务的后果<b>在正常路径上
+     * 一条用例都不会红</b>: 数据照样写进去, 只是不再原子 —— 要到某次中途失败才会留下
+     * "内容被删了、新的没插进去、marker 还说取过"的状态, 而那块内容从此永远空着。
+     *
+     * <p>⚠️ 这三条<b>只证明注解在、能被解析</b>, 证明不了"运行时真的开了事务" ——
+     * 那一条只能靠 {@code SubjectExtrasWriterTest} 里真库上的回滚断言。两者缺一不可:
+     * 那边证明行为, 这边防的是"某次重构把注解删了/把方法挪走了, 而那边恰好没跑到"。
+     *
+     * <p>顺带钉住"这三个方法必须留在这个类里且是 public": {@code SubjectExtrasService}
+     * 调用它们走的是跨 bean 的代理调用, 一旦有人把它们搬回 service 并改成 {@code this.}
+     * 自调用, 事务就静默消失了 —— 那正是这个类存在的理由。
+     */
+    @Test
+    @DisplayName("SubjectExtrasWriter 的三个落库方法都是 Spring @Transactional 且能被解析")
+    void subjectExtrasWriterMethodsAreTransactional() throws Exception {
+        assertSpringTransactional(SubjectExtrasWriter.class,
+                SubjectExtrasWriter.class.getMethod("replaceCharacters",
+                        Integer.class, SubjectExtrasMapper.CharacterRows.class));
+        assertSpringTransactional(SubjectExtrasWriter.class,
+                SubjectExtrasWriter.class.getMethod("replaceStaff", Integer.class, List.class));
+        assertSpringTransactional(SubjectExtrasWriter.class,
+                SubjectExtrasWriter.class.getMethod("replaceRelations", Integer.class, List.class));
+    }
+
+    /**
+     * {@link SubjectExtrasService} 类上**没有** {@code @Transactional} —— 这是刻意的,
+     * 而且是这一版最容易被"顺手改好"的一处。
+     *
+     * <p>{@code AnimeService.getAnimeDetail}/{@code getEpisodes} 都把 HTTP 放在事务里,
+     * 而这里刻意不: 公开端点上一次请求会占住一个数据库连接最长 30–60 秒, 上游一慢,
+     * 全站共用的连接池先被占满 —— 一个第三方服务的抖动会顺着这条路径放大成整个站点
+     * 不可用。所以取数(本类, 无事务)与落库({@link SubjectExtrasWriter}, 有事务)是分开的。
+     *
+     * <p>加上类级注解不会让任何用例变红, 只会把上面那条性质悄悄换掉。所以只能靠断言挡。
+     */
+    @Test
+    @DisplayName("SubjectExtrasService 类上没有 @Transactional —— HTTP 必须在事务外")
+    void subjectExtrasServiceHasNoClassLevelTransaction() {
+        assertThat(SubjectExtrasService.class.getAnnotation(Transactional.class))
+                .as("类级事务会把回源那段 HTTP 一起圈进来: 上游一慢就占住全站共用的连接池")
+                .isNull();
+        assertThat(SubjectExtrasService.class.getAnnotation(jakarta.transaction.Transactional.class))
                 .as("两套事务注解不要并存")
                 .isNull();
     }

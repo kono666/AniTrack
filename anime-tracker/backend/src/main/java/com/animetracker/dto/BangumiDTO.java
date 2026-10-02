@@ -49,12 +49,112 @@ public class BangumiDTO {
         private JsonNode value;
     }
 
+    /**
+     * 上游的图片变体.
+     *
+     * <p><b>{@code grid} 与 {@code small} 是 V17 补的</b>, 在它们之前这里只有
+     * large/common/medium. 补的理由不是"多接一个字段不花钱", 而是三个 extras 接口
+     * (characters/persons/subjects)**根本没有 common**, 而角色与人员那一侧最优的档位
+     * 恰恰是 grid —— 实测 (六部番 226 个角色 / 325 个人员):
+     *
+     * <ul>
+     *   <li>{@code characters}: grid 与 large 的通过率相同(92.9%), 而 grid 的体积是
+     *       large 的四分之一左右;</li>
+     *   <li>{@code persons}: 同样 grid 与 large 并列(60.9%), 其余档位一个都不通过;</li>
+     *   <li>{@code subjects}(关联条目): <b>只有 large 通过</b>, 它的 grid/common/medium
+     *       全是 {@code /r/} 前缀那种形式(100% vs 0%)。</li>
+     * </ul>
+     *
+     * <p>"通过率"指能过 {@link com.animetracker.util.CoverImages#canonical} 的
+     * (https + lain.bgm.tv + {@code /pic/} 前缀 + 不带 query)。不通过的不会被丢掉,
+     * 它们由 {@code proxied()} 原样返回、前端直连 —— 与存量封面同一条路子。
+     */
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ImagesDTO {
         private String large;
         private String common;
         private String medium;
+        private String grid;
+        private String small;
+    }
+
+    /**
+     * {@code GET /v0/subjects/{id}/characters} 的一项.
+     *
+     * <p>实测元素形状: {@code {actors:[...], id, images, name, relation, summary, type}}.
+     * {@code summary} 刻意<b>不接</b>: 实测最长 1199 字符, 而详情页的角色卡只印名字、
+     * 定位与声优, 收进来就是一列没人读的长文本。{@code type}(1~4)同理不接。
+     *
+     * <p>{@code actors} 可以为空 —— 实测 128 条角色里 63 条没有声优, 那不是异常数据,
+     * 是"这个角色没有配音信息"。
+     */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class CharacterDTO {
+        private Integer id;
+        private String name;
+        /** 角色定位: 主角 / 配角 / 闲角 / 旁白 (实测最长 2 字) */
+        private String relation;
+        private ImagesDTO images;
+        private List<ActorDTO> actors;
+    }
+
+    /**
+     * 角色条目里的一个声优.
+     *
+     * <p>实测键: {@code {career, id, images, locked, name, short_summary, type}} ——
+     * <b>没有 {@code relation}</b>(实测 0 条有)。所以声优这一侧没有"职务"可存,
+     * 而同一个 {@code id} 会在同一条目里重复出现(实测最多 4 次): 同一个人配了不同角色。
+     * 这正是 {@code subject_character_actor} 必须用代理主键的原因, 详见 V17 的注释。
+     */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ActorDTO {
+        private Integer id;
+        private String name;
+        private ImagesDTO images;
+    }
+
+    /**
+     * {@code GET /v0/subjects/{id}/persons} 的一项(我们叫它 staff 那一块).
+     *
+     * <p>实测键: {@code {career, eps, id, images, name, relation, type}}。
+     * {@code career}(职业列表)与 {@code eps}(参与的集数, 实测是<b>字符串</b>)都不接 ——
+     * 界面上那一格印的是"谁 + 干了什么"(name + relation), 这两项没有位置。
+     *
+     * <p>⚠️ 与角色那一侧不同, 这里 {@code relation} 是**有值的**(原画 / 作画监督 / 演出…,
+     * 实测最长 8 字), 而且同一 {@code id} 会以不同 relation 反复出现(实测最多 5 次),
+     * 所以它同样不能做唯一键。
+     */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class PersonDTO {
+        private Integer id;
+        private String name;
+        private String relation;
+        private ImagesDTO images;
+    }
+
+    /**
+     * {@code GET /v0/subjects/{id}/subjects} 的一项 —— 关联条目.
+     *
+     * <p>实测键: {@code {id, images, name, name_cn, relation, type}}。
+     * <b>没有 {@code date}</b>(所以卡片上不印年份, 不是"我们没取", 是上游不给)。
+     *
+     * <p>{@code name_cn} 常常是空串而不是 null, 而且大量条目本来就没有中文名 ——
+     * 选名字的规则见 {@code SubjectExtrasMapper}.
+     */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class RelatedSubjectDTO {
+        private Integer id;
+        private String name;
+        @JsonProperty("name_cn")
+        private String nameCn;
+        /** 前传 / 续集 / 剧场版 / 游戏 / 画集 … (实测最长 5 字) */
+        private String relation;
+        private ImagesDTO images;
     }
 
     @Data

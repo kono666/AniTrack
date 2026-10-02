@@ -41,13 +41,18 @@ class LoginEventPropertiesBindingTest {
 
     /**
      * 单位是 {@code Duration} 的转换器在管，而**写错单位不会报错**：{@code 30} 会被当成
-     * 30 **纳秒**。结局是清理任务每次跑都把整张表删空 —— 那正是 {@code purgeExpired} 里
+     * 30 **毫秒**。结局是清理任务每次跑都把整张表删空 —— 那正是 {@code purgeExpired} 里
      * 「保留期为 0 就跳过」那道闸想拦、却拦不住的东西（它不是 0，它是一个正数）。
+     *
+     * <p>⚠️ 这条注释原写的是"30 纳秒"，是错的：{@code SubjectExtrasPropertiesBindingTest.
+     * unitLessValueIsMilliseconds} 实测同一个转换器把裸数字解读成**毫秒**（30 → 30000000ns）。
+     * 结论不变（仍然远小于 180 天，仍然拦不住），但数的量级差了一百万倍，所以照着改掉 ——
+     * 一条写错的注释比没有注释更贵。
      *
      * <p>所以这里拿 {@code 30s} 去绑，断言的是**秒数**而不是原字符串。
      */
     @Test
-    @DisplayName("带单位的写法按秒换算 —— 不带单位会被当成纳秒, 那道「0 就跳过」的闸拦不住")
+    @DisplayName("带单位的写法按秒换算 —— 不带单位会被当成毫秒, 那道「0 就跳过」的闸拦不住")
     void unitLessValueIsNotSilentlyAccepted() {
         runner.withPropertyValues("anitrack.login-event.retention=30s")
                 .run(ctx -> {

@@ -1,18 +1,26 @@
 package com.animetracker.controller;
 
+import com.animetracker.config.SubjectExtrasRateLimiter;
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.BangumiDTO.CalendarDay;
 import com.animetracker.dto.response.AnimeDTO;
 import com.animetracker.dto.response.AnimeMapper;
 import com.animetracker.dto.response.EpisodeDTO;
+import com.animetracker.dto.response.SubjectExtrasDTO;
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.Episode;
+import com.animetracker.entity.SubjectRelation;
+import com.animetracker.entity.SubjectStaff;
 import com.animetracker.service.AnimeService;
+import com.animetracker.service.SubjectExtrasService;
 import com.animetracker.util.TagTranslationUtil;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -39,10 +47,17 @@ public class BangumiController {
 
     private final AnimeService animeService;
     private final AnimeMapper animeMapper;
+    private final SubjectExtrasService subjectExtrasService;
+    private final SubjectExtrasRateLimiter rateLimiter;
 
-    public BangumiController(AnimeService animeService, AnimeMapper animeMapper) {
+    public BangumiController(AnimeService animeService,
+                             AnimeMapper animeMapper,
+                             SubjectExtrasService subjectExtrasService,
+                             SubjectExtrasRateLimiter rateLimiter) {
         this.animeService = animeService;
         this.animeMapper = animeMapper;
+        this.subjectExtrasService = subjectExtrasService;
+        this.rateLimiter = rateLimiter;
     }
 
     // ══════════ 搜索 ══════════
@@ -100,6 +115,91 @@ public class BangumiController {
                 .map(EpisodeDTO::from)
                 .collect(Collectors.toList());
         return ApiResponse.success(list);
+    }
+
+    // ══════════ 附属数据: 角色 / 制作人员 / 关联条目 ══════════
+
+    /**
+     * 角色与声优.
+     *
+     * <p>这三个接口(含下面两个)与详情页那一条的其余请求是<b>并行</b>发的, 它们各自独立,
+     * 前端也是分开渲染、分开重试的(见 {@code AnimeDetail.vue} 的 {@code loadExtras})。
+     *
+     * <p><b>为什么取不到时回 502 而不是 200 + 空数组。</b> 空数组有一个确定的含义 ——
+     * 「这个条目确实没有角色」(实测 subject 21 就是), 而它应当让那一整块<b>静默隐藏</b>。
+     * 把"上游抖了一下"也编码成空数组, 用户看到的就是那块内容无声无息地消失: 页面其余
+     * 部分完好, 没有报错, 没有可点的东西 —— 他只会以为这部番没收录角色。
+     * 所以两种情况在协议层就分开, 前端才有办法分别渲染"隐藏"与"加载失败 · 重试"。
+     *
+     * <p>回 502 的条件很窄: <b>这次回源失败了, 且库里也没有上一版数据能顶上来</b>。
+     * 有陈旧数据时照常回 200 —— 陈旧的角色表比一个错误提示有用。
+     */
+    @GetMapping("/subject/{subjectId}/characters")
+    public ResponseEntity<ApiResponse<List<SubjectExtrasDTO.CharacterDTO>>> getCharacters(
+            @PathVariable @Min(value = 1, message = "条目 id 必须大于 0") Integer subjectId,
+            HttpServletRequest http) {
+
+        rateLimiter.check(http.getRemoteAddr());
+        SubjectExtrasService.SectionResult<SubjectExtrasService.CharacterBlock> result =
+                subjectExtrasService.getCharacters(subjectId);
+        if (result.failed()) {
+            return upstreamUnavailable();
+        }
+        List<SubjectExtrasDTO.CharacterDTO> list = result.data().characters().stream()
+                .map(c -> SubjectExtrasDTO.CharacterDTO.from(c, result.data().actorsOf(c.getCharacterId())))
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(ApiResponse.success(list));
+    }
+
+    /** 制作人员 */
+    @GetMapping("/subject/{subjectId}/staff")
+    public ResponseEntity<ApiResponse<List<SubjectExtrasDTO.StaffDTO>>> getStaff(
+            @PathVariable @Min(value = 1, message = "条目 id 必须大于 0") Integer subjectId,
+            HttpServletRequest http) {
+
+        rateLimiter.check(http.getRemoteAddr());
+        SubjectExtrasService.SectionResult<List<SubjectStaff>> result =
+                subjectExtrasService.getStaff(subjectId);
+        if (result.failed()) {
+            return upstreamUnavailable();
+        }
+        return ResponseEntity.ok(ApiResponse.success(
+                result.data().stream().map(SubjectExtrasDTO.StaffDTO::from).collect(Collectors.toList())));
+    }
+
+    /**
+     * 关联条目(前传 / 续集 / 剧场版 / 游戏 / 画集 …).
+     *
+     * <p>与"相关推荐"那一块不是一回事: 那一块是<b>按第一个标签</b>筛出来的同类型条目
+     * (一个猜测), 这一块是上游明明白白标着关系的条目(一个事实)。所以它们在页面上是
+     * 两块, 标题也不一样。
+     */
+    @GetMapping("/subject/{subjectId}/relations")
+    public ResponseEntity<ApiResponse<List<SubjectExtrasDTO.RelationDTO>>> getRelations(
+            @PathVariable @Min(value = 1, message = "条目 id 必须大于 0") Integer subjectId,
+            HttpServletRequest http) {
+
+        rateLimiter.check(http.getRemoteAddr());
+        SubjectExtrasService.SectionResult<List<SubjectRelation>> result =
+                subjectExtrasService.getRelations(subjectId);
+        if (result.failed()) {
+            return upstreamUnavailable();
+        }
+        return ResponseEntity.ok(ApiResponse.success(
+                result.data().stream().map(SubjectExtrasDTO.RelationDTO::from).collect(Collectors.toList())));
+    }
+
+    /**
+     * 三处共用的"上游取不到"响应.
+     *
+     * <p>HTTP 状态与响应体里的 {@code code} 都给 502: 只给一个的话, 读日志的人与写前端的人
+     * 会各自看到一半 —— 而这一版前端是靠 axios 的 reject(真状态码)判断的,
+     * 它不看 {code}, 所以那个字段在这里是给日志和以后的人看的。
+     */
+    private <T> ResponseEntity<ApiResponse<T>> upstreamUnavailable() {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiResponse.error(HttpStatus.BAD_GATEWAY.value(),
+                        "上游暂时取不到, 请稍后重试"));
     }
 
     // ══════════ 排行榜 ══════════

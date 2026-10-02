@@ -18,6 +18,10 @@ vi.mock('../../api', () => ({
   toggleEpisode: vi.fn(),
   getAnimeHeat: vi.fn(),
   getFiltered: vi.fn(),
+  // 附属数据那三个. 一个都不能漏 —— 理由见 AnimeDetail.test.js 里同一处
+  getSubjectCharacters: vi.fn(),
+  getSubjectStaff: vi.fn(),
+  getSubjectRelations: vi.fn(),
   likeReview: vi.fn(),
   unlikeReview: vi.fn(),
   getReviewLikers: vi.fn(),

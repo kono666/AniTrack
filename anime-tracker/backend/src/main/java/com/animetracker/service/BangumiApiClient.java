@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
@@ -161,6 +162,71 @@ public class BangumiApiClient {
             }
         }
         return new EpisodeFetch(all, complete);
+    }
+
+    // ==================== 附属数据: 角色 / 制作人员 / 关联条目 ====================
+
+    /**
+     * 一次附属数据回源的结果. 形状与 {@link EpisodeFetch} 同源, 理由也同源.
+     *
+     * <p>{@code complete=false} 表示<b>这次没成</b>(网络故障、上游 5xx、解析失败) ——
+     * 调用方不能把它写成"已经取过"。这与"上游明确说这里没有东西"是两件完全不同的事,
+     * 而它们的响应体长得一模一样(都是空列表)。
+     *
+     * <p><b>为什么现在只有"整次成败"这一档, 却还要留 complete.</b> 这三个接口是
+     * <b>单次返回整个集合</b>的(实测 subject 8 的 /characters 一次 128 行, 没有
+     * offset/limit), 所以今天不存在"翻了一半"。留着它是因为响应体是<b>裸数组</b>、
+     * 没有 {@code total} —— 上游哪天开始截断, 我们从响应里<b>无从发现</b>。真到那天,
+     * 补的判据落在这个字段上, 而不是在三个调用点各改一遍。
+     */
+    public record SubjectCollectionFetch<T>(List<T> items, boolean complete) {}
+
+    /** 角色(含声优) */
+    public SubjectCollectionFetch<CharacterDTO> getCharacters(Integer subjectId) {
+        return fetchCollection("/v0/subjects/" + subjectId + "/characters",
+                new ParameterizedTypeReference<List<CharacterDTO>>() {});
+    }
+
+    /** 制作人员 */
+    public SubjectCollectionFetch<PersonDTO> getPersons(Integer subjectId) {
+        return fetchCollection("/v0/subjects/" + subjectId + "/persons",
+                new ParameterizedTypeReference<List<PersonDTO>>() {});
+    }
+
+    /** 关联条目(前传/续集/剧场版/游戏…) */
+    public SubjectCollectionFetch<RelatedSubjectDTO> getRelatedSubjects(Integer subjectId) {
+        return fetchCollection("/v0/subjects/" + subjectId + "/subjects",
+                new ParameterizedTypeReference<List<RelatedSubjectDTO>>() {});
+    }
+
+    /**
+     * 取一个"整集合"接口, 并把<b>「这里没有东西」与「这次没取到」分开</b>。
+     *
+     * <p>这个区分是这一个方法存在的全部理由, 而且它有一个很具体的后果:
+     * 两者都会得到"空列表"这个调用方最想要的东西, 于是把它们混成一种, 一次瞬时故障
+     * 就会被写成"这个条目确实没有角色" —— 而 marker 一落, 这个结论就固化了,
+     * 直到 TTL 到期。库里从此躺着一条"问过上游了, 没有", 而事实是"没问到"。
+     *
+     * <p>实测: 不存在的 subject 回 <b>HTTP 404</b>(body 是
+     * {@code {"title":"Not Found",...}}), 所以 404 是**上游给出的确定答案** ——
+     * {@code complete=true, items=[]}。其余任何异常都是"这次没成"。
+     *
+     * <p>返回的列表保证非 null: 调用方直接 for-each, 不必各自判一次。
+     */
+    private <T> SubjectCollectionFetch<T> fetchCollection(
+            String path, ParameterizedTypeReference<List<T>> typeRef) {
+        try {
+            List<T> items = get(path, typeRef);
+            return new SubjectCollectionFetch<>(
+                    items != null ? items : Collections.emptyList(), true);
+        } catch (HttpClientErrorException.NotFound e) {
+            // 404 是答案本身, 不是故障 —— 见方法注释
+            log.debug("Bangumi {} 上游回 404: 这个条目确实没有这一块", path);
+            return new SubjectCollectionFetch<>(Collections.emptyList(), true);
+        } catch (Exception e) {
+            log.warn("Bangumi {} 取失败: {}", path, e.getMessage());
+            return new SubjectCollectionFetch<>(Collections.emptyList(), false);
+        }
     }
 
     /** 获取每日放送日历 */

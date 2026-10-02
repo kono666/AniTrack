@@ -137,6 +137,28 @@ export const getRanking = (sort = 'rank', limit = 20) =>
   api.get('/bangumi/ranking', { params: { sort, limit } })
 export const getTags = () => api.get('/bangumi/tags')
 
+/**
+ * 详情页底部的三块附属数据: 角色 / 制作人员 / 关联条目.
+ *
+ * 与上面几条不同的地方有两点, 都影响调用方怎么写:
+ *
+ * 1. **它们会按需回源**: 库里没有、或者标记过期时, 服务端这一次会真的去抓上游
+ *    (冷启动那次就是). 所以详情页把它们排在正文之后单独跑, 不让首屏陪着等.
+ * 2. **空数组与失败是两回事**: 上游明确说"这里没有"→ 200 + `[]`(前端整段不渲染);
+ *    这次没取到且库里也没有旧数据 → **502**(前端给出「加载失败 · 重试」). 所以
+ *    调用方不能把 catch 与空列表合并成一种处理 —— 合并之后一次上游抖动就变成
+ *    "这部番没有角色", 一个用户永远看不出来的假象.
+ *
+ * 这三条共用 axios 那个 10 秒上限. 超时只是**浏览器这边**放弃: 服务端那次上游调用
+ * 与落库都会跑完, 标记也就落下了, 所以点一次「重试」通常立刻就有数据.
+ */
+export const getSubjectCharacters = (subjectId) =>
+  api.get(`/bangumi/subject/${subjectId}/characters`)
+export const getSubjectStaff = (subjectId) =>
+  api.get(`/bangumi/subject/${subjectId}/staff`)
+export const getSubjectRelations = (subjectId) =>
+  api.get(`/bangumi/subject/${subjectId}/relations`)
+
 // ========== 追番管理 ==========
 export const saveTracking = (data) => api.post('/track', data)
 export const deleteTracking = (subjectId) =>
