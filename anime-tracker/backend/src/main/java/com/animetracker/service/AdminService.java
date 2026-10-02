@@ -613,9 +613,26 @@ public class AdminService {
      * <p>角色用白名单而不是黑名单: 这一列直接决定能拿到哪些接口, 黑名单漏一个值就是
      * 一个越权口子, 白名单漏了顶多是「某个合法值暂时用不了」, 失败方向是安全的.
      *
-     * <p>残留的窗口: 「数到还剩一个管理员」和「写下去」之间不是原子的, 两个管理员
-     * 同时降级对方时理论上都能通过检查. 要彻底堵死得靠数据库层的约束或加锁,
-     * 而这里要防的是手滑和误操作, 不是两个管理员合谋把自己锁死, 所以没上那一层.
+     * <p><b>「数到还剩一个管理员」与「写下去」之间那个窗口, 现在关上了。</b>
+     * 这里原先只对着 count 做判断, 注释里如实写着「两个管理员同时降级对方时理论上
+     * 都能通过检查」, 并说明当时的取舍是「要防的是手滑和误操作, 不是两个管理员合谋」。
+     * 现在改成了加锁, 也就是**推翻了那个取舍**。理由有两条:
+     *
+     * <ul>
+     *   <li>撞上它的后果与「手滑」是同一个量级 —— 系统里 0 个管理员, 管理端再没人
+     *       进得去, 而且改角色这个动作本身就要管理员权限, 没有任何自助恢复的入口。
+     *       一条"概率低但不可恢复"的路, 用"概率低"当不上锁的理由是不成立的;</li>
+     *   <li>代价几乎为零: 这次调用本来就在 {@code isolatedInsert.attempt(...)} 的
+     *       {@code REQUIRES_NEW} 事务里, 锁从「数」自然持有到「写」提交,
+     *       作用域正好等于要保护的区间 —— 不需要新开事务, 也不需要引入新的失败模式。
+     *       改角色是低频动作, 串行化它没有吞吐代价。</li>
+     * </ul>
+     *
+     * <p>加锁加在 {@code UserRepository.findByRoleForUpdate} 上: 它把数到的管理员行
+     * 全部 {@code FOR UPDATE} 锁住。两个并发降级于是串行, 后到的那个在锁释放后重新求值,
+     * 看见前一个已经把人降下去了, 数到 1, 正确拒绝。守卫用例见
+     * {@code AdminRoleConcurrencyIntegrationTest} —— 那条用例用的是闩锁而不是"两个线程
+     * 一起冲", 因为 TOCTOU 窗口太窄, 朴素并发用例在没锁的实现上多半也会绿。
      */
     public void setUserRole(User actor, Long targetUserId, String role) {
         if (role == null || !ROLES.contains(role)) {
@@ -633,7 +650,7 @@ public class AdminService {
 
             // 不变式: 这次操作之后, 系统里至少还得剩下一个管理员
             if ("ADMIN".equals(target.getRole()) && !"ADMIN".equals(role)
-                    && userRepository.countByRole("ADMIN") <= 1) {
+                    && userRepository.findByRoleForUpdate("ADMIN").size() <= 1) {
                 throw BusinessException.badRequest("这是最后一个管理员, 不能降级");
             }
 

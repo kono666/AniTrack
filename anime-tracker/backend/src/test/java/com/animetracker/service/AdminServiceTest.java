@@ -226,11 +226,15 @@ class AdminServiceTest {
         User actor = user(1L, "admin", "ADMIN");
         User other = user(2L, "boss", "ADMIN");
         when(userRepository.findById(2L)).thenReturn(Optional.of(other));
-        when(userRepository.countByRole("ADMIN")).thenReturn(1L);
+        when(userRepository.findByRoleForUpdate("ADMIN")).thenReturn(List.of(actor));
 
         assertThatThrownBy(() -> adminService.setUserRole(actor, 2L, "USER"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("最后一个管理员");
+
+        // 数的动作必须是**加锁那条** —— 只是换个名字的 countByRole 在这里能过,
+        // 却挡不住两个管理员同时降级对方(那条由真库的并发用例兜底)
+        verify(userRepository).findByRoleForUpdate("ADMIN");
 
         verify(userRepository, never()).save(any(User.class));
     }
@@ -241,7 +245,7 @@ class AdminServiceTest {
         User actor = user(1L, "admin", "ADMIN");
         User other = user(2L, "boss", "ADMIN");
         when(userRepository.findById(2L)).thenReturn(Optional.of(other));
-        when(userRepository.countByRole("ADMIN")).thenReturn(2L);
+        when(userRepository.findByRoleForUpdate("ADMIN")).thenReturn(List.of(actor, other));
 
         adminService.setUserRole(actor, 2L, "USER");
 

@@ -1,8 +1,10 @@
 package com.animetracker.repository;
 
 import com.animetracker.entity.User;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,6 +19,31 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByUsername(String username);
     boolean existsByEmail(String email);
     long countByRole(String role);
+
+    /**
+     * 「数一数系统里还有几个管理员」, 但**把数到的这几行锁住**, 直到调用方那个事务结束。
+     *
+     * <p>它和上面 {@link #countByRole} 唯一的不同就是这条锁, 而这条锁专门服务于
+     * {@code AdminService.setUserRole} 里那条不变式: 「这次操作之后至少还剩一个管理员」。
+     * 光数不加锁的话, 「数」与「写」之间开着一个窗口 —— 两个管理员同时降级对方, 各自都
+     * 数到 2、各自都放行, 提交完系统里 0 个管理员, 而且两个请求都回成功。窗口很窄,
+     * 手点几乎撞不上; 撞上就是整个管理端再也进不去, 且没有任何自助恢复的入口。
+     *
+     * <p><b>为什么是 SELECT ... FOR UPDATE 而不是把计数改成一条带条件的 UPDATE。</b>
+     * 要护住的是「count 与 save 之间」这段区间, 不是 count 这一条语句 —— 只有把行锁持有
+     * 到事务结束才能覆盖它。{@code PESSIMISTIC_WRITE} 在 H2 与 PostgreSQL 上都落成
+     * {@code FOR UPDATE}, 两者行为一致。
+     *
+     * <p><b>拿到锁之后再数, 读到的是"排队到我这时"的最新已提交状态</b> (READ COMMITTED
+     * 下被阻塞的语句在锁释放后会重新求值)。于是并发降级变成串行: 后到的那个会看见前一个
+     * 已经把人降下去了, 数到 1, 正确拒绝。
+     *
+     * <p>⚠️ 返回的是实体列表而不是计数, 但调用方**只能取 size**。别拿这些实体去改:
+     * 锁的作用域是事务, 事务一结束锁就没了, 那时再 save 等于没加锁。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT u FROM User u WHERE u.role = :role")
+    List<User> findByRoleForUpdate(@Param("role") String role);
     long countByStatus(String status);
 
     // ==================== 管理端用户列表(筛选 + 排序 + 分页) ====================
