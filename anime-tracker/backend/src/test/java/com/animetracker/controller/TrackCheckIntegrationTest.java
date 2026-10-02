@@ -1,5 +1,6 @@
 package com.animetracker.controller;
 
+import com.animetracker.util.CoverImages;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -52,6 +53,15 @@ class TrackCheckIntegrationTest {
     private static final int SUBJECT_CACHED = 998102;
     /** 本地缓存过、且知道总集数, 用来验「看完了就不在继续看里」的那一部 */
     private static final int SUBJECT_FINISHED = 998103;
+
+    /**
+     * 一个**真封面**(白名单内的 lain.bgm.tv 地址).
+     *
+     * <p>本文件里其它地方用的 {@code "cover-a"} 那种假地址是验不出代理有没有接上的:
+     * 白名单外的地址原样返回, 于是"过没过 {@code CoverImages.proxied}"两种写法产出完全
+     * 相同的一行. 要证明接线接上了, 只能用真地址。
+     */
+    private static final String REAL_COVER = "https://lain.bgm.tv/pic/cover/l/aa/01/998102.jpg";
 
     @Autowired
     private MockMvc mockMvc;
@@ -197,8 +207,13 @@ class TrackCheckIntegrationTest {
         // anime.id 就是 Bangumi 的 subject id, 由同步逻辑写入 —— 这里手工造一行来走另一支.
         // episode_total 特意取一个与 total_episodes **不等**的值: 这两个数在前端是两个不同的
         // 东西(声明值 vs 本地收齐的条数), 取相同值的话"发的是哪一个"就验不出来了.
-        jdbc.update("INSERT INTO anime (id, title, title_cn, total_episodes, episode_total) VALUES (?, ?, ?, ?, ?)",
-                SUBJECT_CACHED, "original title", "中文名", 12, 9);
+        //
+        // cover_url 给一个**真封面**: 这一条断言就是 TrackService 那个 proxied 调用点的哨兵.
+        // 给 "cover-a" 那样的假地址是验不出来的 —— 非白名单**原样返回**, 于是"过没过
+        // proxied"两种写法产出一模一样.
+        jdbc.update("INSERT INTO anime (id, title, title_cn, total_episodes, episode_total, cover_url) "
+                        + "VALUES (?, ?, ?, ?, ?, ?)",
+                SUBJECT_CACHED, "original title", "中文名", 12, 9, REAL_COVER);
         toggle(token, SUBJECT_CACHED, 1);
 
         JsonNode withAnime = rowFor(trackingList(token), SUBJECT_CACHED);
@@ -206,6 +221,10 @@ class TrackCheckIntegrationTest {
                 "id", "subjectId", "status", "progress", "score", "notes", "createdAt", "updatedAt",
                 "animeTitle", "animeCover", "totalEpisodes", "episodeTotal");
         assertThat(withAnime.path("animeTitle").asText()).as("titleCn 优先").isEqualTo("中文名");
+        assertThat(withAnime.path("animeCover").asText())
+                .as("白名单内的封面必须换成本站代理地址 —— 首页/追番页的封面就是这一行")
+                .isEqualTo(CoverImages.proxied(REAL_COVER))
+                .startsWith(CoverImages.PROXY_PATH + "?url=");
         assertThat(withAnime.path("totalEpisodes").asInt()).isEqualTo(12);
         // 两个键都得真的带上值 —— 只断键存在的话, 发一个恒 null 的 episodeTotal 也会绿,
         // 而前端拿它当分母时 null 与 0 一样是"不知道", 进度条仍然不画

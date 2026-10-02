@@ -2,12 +2,16 @@ package com.animetracker.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.converter.StringHttpMessageConverter;
+import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
@@ -65,6 +69,75 @@ public class WebConfig implements WebMvcConfigurer {
         // 强制 UTF-8, 解决 Python 响应中文乱码导致数据丢失
         rt.getMessageConverters().add(0,
                 new StringHttpMessageConverter(StandardCharsets.UTF_8));
+        return rt;
+    }
+
+    /**
+     * 取封面图用的 HTTP 客户端, 只给 {@code CoverImageService} 用.
+     *
+     * <p><b>为什么是第三个客户端, 而不是复用上面那个.</b> 上面那个是抓 Bangumi
+     * <b>接口</b>的: 超时按 JSON 的量级给(20s), 而且是"跟着 302 走"的默认行为。
+     * 这一条恰恰相反 —— 它取的是**用户给的一个 URL**, 所以有三件事必须与它不同:
+     *
+     * <ol>
+     *   <li><b>不跟随重定向</b>(覆写 {@code prepareConnection} 关掉
+     *       {@code HttpURLConnection.setInstanceFollowRedirects}). 这是这条路上最大的
+     *       一个洞: 白名单只校验了**第一跳**的地址, 而 {@code lain.bgm.tv} 只要回一个
+     *       302 到 {@code http://169.254.169.254/…}(云主机元数据端点), 客户端就会
+     *       老老实实跟过去 —— 于是"只信任一个域名"在白名单校验通过之后立刻失效。
+     *       关掉之后 3xx 会原样回到我们手里, 由 {@code CoverImageService} 一律当失败。
+     *
+     *       <p>为什么是覆写 {@code prepareConnection} 而不是调一个 setter:
+     *       {@link SimpleClientHttpRequestFactory} <b>没有</b> {@code setInstanceFollowRedirects}
+     *       (那一个是 Apache HttpClient 那个工厂的 API), 而它自己的
+     *       {@code prepareConnection} 里恰恰有一行
+     *       {@code connection.setInstanceFollowRedirects("GET".equals(httpMethod))} ——
+     *       也就是说 GET 默认**是**跟随的。这个覆写正是覆盖那一行, 必须在
+     *       {@code super} 之后调。</li>
+     *   <li><b>超时更短</b>(连 5s / 读 10s). 取一张图片不该等 20 秒; 而且这个请求
+     *       发生在页面渲染的路径上, 一屏可能有几十张 —— 每张都占着一个 Tomcat 线程。</li>
+     *   <li><b>错误处理器不读响应体</b>. {@code DefaultResponseErrorHandler} 在
+     *       4xx/5xx 时会把上游的响应体<b>整段读进内存</b>去拼异常消息, 而它读之前
+     *       不看 {@code Content-Length} —— 这正是这条接口特意要堵的那类无界读取,
+     *       只不过换了个地方发生。置空之后状态码由我们自己在读流时判断, 一律有界。</li>
+     * </ol>
+     *
+     * <p>刻意<b>不加</b> {@code StringHttpMessageConverter}: 这条路上走的是
+     * {@code RestTemplate.execute(...)} 加自己读流, <b>根本不经过消息转换器</b>。
+     * 加一个在那儿只会让人以为它在起作用 —— 与 {@code CacheProperties} 注释里
+     * 那些"读不到的死配置"是同一种毛病。
+     */
+    @Bean
+    public RestTemplate imageRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory() {
+            @Override
+            protected void prepareConnection(HttpURLConnection connection, String httpMethod)
+                    throws IOException {
+                super.prepareConnection(connection, httpMethod);
+                // 必须在 super 之后: 它自己那一行是 setInstanceFollowRedirects("GET".equals(...))
+                connection.setInstanceFollowRedirects(false);
+            }
+        };
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+
+        RestTemplate rt = new RestTemplate(factory);
+        rt.setErrorHandler(new ResponseErrorHandler() {
+            /**
+             * 一律说"没有错误", 好让 {@code doExecute} 不提前抛、直接把响应交给
+             * 我们那条读流的代码 —— 上限因此对 4xx/5xx 也一样生效.
+             *
+             * <p>只实现这一个方法: {@code ResponseErrorHandler} 上唯一必须实现的就是它,
+             * {@code handleError} 是 default 且只在 {@code hasError} 为真时才会被调到 ——
+             * 这里恒假, 所以<b>刻意不覆写它</b>. 覆写一个永远不会执行的方法, 与
+             * {@code CacheProperties} 注释里那批"读不到的死配置"是同一种毛病:
+             * 看起来是一道防线, 实际一次都不会生效.
+             */
+            @Override
+            public boolean hasError(ClientHttpResponse response) {
+                return false;
+            }
+        });
         return rt;
     }
 }

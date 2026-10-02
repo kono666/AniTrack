@@ -1,5 +1,6 @@
 package com.animetracker.controller;
 
+import com.animetracker.util.CoverImages;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,6 +71,17 @@ class AdminUserDetailIntegrationTest {
      */
     private static final int ANIME_CACHED = 910001;
     private static final int ANIME_ALSO_CACHED = 910002;
+    /** 本地缓存过、且封面是个**真地址**的那一部 —— 见 {@link #REAL_COVER} */
+    private static final int ANIME_PROXIED = 910003;
+
+    /**
+     * 一个白名单内的真封面.
+     *
+     * <p>本文件里其它几处用的是 {@code "cover-a"} 这种假地址, 而它们<b>验不出代理有没有
+     * 接上</b>: 白名单外的地址由 {@code CoverImages.proxied} 原样返回, 于是"过没过 proxied"
+     * 两种写法产出完全一样的一行. 要证明接线真的接上了, 只能用真地址。
+     */
+    private static final String REAL_COVER = "https://lain.bgm.tv/pic/cover/l/aa/01/910003.jpg";
 
     /**
      * 只被评论提到、{@code anime} 表里**没有**的那一部.
@@ -111,7 +123,8 @@ class AdminUserDetailIntegrationTest {
                 + "(SELECT id FROM \"user\" WHERE username LIKE 'td%')");
         jdbc.update("DELETE FROM admin_action_log");
         jdbc.update("DELETE FROM \"user\" WHERE username LIKE 'td%'");
-        jdbc.update("DELETE FROM anime WHERE id IN (?, ?)", ANIME_CACHED, ANIME_ALSO_CACHED);
+        jdbc.update("DELETE FROM anime WHERE id IN (?, ?, ?)",
+                ANIME_CACHED, ANIME_ALSO_CACHED, ANIME_PROXIED);
 
         if (adminToken == null) {
             adminToken = login("admin", "admin123");
@@ -336,9 +349,13 @@ class AdminUserDetailIntegrationTest {
         seedAnime(ANIME_CACHED, "Sousou no Frieren", "葬送的芙莉莲", "cover-a");
         // ANIME_ALSO_CACHED 刻意**不灌**: 只有日文原名都没有的才是"没进本地库"
         seedAnime(ANIME_ALSO_CACHED, "Bocchi the Rock!", null, "cover-b");
+        // 第三个刻意给一个**真封面**: "cover-a" 那种假地址是验不出代理有没有接上的 ——
+        // 白名单外的地址原样返回, 于是"过没过 CoverImages.proxied"产出完全一样的一行。
+        seedAnime(ANIME_PROXIED, "Yofukashi no Uta", "彻夜之歌", REAL_COVER);
 
         seedTracking(target, ANIME_CACHED, "WATCHING", 5, 2);
         seedTracking(target, ANIME_MISSING, "PLAN", 0, 1);
+        seedTracking(target, ANIME_PROXIED, "PLAN", 0, 0);
         seedReview(target, ANIME_MISSING, "没缓存过那部的评论", 1);
 
         JsonNode data = detailOf(target);
@@ -350,6 +367,9 @@ class AdminUserDetailIntegrationTest {
         assertThat(trackings.get(1).path("subjectId").asInt()).isEqualTo(ANIME_MISSING);
         assertThat(trackings.get(1).path("animeTitle").isNull()).isTrue();
         assertThat(trackings.get(1).path("animeCover").isNull()).isTrue();
+        assertThat(trackings.get(2).path("animeCover").asText())
+                .as("白名单内的封面必须换成本站代理地址")
+                .startsWith(CoverImages.PROXY_PATH + "?url=");
 
         // title_cn 为空时回退日文原名 —— 与 displayName 的口径一致
         JsonNode orphanReview = data.path("reviews").get(0);

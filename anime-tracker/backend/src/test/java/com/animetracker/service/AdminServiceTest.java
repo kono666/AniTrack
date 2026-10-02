@@ -13,6 +13,7 @@ import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.TrackingRepository;
 import com.animetracker.repository.UserRepository;
+import com.animetracker.util.CoverImages;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -65,6 +66,15 @@ class AdminServiceTest {
      * 这类断言只有在这个值跟任何明文都不一样时才成立。
      */
     private static final String ENCODED_PASSWORD = "$2a$10$encoded-by-mock";
+
+    /**
+     * 一个白名单内的真封面.
+     *
+     * <p>凡是断言"封面被换成了代理地址"的用例都必须用它. {@code "c100"} 那种假地址
+     * 在白名单外, {@code CoverImages.proxied} 会把它原样返回 —— 于是"过没过 proxied"
+     * 两种写法产出完全一样的一行, 断言等于没写.
+     */
+    private static final String REAL_COVER = "https://lain.bgm.tv/pic/cover/l/aa/01/100.jpg";
 
     private UserRepository userRepository;
     private ReviewRepository reviewRepository;
@@ -1134,4 +1144,39 @@ class AdminServiceTest {
         // 详情页不走 getActionPage: 那会白算一次 count 再把信封丢掉
         verify(adminActionLogRepository, never()).countPage(any(), any(), any());
     }
+
+    /**
+     * 热度榜（{@code getAnimeHeatRanking}）那一行的封面也走代理。
+     *
+     * <p>这个方法此前<b>一条用例都没有</b> —— 它只被 AI 助手消费, 而助手那条路上的
+     * 断言都在别处。补这一条的直接原因: 它是 5 个 {@code CoverImages.proxied} 调用点之一,
+     * 而另外 4 处各有一条断言钉着; 只有它没有的话, "把这一处的 proxied 去掉"是个
+     * 不会让任何东西变红的改动。
+     *
+     * <p>地址必须用**真封面**: {@code "c100"} 那种假地址在白名单外, {@code proxied} 会原样
+     * 返回, 于是过不过 proxied 产出同一行, 断言等于没写。同理, 两条记录一条真一条假 ——
+     * 只会写"真地址被代理"的用例挡不住"把非白名单的也一起改写"那种错法。
+     */
+    @Test
+    @DisplayName("热度榜的封面: 白名单内的走代理, 白名单外的原样")
+    void heatRankingCoversGoThroughTheProxy() {
+        when(trackingRepository.findSubjectTrackingCounts(any(Pageable.class)))
+                .thenReturn(List.<Object[]>of(
+                        new Object[]{100, 30L},
+                        new Object[]{200, 20L}));
+        when(animeRepository.findAllById(any())).thenReturn(List.of(
+                Anime.builder().id(100).titleCn("进击的巨人").coverUrl(REAL_COVER).build(),
+                Anime.builder().id(200).title("ONE PIECE").coverUrl("c200").build()));
+
+        List<Map<String, Object>> rows = adminService.getAnimeHeatRanking(10);
+
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(0)).containsEntry("name", "进击的巨人")
+                .containsEntry("cover", CoverImages.proxied(REAL_COVER));
+        assertThat((String) rows.get(0).get("cover"))
+                .startsWith(CoverImages.PROXY_PATH + "?url=");
+        assertThat(rows.get(1)).containsEntry("name", "ONE PIECE")
+                .containsEntry("cover", "c200");
+    }
+
 }

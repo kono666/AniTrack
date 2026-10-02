@@ -6,6 +6,7 @@ import com.animetracker.entity.AnimeTracking;
 import com.animetracker.entity.User;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.TrackingRepository;
+import com.animetracker.util.CoverImages;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -231,7 +232,7 @@ public class TrackService {
             Anime a = animeMap.get(t.getSubjectId());
             if (a != null) {
                 map.put("animeTitle", a.getTitleCn() != null ? a.getTitleCn() : a.getTitle());
-                map.put("animeCover", a.getCoverUrl());
+                map.put("animeCover", CoverImages.proxied(a.getCoverUrl()));
                 // 两个集数都发. **不是一个字段的两种写法, 别合并** —— 语义见 Anime 实体上那段:
                 // totalEpisodes 是条目接口的声明值, episodeTotal 是我们真收齐的条数.
                 //

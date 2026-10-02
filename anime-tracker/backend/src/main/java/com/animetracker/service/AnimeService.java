@@ -360,8 +360,16 @@ public class AnimeService {
      * <p>回源判据从"手上这一批够不够 20 条"换成了 {@code count() < min(limit,20)}:
      * 手上不再有"整张榜", 只有 limit 条封顶的一页, 页长与"库里有多少"不是一回事
      * (改前 {@code local.size()} 恰好等于库存量, 是那次下推之前才成立的巧合).
+     *
+     * <p><b>{@code unless} 不是修饰, 是这条缓存的一处修正。</b> 上面那个 catch 让
+     * "上游补充失败"退化成"回手上这些", 而当本地库几乎是空的时候, 那个结果就是**空列表** ——
+     * 没有 {@code unless} 的话它会被原样缓存 6 小时: 上游恢复之后, 排行榜仍然空着,
+     * 而日志里只有六小时前那一条 warn。空结果永远不该被缓存, 因为它不是"数据就是这样",
+     * 而是"这次没取到"; 缓存它等于把一次瞬时故障固化成一个产品状态。
+     * 非空的结果照旧缓存 —— 那时上游有没有失败都不影响它是对的。
      */
-    @Cacheable(value = "ranking", key = "'rank_' + #limit")
+    @Cacheable(value = "ranking", key = "'rank_' + #limit",
+            unless = "#result == null || #result.isEmpty()")
     public List<Anime> getRanking(int limit) {
         // PageRequest.of(0, 0) 会抛, 而 limit 由 Agent 工具与内部调用方给, 绕得过控制器的 @Min
         if (limit <= 0) {

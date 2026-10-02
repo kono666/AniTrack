@@ -13,6 +13,7 @@ import com.animetracker.repository.UserRepository;
 import com.animetracker.repository.ReviewReportRepository;
 import com.animetracker.repository.ReviewRepository;
 import com.animetracker.repository.TrackingRepository;
+import com.animetracker.util.CoverImages;
 import com.animetracker.util.PageResults;
 import com.animetracker.util.SearchPatterns;
 import com.animetracker.util.TextSnippet;
@@ -491,7 +492,7 @@ public class AdminService {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("subjectId", t.getSubjectId());
             map.put("animeTitle", anime == null ? null : animeTitleOf(anime));
-            map.put("animeCover", anime == null ? null : anime.getCoverUrl());
+            map.put("animeCover", anime == null ? null : CoverImages.proxied(anime.getCoverUrl()));
             map.put("status", t.getStatus());
             map.put("progress", t.getProgress());
             map.put("updatedAt", t.getUpdatedAt());
@@ -1164,7 +1165,7 @@ public class AdminService {
             item.put("trackingCount", count);
             item.put("rating", anime != null ? anime.getRating() : null);
             // 这个榜目前只被 AI 助手消费, 它要把榜单渲染成卡片, 没有封面就只剩一排文字
-            item.put("cover", anime != null ? anime.getCoverUrl() : null);
+            item.put("cover", anime != null ? CoverImages.proxied(anime.getCoverUrl()) : null);
             result.add(item);
         }
         return result;

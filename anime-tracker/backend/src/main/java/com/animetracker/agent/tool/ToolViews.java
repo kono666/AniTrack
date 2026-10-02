@@ -1,6 +1,7 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.entity.Anime;
+import com.animetracker.util.CoverImages;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -52,7 +53,8 @@ public final class ToolViews {
         m.put("rating", a.getRating());
         // 只放一个封面地址, 不是 AnimeDTO 里那三个内容完全相同的 URL.
         // 这一条是为了前端的对话内联卡片: 光有番剧名, 用户还得自己再搜一次才能认出来是哪部.
-        m.put("cover", a.getCoverUrl());
+        // 过一遍 proxied(): 卡片走的是同一个浏览器, 图该从同一个入口进来.
+        m.put("cover", CoverImages.proxied(a.getCoverUrl()));
         m.put("tags", splitTags(a.getTags()));
         return m;
     }

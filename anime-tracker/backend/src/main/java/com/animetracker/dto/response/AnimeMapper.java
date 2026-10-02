@@ -1,6 +1,7 @@
 package com.animetracker.dto.response;
 
 import com.animetracker.entity.Anime;
+import com.animetracker.util.CoverImages;
 import com.animetracker.util.TagTranslationUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,9 +71,15 @@ public class AnimeMapper {
 
     // ── 私有构建方法 ──────────────────────────────────
 
+    /**
+     * 三个尺寸字段复用同一 URL (对齐 Bangumi 的 images 结构), 本地库只存一张封面图.
+     *
+     * <p>URL 过一遍 {@link CoverImages#proxied}: 白名单内的换成 {@code /api/img?url=…}
+     * 由我们代取, 其余(以及 null/空串)**原样返回** —— 库里存量的老地址不会因为
+     * 白名单更严就从"还能显示"变成"一定不显示", 它们只是继续像改动前那样直连.
+     */
     private Map<String, String> buildImages(String coverUrl) {
-        String url = coverUrl != null ? coverUrl : "";
-        // 本地库只存一张封面图, 三个尺寸字段复用同一 URL (对齐 Bangumi 的 images 结构)
+        String url = coverUrl != null ? CoverImages.proxied(coverUrl) : "";
         return Map.of("large", url, "common", url, "medium", url);
     }
 
