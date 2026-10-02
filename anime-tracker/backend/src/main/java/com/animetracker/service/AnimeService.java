@@ -36,6 +36,7 @@ import com.animetracker.util.AnimeAliases;
 import com.animetracker.util.PageResults;
 import com.animetracker.util.AnimeFields;
 import com.animetracker.util.SearchPatterns;
+import com.animetracker.util.SeasonRange;
 import com.animetracker.util.TagTranslationUtil;
 
 import java.util.*;
@@ -715,10 +716,17 @@ public class AnimeService {
      *
      * <p>四个 {@code List} 的取值: <b>null 或空列表都表示"这一组没选"</b>(这一组恒真),
      * 非空表示"挂着其中任意一个标签"(组内或). 四组之间是**与** —— 合起来就是主流平台
-     * 那套"组内 OR、组间 AND". {@code year}/{@code season}/{@code status} 语义与
-     * 单组那条完全一样, 直接透传给同一份 {@code FILTER_WHERE}.
+     * 那套"组内 OR、组间 AND". {@code year}/{@code status} 语义与单组那条完全一样,
+     * 直接透传给同一份 {@code FILTER_WHERE}.
+     *
+     * <p><b>{@code season} 是唯一一个"进到这里已经不是字符串了"的字段</b>(类型是
+     * {@link SeasonRange}): {@code 2024-Q4} 必须先展开成月份区间才可能进 SQL. 解析放在
+     * {@link #fromCsv} —— 也就是线路到领域的那条边界上 —— 是为了让"解析"在这个类里
+     * 只有一个物理位置. 保留字符串的话, 底下四条路径(单组/四组 × 分页/完整)每条都得
+     * 自己解析一次, 而漏掉其中一条的表现是"某个入口的季度筛选变成精确等值", 少两个月
+     * 且不报错. 字段个数仍是 7, 只是一个的类型变了.
      */
-    public record FilterQuery(String year, String season, String status,
+    public record FilterQuery(String year, SeasonRange season, String status,
                               List<String> genre, List<String> medium,
                               List<String> source, List<String> region) {
 
@@ -734,7 +742,7 @@ public class AnimeService {
         public static FilterQuery fromCsv(String year, String season, String status,
                                           String genre, String medium,
                                           String source, String region) {
-            return new FilterQuery(emptyToNull(year), emptyToNull(season), emptyToNull(status),
+            return new FilterQuery(emptyToNull(year), SeasonRange.parse(season), emptyToNull(status),
                     splitCsv(genre), splitCsv(medium), splitCsv(source), splitCsv(region));
         }
     }
@@ -825,7 +833,7 @@ public class AnimeService {
         if (tagIds != null && tagIds.isEmpty()) {
             return Collections.emptyList();
         }
-        return fetchFiltered(SearchPatterns.prefix(year), emptyToNull(season), emptyToNull(status),
+        return fetchFiltered(SearchPatterns.prefix(year), SeasonRange.parse(season), emptyToNull(status),
                 tagIds, sort, Pageable.unpaged());
     }
 
@@ -847,13 +855,23 @@ public class AnimeService {
      */
     public Map<String, Object> getFilteredPage(String year, String season, String status,
                                                String tag, String sort, int page, int limit) {
+        return filteredPage(SearchPatterns.prefix(year), SeasonRange.parse(season), emptyToNull(status),
+                tagIdsOf(singleOrNull(tag)), sort, page, limit);
+    }
+
+    /**
+     * 单组筛选的取页本体 —— 三条入口(两个字符串签名 + {@code FilterQuery})共用这一份.
+     *
+     * <p>抽出来是因为 {@code FilterQuery} 那条**不能再借道字符串签名**: 它的
+     * {@code season} 已经是 {@link SeasonRange}, 而字符串签名收的是一个还没解析的
+     * {@code String}. 让 {@code FilterQuery} 把区间再序列化回去、底下再解析一遍,
+     * 就是"同一件事有两个物理位置"的教科书例子 —— 而这个类为这件事付过代价.
+     */
+    private Map<String, Object> filteredPage(String yearPattern, SeasonRange season, String status,
+                                             List<Long> tagIds, String sort, int page, int limit) {
         int safePage = Math.max(page, 1);
         int safeLimit = Math.max(limit, 1);
 
-        String yearPattern = SearchPatterns.prefix(year);
-        String seasonKey = emptyToNull(season);
-        String statusKey = emptyToNull(status);
-        List<Long> tagIds = tagIdsOf(singleOrNull(tag));
         if (tagIds != null && tagIds.isEmpty()) {
             return PageResults.of(Collections.emptyList(), 0, safePage);
         }
@@ -861,8 +879,9 @@ public class AnimeService {
         // count 先算: 越界页也要报真实 total, 否则前端按 total 算出来的翻页控件会
         // 凭空少掉几页(用户点不回去).
         long matched = tagIds == null
-                ? animeRepository.countFiltered(yearPattern, seasonKey, statusKey)
-                : animeRepository.countFilteredByTag(yearPattern, seasonKey, statusKey, tagIds);
+                ? animeRepository.countFiltered(yearPattern, seasonFrom(season), seasonTo(season), status)
+                : animeRepository.countFilteredByTag(yearPattern, seasonFrom(season), seasonTo(season),
+                        status, tagIds);
         int total = (int) Math.min(matched, Integer.MAX_VALUE);
 
         long offset = (long) (safePage - 1) * safeLimit;
@@ -870,7 +889,7 @@ public class AnimeService {
             return PageResults.of(Collections.emptyList(), total, safePage);
         }
         return PageResults.of(
-                fetchFiltered(yearPattern, seasonKey, statusKey, tagIds, sort,
+                fetchFiltered(yearPattern, season, status, tagIds, sort,
                         PageRequest.of(safePage - 1, safeLimit)),
                 total, safePage);
     }
@@ -903,16 +922,16 @@ public class AnimeService {
         if (groups.anyUnresolved()) {
             return PageResults.of(Collections.emptyList(), 0, safePage);
         }
-        if (groups.noneSelected()) {
-            return getFilteredPage(query.year(), query.season(), query.status(), null, sort, page, limit);
-        }
-
         String yearPattern = SearchPatterns.prefix(query.year());
-        String seasonKey = emptyToNull(query.season());
         String statusKey = emptyToNull(query.status());
 
+        if (groups.noneSelected()) {
+            return filteredPage(yearPattern, query.season(), statusKey, null, sort, page, limit);
+        }
+
         // count 先算: 越界页也要报真实 total —— 与单组那条同一个理由.
-        long matched = animeRepository.countFilteredByTagGroups(yearPattern, seasonKey, statusKey,
+        long matched = animeRepository.countFilteredByTagGroups(yearPattern,
+                seasonFrom(query.season()), seasonTo(query.season()), statusKey,
                 groups.genre() != null, orSentinel(groups.genre()),
                 groups.medium() != null, orSentinel(groups.medium()),
                 groups.source() != null, orSentinel(groups.source()),
@@ -924,7 +943,7 @@ public class AnimeService {
             return PageResults.of(Collections.emptyList(), total, safePage);
         }
         return PageResults.of(
-                fetchFilteredByTagGroups(yearPattern, seasonKey, statusKey,
+                fetchFilteredByTagGroups(yearPattern, query.season(), statusKey,
                         groups.genre(), groups.medium(), groups.source(), groups.region(), sort,
                         PageRequest.of(safePage - 1, safeLimit)),
                 total, safePage);
@@ -944,10 +963,11 @@ public class AnimeService {
             return Collections.emptyList();
         }
         if (groups.noneSelected()) {
-            return getFiltered(query.year(), query.season(), query.status(), null, sort);
+            return fetchFiltered(SearchPatterns.prefix(query.year()), query.season(),
+                    emptyToNull(query.status()), null, sort, Pageable.unpaged());
         }
-        return fetchFilteredByTagGroups(SearchPatterns.prefix(query.year()),
-                emptyToNull(query.season()), emptyToNull(query.status()),
+        return fetchFilteredByTagGroups(SearchPatterns.prefix(query.year()), query.season(),
+                emptyToNull(query.status()),
                 groups.genre(), groups.medium(), groups.source(), groups.region(), sort, Pageable.unpaged());
     }
 
@@ -982,7 +1002,7 @@ public class AnimeService {
      * 因为这里没有"有没有标签"这一维: 未选中的组由 {@code xxxActive} 短路, 语句本身
      * 永远带着四条完整的子句.
      */
-    private List<Anime> fetchFilteredByTagGroups(String yearPattern, String season, String status,
+    private List<Anime> fetchFilteredByTagGroups(String yearPattern, SeasonRange season, String status,
                                                  List<Long> genreIds, List<Long> mediumIds,
                                                  List<Long> sourceIds, List<Long> regionIds,
                                                  String sort, Pageable pageable) {
@@ -996,18 +1016,20 @@ public class AnimeService {
         List<Long> mediums = orSentinel(mediumIds);
         List<Long> sources = orSentinel(sourceIds);
         List<Long> regions = orSentinel(regionIds);
+        String seasonFrom = seasonFrom(season);
+        String seasonTo = seasonTo(season);
         if (SORT_DATE.equals(sort)) {
-            return animeRepository.findFilteredByTagGroupsDate(yearPattern, season, status,
+            return animeRepository.findFilteredByTagGroupsDate(yearPattern, seasonFrom, seasonTo, status,
                     genreActive, genres, mediumActive, mediums,
                     sourceActive, sources, regionActive, regions, pageable);
         }
         if (SORT_RATING.equals(sort)) {
-            return animeRepository.findFilteredByTagGroupsRating(yearPattern, season, status,
+            return animeRepository.findFilteredByTagGroupsRating(yearPattern, seasonFrom, seasonTo, status,
                     genreActive, genres, mediumActive, mediums,
                     sourceActive, sources, regionActive, regions,
                     priorVotes, priorScore, pageable);
         }
-        return animeRepository.findFilteredByTagGroupsRank(yearPattern, season, status,
+        return animeRepository.findFilteredByTagGroupsRank(yearPattern, seasonFrom, seasonTo, status,
                 genreActive, genres, mediumActive, mediums,
                 sourceActive, sources, regionActive, regions, pageable);
     }
@@ -1025,28 +1047,32 @@ public class AnimeService {
      * {@code rating} 会掉进 rank 分支 —— 模型要"评分最高的", 拿回按名次排的,
      * 而且看不出错(两批都是"看起来排在前面"). 现在它是加权评分, 与排行榜同一个口径.
      */
-    private List<Anime> fetchFiltered(String yearPattern, String season, String status,
+    private List<Anime> fetchFiltered(String yearPattern, SeasonRange season, String status,
                                       List<Long> tagIds, String sort, Pageable pageable) {
         double priorVotes = rankingProperties.getPriorVotes();
         double priorScore = rankingProperties.getPriorScore();
+        String seasonFrom = seasonFrom(season);
+        String seasonTo = seasonTo(season);
         if (tagIds == null) {
             if (SORT_DATE.equals(sort)) {
-                return animeRepository.findFilteredByDate(yearPattern, season, status, pageable);
+                return animeRepository.findFilteredByDate(yearPattern, seasonFrom, seasonTo, status, pageable);
             }
             if (SORT_RATING.equals(sort)) {
                 return animeRepository.findFilteredByRating(
-                        yearPattern, season, status, priorVotes, priorScore, pageable);
+                        yearPattern, seasonFrom, seasonTo, status, priorVotes, priorScore, pageable);
             }
-            return animeRepository.findFilteredByRank(yearPattern, season, status, pageable);
+            return animeRepository.findFilteredByRank(yearPattern, seasonFrom, seasonTo, status, pageable);
         }
         if (SORT_DATE.equals(sort)) {
-            return animeRepository.findFilteredByTagDate(yearPattern, season, status, tagIds, pageable);
+            return animeRepository.findFilteredByTagDate(
+                    yearPattern, seasonFrom, seasonTo, status, tagIds, pageable);
         }
         if (SORT_RATING.equals(sort)) {
             return animeRepository.findFilteredByTagRating(
-                    yearPattern, season, status, tagIds, priorVotes, priorScore, pageable);
+                    yearPattern, seasonFrom, seasonTo, status, tagIds, priorVotes, priorScore, pageable);
         }
-        return animeRepository.findFilteredByTagRank(yearPattern, season, status, tagIds, pageable);
+        return animeRepository.findFilteredByTagRank(
+                yearPattern, seasonFrom, seasonTo, status, tagIds, pageable);
     }
 
     /**
@@ -1084,6 +1110,22 @@ public class AnimeService {
     /** 空串与 null 在这里是同一件事("不限"), 与改动前那些 {@code isEmpty()} 判据一致 */
     private static String emptyToNull(String value) {
         return value == null || value.isEmpty() ? null : value;
+    }
+
+    /**
+     * 区间端点 —— {@code null} 的 {@link SeasonRange} 表示"不限季度", 两个端点一起为 null.
+     *
+     * <p>为什么不用"两个字段都为 null 的 SeasonRange 当哨兵": 那会让 {@code null}
+     * 与"空区间"两种表达同时存在, 而 {@code fetchByTags} 那条回退路径传的正是
+     * {@code null}(见它对 {@link #fetchFiltered} 的调用). 让 {@code null} 一路合法,
+     * 比在每个调用点判断"我这个是 null 还是空区间"少一类错.
+     */
+    private static String seasonFrom(SeasonRange season) {
+        return season == null ? null : season.from();
+    }
+
+    private static String seasonTo(SeasonRange season) {
+        return season == null ? null : season.to();
     }
 
     @Cacheable(value = "tags", key = "'all'")

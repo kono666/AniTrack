@@ -103,7 +103,7 @@ class AnimeServiceTagTest {
     private Pageable capturePageWindow() {
         ArgumentCaptor<Pageable> window = ArgumentCaptor.forClass(Pageable.class);
         verify(animeRepository, times(1))
-                .findFilteredByTagDate(isNull(), isNull(), isNull(), any(), window.capture());
+                .findFilteredByTagDate(isNull(), isNull(), isNull(), isNull(), any(), window.capture());
         return window.getValue();
     }
 
@@ -121,7 +121,7 @@ class AnimeServiceTagTest {
     @DisplayName("按标签查: 不再对 tag / anime_tag 整表 findAll")
     void neverLoadsWholeTables() {
         givenTagsResolveTo(7L);
-        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any()))
+        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of(anime(BASE_ID + 1, "B", "2024-02-01"),
                         anime(BASE_ID, "A", "2024-01-01")));
 
@@ -147,7 +147,7 @@ class AnimeServiceTagTest {
     @DisplayName("多个标签名: 解析出的 id 一起交给一条查询, 并集在库里做")
     void unionsTagNamesInASingleQuery() {
         givenTagsResolveTo(7L, 8L);
-        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any()))
+        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of(anime(BASE_ID, "A", "2024-01-01")));
 
         animeService.getByTags(new LinkedHashSet<>(List.of("百合", "Yuri")));
@@ -155,7 +155,7 @@ class AnimeServiceTagTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Collection<Long>> captor = ArgumentCaptor.forClass(Collection.class);
         verify(animeRepository, times(1))
-                .findFilteredByTagDate(isNull(), isNull(), isNull(), captor.capture(), any());
+                .findFilteredByTagDate(isNull(), isNull(), isNull(), isNull(), captor.capture(), any());
         assertThat(captor.getValue())
                 .as("两个名字解析出的 id 要么都进去, 要么并集就少一半")
                 .containsExactly(7L, 8L);
@@ -175,7 +175,7 @@ class AnimeServiceTagTest {
     @DisplayName("封顶: limit 变成从第 0 行开始的 limit 行窗口")
     void capBecomesAPageWindow() {
         givenTagsResolveTo(7L);
-        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any()))
+        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any(), any()))
                 .thenReturn(seed(AnimeService.BY_TAG_LIMIT));
 
         List<Anime> capped = animeService.getByTags(Set.of("日常"), AnimeService.BY_TAG_LIMIT);
@@ -206,7 +206,7 @@ class AnimeServiceTagTest {
     @DisplayName("不封顶的那个重载: 明确地说「不分页」, 而不是传一个大数")
     void uncappedOverloadAsksForEverything() {
         givenTagsResolveTo(7L);
-        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any()))
+        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any(), any()))
                 .thenReturn(seed(60));
 
         assertThat(animeService.getByTags(Set.of("日常"))).hasSize(60);
@@ -268,7 +268,7 @@ class AnimeServiceTagTest {
     @DisplayName("标签下没有番剧: 查询照发, 空结果")
     void tagWithoutAnimeReturnsEmpty() {
         givenTagsResolveTo(7L);
-        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any()))
+        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of());
 
         assertThat(animeService.getByTags(Set.of("冷门"))).isEmpty();
@@ -369,7 +369,7 @@ class AnimeServiceTagTest {
     @DisplayName("接受任意 Set 实现(controller 传的是 HashSet)")
     void acceptsAnySetImplementation() {
         givenTagsResolveTo(7L);
-        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any()))
+        when(animeRepository.findFilteredByTagDate(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of(anime(BASE_ID, "A", "2024-01-01")));
 
         Set<String> fromController = Arrays.stream(new String[]{"治愈", "Healing"})

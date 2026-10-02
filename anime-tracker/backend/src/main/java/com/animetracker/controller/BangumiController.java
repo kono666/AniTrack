@@ -195,6 +195,13 @@ public class BangumiController {
      * (2026-09-30 只读实测), 分隔符与名字不会撞车. 这个前提与撞车时的行为写在
      * {@link com.animetracker.service.AnimeService.FilterQuery#fromCsv}.
      *
+     * <p><b>{@code season} 同时接受 {@code yyyy-MM} 与 {@code yyyy-Qn}.</b> 前者是
+     * 库里 {@code anime.season} 的原样(某一个月), 后者展开成整个季度
+     * ({@code 2024-Q4} → 10/11/12 月)—— 不展开的话「2024 年秋季」只能筛出十月,
+     * 而十一月十二月会静默漏掉. 认不出的值仍然是"筛空", 不是 400: 那是这个参数
+     * 一直以来的行为, 改它会打断既有调用方. 详见
+     * {@link com.animetracker.util.SeasonRange}.
+     *
      * <p>page / limit 的注解与 search 那边同一套: 少了类级 {@code @Validated}
      * 它们会被静默忽略(见类注释), 越界的 page 则是 (page-1)*limit 溢出/负起点
      * 那条老路. 下界用 @Min 封, service 里再夹一道, 两层都留着.

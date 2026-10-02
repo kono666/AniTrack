@@ -126,9 +126,60 @@ class AnimeFilterIntegrationTest {
     }
 
     /**
-     * 季度筛选要写成 {@code season.equals(a.getSeason())} 才对得上.
+     * {@code yyyy-Qn} 展开成整季: 同季三个月都在, 相邻季度的不在.
      *
-     * <p>反过来说: 库里 season 为 NULL 的行(推不出播出日的那些)在筛任何季度时
+     * <p><b>为什么这条必须有真库兜底.</b> 服务层的单测里, "SQL"是 mock 出来的一份
+     * Java 实现({@code AnimeServicePagingTest#matching}), 它与真正的 JPQL 是两份
+     * 各自演化的东西 —— 改 {@code any()} 的个数、甚至把区间写成等值, 都可能碰巧通过.
+     * 季度这件事的错法(少两个月)在返回值上长得跟"这两个月确实没番"一模一样,
+     * 所以判据只能是真库上的一批真数据.
+     *
+     * <p>日期写死在 2019 年而不是相对今天算: 季度边界是这个用例要验的东西本身,
+     * 而"相对今天"会随着运行日期落到不同的季度里, 边界断言就随机了 —— 与类注释里
+     * "日期一律相对今天"那条规矩在这里有意相反, 理由就在这里(那一条是为了不让
+     * 用例过几个月自己变红, 这里写死的日期永远不会过期).
+     */
+    @Test
+    @DisplayName("按季度筛 yyyy-Qn: 同季三个月都在, 上一个季度的不在")
+    void filtersByWholeQuarter() {
+        seed(90000105, "季度范围用例十月", "2019-10-05", 12, 1);
+        seed(90000106, "季度范围用例十一月", "2019-11-20", 12, 2);
+        seed(90000107, "季度范围用例十二月", "2019-12-31", 12, 3);
+        seed(90000108, "季度范围用例九月", "2019-09-30", 12, 4);
+        Set<Integer> mine = ids(90000105, 90000106, 90000107, 90000108);
+
+        assertThat(filteredAmong(mine, null, "2019-Q4", null, null))
+                .as("Q4 是 10/11/12 三个月 —— 只回十月就是原来那个 bug")
+                .containsExactlyInAnyOrder(90000105, 90000106, 90000107);
+        assertThat(filteredAmong(mine, null, "2019-Q3", null, null))
+                .as("相邻季度不能串门: 九月属于 Q3, 十月不属于")
+                .containsExactly(90000108);
+        assertThat(filteredAmong(mine, null, "2019-10", null, null))
+                .as("月写法仍然是精确那一个月 —— 区间没有把老语义一起放大")
+                .containsExactly(90000105);
+    }
+
+    /**
+     * 认不出的季度写法仍然是<b>筛空</b>, 不是 400, 也不是"不筛".
+     *
+     * <p>「非法输入不报错、只筛空」是这个参数改动前就有的行为, 保持它是为了让这次
+     * 改动不把任何既有调用方从"拿到空结果"变成"拿到 400". 两个方向都要钉住:
+     * 退化成"不筛"会让 {@code 2019-Q5} 返回整库(这条用例的自建行会立刻被命中),
+     * 而抛异常会让 {@code filteredAmong} 直接炸.
+     */
+    @Test
+    @DisplayName("认不出的季度写法: 筛空而不是 400, 也不是「不筛」")
+    void unrecognizedSeasonMatchesNothing() {
+        seed(90000109, "季度非法值用例", "2019-10-05", 12, 1);
+        Set<Integer> mine = ids(90000109);
+
+        assertThat(filteredAmong(mine, null, "2019-Q5", null, null)).isEmpty();
+        assertThat(filteredAmong(mine, null, "2019-q4", null, null)).isEmpty();
+        assertThat(filteredAmong(mine, null, "不是季度", null, null)).isEmpty();
+    }
+
+    /**
+     * 库里 season 为 NULL 的行(推不出播出日的那些)在筛任何季度时
      * 都不该出现 —— 一行"不知道是哪个季度"的番混进某个季度的结果里, 比缺一部更难发现.
      * 这里顺手钉住这一条: 没有日期的行, 三个筛选条件都筛不出来.
      */

@@ -55,8 +55,33 @@ final class AnimeQueries {
     static final String FILTER_YEAR =
             "(:yearPattern IS NULL OR a.date LIKE :yearPattern ESCAPE '!')";
 
-    /** 季度: {@code yyyy-MM} 精确相等. 库里推不出季度的行是 NULL, 因此筛任何季度都不会命中它 */
-    static final String FILTER_SEASON = "(:season IS NULL OR a.season = :season)";
+    /**
+     * 季度: {@code season} 落在 {@code [:seasonFrom, :seasonTo]} 闭区间内.
+     *
+     * <p><b>为什么是区间而不是等值.</b> {@code anime.season} 存的是真实月份
+     * ({@code 2024-10}), 而「2024 年秋季」要的是十月到十二月. 等值谓词压根没法
+     * 表达这个条件 —— 详见 {@link com.animetracker.util.SeasonRange}. 区间在
+     * {@code from == to} 时正好退化成原来的等值, 所以 {@code ?season=2024-10}
+     * 这条老写法的行为一字未变, 不需要为它分叉.
+     *
+     * <p><b>比较的是字符串, 而这里恰好是对的.</b> 与 {@link #NOT_FUTURE} 同一条理由:
+     * season 的形状是定长补零的 {@code 'yyyy-MM'}(见
+     * {@link com.animetracker.util.AnimeFields#seasonOf} 里的
+     * {@code String.format("%04d-%02d", ...)}), 字典序与时间序一致.
+     * <b>这条前提是上面那个 format 给的, 不是这里能保证的</b>: 谁能往这一列写进一个
+     * 不补零的 {@code 2024-9}, 谁就能让它排在 {@code 2024-10} 之后从而漏掉.
+     *
+     * <p><b>{@code :seasonFrom IS NULL} 这个守卫不能删.</b> 未选季度时它两都是 null,
+     * 而 SQL 里 {@code NULL >= ?} 求值为 NULL(即假)—— 少了守卫, "不带季度条件"
+     * 就变成"所有结果全空", 分类页首屏会整页空掉. 这是本次改动第一个回归点.
+     * {@code <=} 的上界同理必须含: 写成 {@code <} 会把十二月(或任何末月)整个丢掉.
+     *
+     * <p><b>为什么不建索引.</b> {@code anime} 表上<b>今天就没有 season 索引</b>
+     * (V4 那四条是 tracking / review / agent_message 的), 等值查询现在也是全表扫描,
+     * 换成范围不会更差. 要加得先有实测依据 —— V4 的注释立过这条规矩.
+     */
+    static final String FILTER_SEASON =
+            "(:seasonFrom IS NULL OR (a.season >= :seasonFrom AND a.season <= :seasonTo))";
 
     /** 状态: {@code airing} / {@code finished}, 精确相等 */
     static final String FILTER_STATUS = "(:status IS NULL OR a.status = :status)";

@@ -75,23 +75,31 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
     // 三个筛选条件都是可选的, 传 null 表示"不限". 年份要先经
     // SearchPatterns.prefix 拼成已转义的 LIKE 模式串再传进来 —— 方法名带 Pattern
     // 就是为了让这件事在调用处一眼可见, 免得有人把用户输入直接塞进来.
+    //
+    // 季度从"一个等值参数"变成了"一对区间端点"(seasonFrom / seasonTo), 因为
+    // 2024-Q4 要展开成 2024-10..2024-12 —— 完整理由见 AnimeQueries.FILTER_SEASON
+    // 与 SeasonRange. **两个端点要么同时为 null, 要么同时有值**: 只给 from 不给 to
+    // 会让谓词在 SQL 里退化成 ">= from 且 <= NULL"(恒假), 静默筛空.
 
     @Query(AnimeQueries.FILTERED_RANK)
     List<Anime> findFilteredByRank(@Param("yearPattern") String yearPattern,
-                                   @Param("season") String season,
+                                   @Param("seasonFrom") String seasonFrom,
+                                   @Param("seasonTo") String seasonTo,
                                    @Param("status") String status,
                                    Pageable pageable);
 
     @Query(AnimeQueries.FILTERED_DATE)
     List<Anime> findFilteredByDate(@Param("yearPattern") String yearPattern,
-                                   @Param("season") String season,
+                                   @Param("seasonFrom") String seasonFrom,
+                                   @Param("seasonTo") String seasonTo,
                                    @Param("status") String status,
                                    Pageable pageable);
 
     /** {@code sort=rating} —— 与排行榜同一个加权口径, 不是评分原值 */
     @Query(AnimeQueries.FILTERED_RATING)
     List<Anime> findFilteredByRating(@Param("yearPattern") String yearPattern,
-                                     @Param("season") String season,
+                                     @Param("seasonFrom") String seasonFrom,
+                                     @Param("seasonTo") String seasonTo,
                                      @Param("status") String status,
                                      @Param("priorVotes") double priorVotes,
                                      @Param("priorScore") double priorScore,
@@ -99,14 +107,16 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
 
     @Query(AnimeQueries.COUNT_FILTERED)
     long countFiltered(@Param("yearPattern") String yearPattern,
-                       @Param("season") String season,
+                       @Param("seasonFrom") String seasonFrom,
+                       @Param("seasonTo") String seasonTo,
                        @Param("status") String status);
 
     // ==================== 筛选: 限定在若干标签下 ====================
 
     @Query(AnimeQueries.TAGGED_RANK)
     List<Anime> findFilteredByTagRank(@Param("yearPattern") String yearPattern,
-                                      @Param("season") String season,
+                                      @Param("seasonFrom") String seasonFrom,
+                                      @Param("seasonTo") String seasonTo,
                                       @Param("status") String status,
                                       @Param("tagIds") Collection<Long> tagIds,
                                       Pageable pageable);
@@ -120,14 +130,16 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
      */
     @Query(AnimeQueries.TAGGED_DATE)
     List<Anime> findFilteredByTagDate(@Param("yearPattern") String yearPattern,
-                                      @Param("season") String season,
+                                      @Param("seasonFrom") String seasonFrom,
+                                      @Param("seasonTo") String seasonTo,
                                       @Param("status") String status,
                                       @Param("tagIds") Collection<Long> tagIds,
                                       Pageable pageable);
 
     @Query(AnimeQueries.TAGGED_RATING)
     List<Anime> findFilteredByTagRating(@Param("yearPattern") String yearPattern,
-                                        @Param("season") String season,
+                                        @Param("seasonFrom") String seasonFrom,
+                                        @Param("seasonTo") String seasonTo,
                                         @Param("status") String status,
                                         @Param("tagIds") Collection<Long> tagIds,
                                         @Param("priorVotes") double priorVotes,
@@ -136,7 +148,8 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
 
     @Query(AnimeQueries.COUNT_TAGGED)
     long countFilteredByTag(@Param("yearPattern") String yearPattern,
-                            @Param("season") String season,
+                            @Param("seasonFrom") String seasonFrom,
+                            @Param("seasonTo") String seasonTo,
                             @Param("status") String status,
                             @Param("tagIds") Collection<Long> tagIds);
 
@@ -154,7 +167,8 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
 
     @Query(AnimeQueries.TAGGED_GROUP_RANK)
     List<Anime> findFilteredByTagGroupsRank(@Param("yearPattern") String yearPattern,
-                                            @Param("season") String season,
+                                            @Param("seasonFrom") String seasonFrom,
+                                            @Param("seasonTo") String seasonTo,
                                             @Param("status") String status,
                                             @Param("genreActive") boolean genreActive,
                                             @Param("genreIds") Collection<Long> genreIds,
@@ -168,7 +182,8 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
 
     @Query(AnimeQueries.TAGGED_GROUP_DATE)
     List<Anime> findFilteredByTagGroupsDate(@Param("yearPattern") String yearPattern,
-                                            @Param("season") String season,
+                                            @Param("seasonFrom") String seasonFrom,
+                                            @Param("seasonTo") String seasonTo,
                                             @Param("status") String status,
                                             @Param("genreActive") boolean genreActive,
                                             @Param("genreIds") Collection<Long> genreIds,
@@ -182,7 +197,8 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
 
     @Query(AnimeQueries.TAGGED_GROUP_RATING)
     List<Anime> findFilteredByTagGroupsRating(@Param("yearPattern") String yearPattern,
-                                              @Param("season") String season,
+                                              @Param("seasonFrom") String seasonFrom,
+                                              @Param("seasonTo") String seasonTo,
                                               @Param("status") String status,
                                               @Param("genreActive") boolean genreActive,
                                               @Param("genreIds") Collection<Long> genreIds,
@@ -198,7 +214,8 @@ public interface AnimeRepository extends JpaRepository<Anime, Integer> {
 
     @Query(AnimeQueries.COUNT_TAGGED_GROUP)
     long countFilteredByTagGroups(@Param("yearPattern") String yearPattern,
-                                  @Param("season") String season,
+                                  @Param("seasonFrom") String seasonFrom,
+                                  @Param("seasonTo") String seasonTo,
                                   @Param("status") String status,
                                   @Param("genreActive") boolean genreActive,
                                   @Param("genreIds") Collection<Long> genreIds,

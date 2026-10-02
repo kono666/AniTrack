@@ -1515,7 +1515,7 @@ class QueryCountIntegrationTest {
     void untaggedFilterSqlIsPushedDown() {
         seedSeasonedAnime(3, "9q63-02");
 
-        animeRepository.findFilteredByDate(null, "9q63-02", null, PageRequest.of(0, 5));
+        animeRepository.findFilteredByDate(null, "9q63-02", "9q63-02", null, PageRequest.of(0, 5));
         String sql = lastSqlNormalized();
 
         assertThat(sql).containsIgnoringCase("from anime")
@@ -1566,11 +1566,39 @@ class QueryCountIntegrationTest {
     void rankSortGroupsNullExplicitly() {
         seedSeasonedAnime(3, "9q63-03");
 
-        animeRepository.findFilteredByRank(null, "9q63-03", null, PageRequest.of(0, 5));
+        animeRepository.findFilteredByRank(null, "9q63-03", "9q63-03", null, PageRequest.of(0, 5));
         String sql = lastSqlNormalized();
 
         assertThat(sql).containsIgnoringCase("case when")
                 .containsIgnoringCase("sort_rank");
+    }
+
+    /**
+     * 季度筛选的 SQL 是<b>区间</b>({@code >=} 与 {@code <=} 各一个), 不是等值.
+     *
+     * <p>这一条必须存在, 因为「等值改区间」是一处**从返回值上看不出来的**改写:
+     * 传 {@code from == to} 时两者结果完全相同(月份写法就是靠这一点保持原行为),
+     * 只有传 {@code yyyy-Qn} 展开成真区间时才分道扬镳 —— 而那时错法是"少两个月",
+     * 接口照样 200、total 照样是个像回事的数字. 数据层面的正确性由
+     * {@code AnimeFilterIntegrationTest} 兜底, 这里钉的是**语句形状**: 有人把
+     * {@code FILTER_SEASON} 退回等值, 这条立刻红.
+     *
+     * <p>两个操作符都要数到. 只断言 {@code >=} 会放过"上界写成 {@code <}"那种错
+     * (它把末月整个丢掉, 而 Q4 的末月正是十二月).
+     */
+    @Test
+    @DisplayName("季度筛选的 SQL: season 上是区间(>= 且 <=), 不是等值")
+    void seasonFilterUsesARangePredicate() {
+        seedSeasonedAnime(2, "9q63-08");
+
+        animeRepository.findFilteredByDate(
+                null, "9q63-08", "9q63-10", null, PageRequest.of(0, 5));
+        String sql = squash(lastSqlNormalized());
+
+        assertThat(sql).as("下界: 少了它, '2024 年秋季'只能筛出十月")
+                .contains("season>=?");
+        assertThat(sql).as("上界必须是 <= 而不是 <, 否则十二月被整月丢掉")
+                .contains("season<=?");
     }
 
     /**
@@ -1600,7 +1628,7 @@ class QueryCountIntegrationTest {
         long genre = tagIdOf("qct-group-genre");
         long region = tagIdOf("qct-group-region");
 
-        animeRepository.findFilteredByTagGroupsDate(null, null, null,
+        animeRepository.findFilteredByTagGroupsDate(null, null, null, null,
                 true, List.of(genre),
                 false, List.of(-1L),
                 false, List.of(-1L),
@@ -1645,7 +1673,7 @@ class QueryCountIntegrationTest {
         seedSeasonedAnime(3, "9q63-04");
 
         animeRepository.findFilteredByDate(
-                SearchPatterns.prefix("20%"), null, null, PageRequest.of(0, 5));
+                SearchPatterns.prefix("20%"), null, null, null, PageRequest.of(0, 5));
         String sql = lastSqlNormalized();
 
         assertThat(sql).containsIgnoringCase("like").containsIgnoringCase("escape");

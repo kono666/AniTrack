@@ -122,7 +122,7 @@ describe('分类页: 六组条件进 URL', () => {
 
     expect(getFiltered).toHaveBeenCalledTimes(1)
     const sent = lastSentParams()
-    for (const key of ['genre', 'medium', 'source', 'region', 'year', 'status']) {
+    for (const key of ['genre', 'medium', 'source', 'region', 'year', 'season', 'status']) {
       // "没选"必须表现为**参数不存在**, 不是空串 —— 空串会被后端当成一个空名字
       expect(sent[key]).toBeUndefined()
     }
@@ -611,6 +611,191 @@ describe('分类页: 年份档来自 /filter-meta 的切片', () => {
     expect(rendered).not.toContain('2029')
     // 状态档也不是写死的: 它的 label 同样来自接口
     expect(optionIn(wrapper, '状态', '放送中').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+})
+
+describe('分类页: 季度筛选', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
+    Element.prototype.scrollIntoView = vi.fn()
+    getFilterMeta.mockResolvedValue(metaResponse())
+    getFiltered.mockResolvedValue(filteredPage([card(1)]))
+
+    await router.push('/tags')
+    await router.isReady()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  /**
+   * 季度这一组**不来自 /filter-meta** —— 一年永远四个季度. 所以它没有"加载失败"
+   * 这个状态, 也没摆错误条: 上面那条「/filter-meta 挂了只出 2 条错误条」的用例
+   * 正好是这条的守门人(多摆一条它就红).
+   */
+  it('没选年份: 四个季度按钮禁用 + 一句「先选年份」, 点了也不发请求', async () => {
+    const wrapper = mountTags()
+    await flushPromises()
+    getFiltered.mockClear()
+
+    const quarters = group(wrapper, '季度').findAll('.filter-option')
+    // label 写「10月」不写「秋季」: 中文"秋季"的月份划分各平台不一, 而点下去
+    // 筛的是哪几个月必须一眼看得出来
+    expect(quarters.map((b) => b.text())).toEqual(['1月', '4月', '7月', '10月'])
+    for (const b of quarters) expect(b.attributes('disabled')).toBeDefined()
+    expect(group(wrapper, '季度').text()).toContain('先选年份')
+
+    // 这两句是同一个 `:disabled` 的两半, 却各自独立地红: 去掉绑定后属性断言失败,
+    // **而且**这一下会真的派发出去 -> 请求带着 `-Q4` 发出来 -> 后一句也失败.
+    // (jsdom 与真实浏览器一样不给禁用控件派发 click, 所以这一句本身就是行为断言,
+    //  不是"属性还在不在"的同义反复 —— 曾经在这里包过一个 if 守卫当第二道闸,
+    //  反向验证时发现它永远走不到, 已删.)
+    await quarters[3].trigger('click')
+    await flushPromises()
+    expect(getFiltered).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.query.season).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  it('选上年份后可用; 点季度: URL 写自包含的 yyyy-Qn, 请求一起带上', async () => {
+    const wrapper = mountTags()
+    await flushPromises()
+
+    await optionIn(wrapper, '年份', '2024').trigger('click')
+    await flushPromises()
+    expect(optionIn(wrapper, '季度', '10月').attributes('disabled')).toBeUndefined()
+    expect(group(wrapper, '季度').text()).not.toContain('先选年份')
+
+    getFiltered.mockClear()
+    await optionIn(wrapper, '季度', '10月').trigger('click')
+    await flushPromises()
+
+    // URL 上是**自包含**的值, 不是只写 "q4" 靠 year 拼 —— 这样能深链, 也能被
+    // 直接调 API 的人看懂(展开成 10/11/12 三个月放在服务端, 见 SeasonRange)
+    expect(router.currentRoute.value.query.season).toBe('2024-Q4')
+    expect(router.currentRoute.value.query.year).toBe('2024')
+    expect(lastSentParams().season).toBe('2024-Q4')
+    expect(lastSentParams().year).toBe('2024')
+    expect(optionIn(wrapper, '季度', '10月').attributes('aria-pressed')).toBe('true')
+
+    // 再点一次是取消选中, 不是"选中就没法取消"(与年份/状态一致)
+    await optionIn(wrapper, '季度', '10月').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.season).toBeUndefined()
+    expect(lastSentParams().season).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  it('换年份把季度清掉 —— 季度值自带年份, 留着就指向了另一年', async () => {
+    const wrapper = mountTags()
+    await flushPromises()
+
+    await optionIn(wrapper, '年份', '2024').trigger('click')
+    await flushPromises()
+    await optionIn(wrapper, '季度', '10月').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.season).toBe('2024-Q4')
+
+    await optionIn(wrapper, '年份', '2025').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.year).toBe('2025')
+    expect(router.currentRoute.value.query.season).toBeUndefined()
+    expect(lastSentParams().season).toBeUndefined()
+    expect(optionIn(wrapper, '季度', '10月').attributes('aria-pressed')).toBe('false')
+
+    wrapper.unmount()
+  })
+
+  it('「清除年份」也把季度清掉 —— pruneSeason 放在两条路的公共收尾里', async () => {
+    // 写进 toggleSingle 而不是 applySelectionChange 的话, clearGroup('year')
+    // 会留下一个"年份已经没了"的季度: 按钮灰着、值还在、请求还带着
+    const wrapper = mountTags()
+    await flushPromises()
+
+    await optionIn(wrapper, '年份', '2024').trigger('click')
+    await flushPromises()
+    await optionIn(wrapper, '季度', '7月').trigger('click')
+    await flushPromises()
+
+    await group(wrapper, '年份').find('.filter-clear').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.year).toBeUndefined()
+    expect(router.currentRoute.value.query.season).toBeUndefined()
+    expect(lastSentParams().season).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  it('深链只写了 season: 年份跟着补上, 两个按钮都亮着', async () => {
+    // season 是自包含的, 用户完全可能只分享这一段
+    await router.push('/tags?season=2024-Q4')
+    const wrapper = mountTags()
+    await flushPromises()
+
+    expect(lastSentParams().season).toBe('2024-Q4')
+    expect(lastSentParams().year).toBe('2024')
+    expect(optionIn(wrapper, '年份', '2024').attributes('aria-pressed')).toBe('true')
+    expect(optionIn(wrapper, '季度', '10月').attributes('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  /**
+   * selectionKey 漏掉一个字段是最难发现的那类 bug: watch 判"条件没变"而早退,
+   * URL 已经动了、页面却停在旧结果上, 而且**不报错**、控制台干净.
+   *
+   * 所以这条刻意让 year 在前后两次里**相同**, 只动 season —— year 若不同,
+   * 漏掉 season 的 key 也会因为 year 那一段而不相等, 用例照样绿, 什么都验不到.
+   */
+  it('挂载后 URL 上的 season 变了(后退/前进)也会被读回来取数', async () => {
+    await router.push('/tags?year=2024')
+    const wrapper = mountTags()
+    await flushPromises()
+    getFiltered.mockClear()
+
+    await router.push('/tags?year=2024&season=2024-Q4')
+    await flushPromises()
+
+    expect(getFiltered).toHaveBeenCalledTimes(1)
+    expect(lastSentParams().season).toBe('2024-Q4')
+    expect(optionIn(wrapper, '季度', '10月').attributes('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  it('深链里 season 与 year 打架时以 season 为准', async () => {
+    // 手改地址栏. 反过来以 year 为准的话, 屏幕上亮着 2023、结果却是 2024 年秋季
+    await router.push('/tags?season=2024-Q4&year=2023')
+    const wrapper = mountTags()
+    await flushPromises()
+
+    expect(lastSentParams().year).toBe('2024')
+    expect(lastSentParams().season).toBe('2024-Q4')
+    expect(optionIn(wrapper, '年份', '2024').attributes('aria-pressed')).toBe('true')
+
+    wrapper.unmount()
+  })
+
+  it('空态文案说「2024年10月」, 不是 URL 上那个 2024-Q4', async () => {
+    getFiltered.mockResolvedValue(filteredPage([], 0))
+    const wrapper = mountTags()
+    await flushPromises()
+
+    await optionIn(wrapper, '年份', '2024').trigger('click')
+    await flushPromises()
+    await optionIn(wrapper, '季度', '10月').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('「2024 + 2024年10月」暂无作品')
 
     wrapper.unmount()
   })

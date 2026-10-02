@@ -93,26 +93,42 @@ class AnimeServicePagingTest {
                 .when(animeRepository).findRankedByWeightedScore(anyDouble(), anyDouble(), any());
     }
 
-    /** 筛选: 三个可选条件照 SQL 的意思判一遍, 再按 {@code Pageable} 切 */
+    /** 筛选: 四个可选条件照 SQL 的意思判一遍, 再按 {@code Pageable} 切 */
     private void stubFiltered(List<Anime> source) {
         doAnswer(inv -> (long) matching(source,
-                inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)).size())
-                .when(animeRepository).countFiltered(any(), any(), any());
+                inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)).size())
+                .when(animeRepository).countFiltered(any(), any(), any(), any());
         doAnswer(inv -> slice(matching(source,
-                inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)), inv.getArgument(3)))
-                .when(animeRepository).findFilteredByRank(any(), any(), any(), any());
+                inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)),
+                inv.getArgument(4)))
+                .when(animeRepository).findFilteredByRank(any(), any(), any(), any(), any());
     }
 
-    /** 三个可选筛选谓词的 Java 版, 只为了让 mock 表现得像那条 SQL */
+    /**
+     * 四个可选筛选谓词的 Java 版, 只为了让 mock 表现得像那条 SQL.
+     *
+     * <p><b>季度那一支是区间, 不是等值, 而且和 SQL 一样把 NULL 的 season 判成不匹配.</b>
+     * 这两点必须同时照抄过来: SQL 里 {@code a.season >= ?} 遇到 NULL 求值为 NULL(即假),
+     * mock 若写成 {@code seasonFrom == null || ...} 而漏掉 season 为 null 的那一行,
+     * 就会出现"真库里筛不到、mock 里筛得到"的假绿 —— 而这条用例正是分页与 total 的
+     * 唯一守卫.
+     *
+     * <p>换句话说: <b>这个 mock 与 JPQL 是两份各自演化的实现, 语义一致性靠人维护.</b>
+     * 季度的正确性最终由真库集成用例({@code AnimeFilterIntegrationTest})兜底,
+     * 这里只保证分页/越界那几条不被参数个数变化带偏.
+     */
     private static List<Anime> matching(List<Anime> source, String yearPattern,
-                                        String season, String status) {
+                                        String seasonFrom, String seasonTo, String status) {
         String yearPrefix = yearPattern == null
                 ? null
                 : yearPattern.substring(0, yearPattern.length() - 1).replace("!", "");
         return source.stream()
                 .filter(a -> yearPrefix == null
                         || (a.getDate() != null && a.getDate().startsWith(yearPrefix)))
-                .filter(a -> season == null || season.equals(a.getSeason()))
+                .filter(a -> seasonFrom == null
+                        || (a.getSeason() != null
+                            && a.getSeason().compareTo(seasonFrom) >= 0
+                            && a.getSeason().compareTo(seasonTo) <= 0))
                 .filter(a -> status == null || status.equals(a.getStatus()))
                 .toList();
     }

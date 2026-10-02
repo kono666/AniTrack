@@ -16,7 +16,7 @@
   align-items: start;
 }
 
-/* 筛选栏. sticky + 自己带滚动条: 六组约 50 个按钮撑不出一屏, 而"改条件时不用先
+/* 筛选栏. sticky + 自己带滚动条: 七组约 55 个按钮撑不出一屏, 而"改条件时不用先
    滚回顶部"值这条内层滚动条(嵌套滚动是老毛病, 是明说的取舍)。 */
 .filter-panel {
   position: sticky;
@@ -61,6 +61,16 @@
   background: var(--primary); color: var(--primary-foreground); border-color: var(--primary);
 }
 .filter-more { border-style: dashed; }
+
+/* 禁用态(目前只有季度: 没选年份时). 悬停高亮必须一起压掉 —— 只写 opacity 的话,
+   鼠标扫过去还是会亮成 --primary, 看起来像是能点. */
+.filter-option:disabled {
+  opacity: .45; cursor: not-allowed;
+}
+.filter-option:disabled:hover { border-color: var(--border); color: var(--text-secondary); }
+
+/* 「先选年份」: 光把四个按钮变灰, 用户不知道为什么灰 */
+.filter-hint { margin: 6px 0 0; font-size: 11px; color: var(--text-secondary); }
 
 /* 「筛选」开关与遮罩: 只在窄屏存在. 桌面端整条规则都不生效(display:none 在媒体查询外) */
 .filter-toggle { display: none; }
