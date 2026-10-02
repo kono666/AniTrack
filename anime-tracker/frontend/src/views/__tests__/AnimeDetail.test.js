@@ -19,6 +19,12 @@ vi.mock('../../api', () => ({
   getAnimeHeat: vi.fn(),
   // 相关推荐改走 /filter(sort=rating), 不再用 /by-tag —— 理由见 AnimeDetail.vue
   getFiltered: vi.fn(),
+  // 附属数据那三个(角色/制作人员/关联作品). 一个都不能漏 —— 漏了组件里那次调用就是
+  // 对 undefined 的调用, 而它落在 Promise.allSettled 里: 表现是那一段安静地什么都不
+  // 渲染, 这个文件里所有用例照绿而新代码一次都没跑到. 哨兵在 AnimeDetail.extras.test.js
+  getSubjectCharacters: vi.fn(),
+  getSubjectStaff: vi.fn(),
+  getSubjectRelations: vi.fn(),
   // 点赞那三个, 加上两个排序常量. 常量也要列 —— vi.mock 是**整体替换**模块,
   // 漏了它们组件里 REVIEW_SORT_CREATED 就是 undefined, 排序开关两个按钮会同时
   // 命中 active

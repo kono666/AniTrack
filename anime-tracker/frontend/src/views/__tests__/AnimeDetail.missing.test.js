@@ -18,6 +18,10 @@ vi.mock('../../api', () => ({
   toggleEpisode: vi.fn(),
   getAnimeHeat: vi.fn(),
   getFiltered: vi.fn(),
+  // 附属数据那三个. 一个都不能漏 —— 理由见 AnimeDetail.test.js 里同一处
+  getSubjectCharacters: vi.fn(),
+  getSubjectStaff: vi.fn(),
+  getSubjectRelations: vi.fn(),
   // 点赞那三个, 加上两个排序常量 —— vi.mock 整体替换模块, 漏一个就在解构时抛,
   // 整页落到错误态(见这个文件顶部那条). 常量也得列: 漏了组件里就是 undefined
   likeReview: vi.fn(),
