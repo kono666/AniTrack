@@ -105,6 +105,21 @@ describe('个人页的统计口径与 +1 封顶', () => {
     expect(tab.text()).toContain('2')
   })
 
+  it('个人页那一格「均分」是**我的**均分, 不许跟着详情页改名', async () => {
+    const wrapper = await mountProfile()
+
+    // 详情页那一轮(c117)把评论区的「均分」改成了「本站均分」—— 那一处说的是
+    // **全站用户**打的平均分。个人页这一处是"跨我所有追番算出来的平均分", 同名不同物,
+    // 在这里就叫「均分」才是对的。这条断言存在的唯一理由是: **这个改名若发生在错误的
+    // 那一处, 不会有任何别的用例变红** —— 两个页面的测试各测各的, 谁也不会发现。
+    const labels = wrapper.findAll('.p-stat .ps-lbl').map(n => n.text())
+    expect(labels).toContain('均分')
+    expect(labels).not.toContain('本站均分')
+
+    const avg = wrapper.findAll('.p-stat').find(s => s.find('.ps-lbl').text() === '均分')
+    expect(avg.find('.ps-num').text()).toBe('7.5')
+  })
+
   it('未看到最后一集时 +1 提交 progress+1', async () => {
     const wrapper = await mountProfile()
     await plusOneOf(wrapper, 'A').trigger('click')

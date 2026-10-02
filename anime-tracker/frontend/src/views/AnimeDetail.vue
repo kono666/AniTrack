@@ -10,7 +10,10 @@
         <div class="d-hero-left">
           <div class="d-cover-wrap">
             <img class="d-cover" :src="coverImg" :alt="subject.nameCn" @error="onCoverError" />
-            <div class="d-cover-score" v-if="subject.rating?.score"><PhStar :size="12" weight="fill" /> {{ subject.rating.score.toFixed(1) }}</div>
+            <!-- 封面右下角那个 ★9.1 **删掉了**(c117)。它与下面 .d-stats 里的 9.1 是
+                 **同一个数**, 相距不到 200px 印两遍; 而两处都没有标签, 读的人无从知道
+                 这是谁打的分。留下的是有标签的那一处(.ds-lbl「番组评分」)。
+                 排名角标保留 —— 它只在这一处出现, 不是重复。 -->
             <div class="d-cover-rank" v-if="subject.rating?.rank">#{{ subject.rating.rank }}</div>
           </div>
           <div class="d-hero-actions">
@@ -31,7 +34,12 @@
                注意 类型 那一格: 改前写的是 platform || 'TV', 缺值时**猜一个 TV**.
                一部剧场版没有 platform 就会被标成"类型 TV". 缺数据可以补, 错数据会被当真. -->
           <div class="d-stats" v-if="hasStats">
-            <div class="d-stat" v-if="subject.rating?.score"><span class="ds-val">{{ subject.rating.score.toFixed(1) }}</span><span class="ds-lbl">评分</span></div>
+            <!-- 「番组评分」不是「评分」: 站内 UI 上从来没出现过「Bangumi」这个词, 而这
+                 一页有**四个分**, 其中两个原先都叫「评分」。这个名字是给读的人看的 ——
+                 它是上游聚合分, 不是本站在座各位打的分(那是下面评论区的「本站均分」),
+                 也不是我自己的追番分(那是追番栏的「追番评分」)。三个名字互不重合,
+                 谁是谁一眼能分清。 -->
+            <div class="d-stat" v-if="subject.rating?.score"><span class="ds-val">{{ subject.rating.score.toFixed(1) }}</span><span class="ds-lbl">番组评分</span></div>
             <div class="d-stat" v-if="subject.rating?.rank"><span class="ds-val">#{{ subject.rating.rank }}</span><span class="ds-lbl">排名</span></div>
             <div class="d-stat" v-if="subject.totalEpisodes"><span class="ds-val">{{ subject.totalEpisodes }}</span><span class="ds-lbl">总集数</span></div>
             <div class="d-stat" v-if="subject.date"><span class="ds-val">{{ subject.date.substring(0,4) }}</span><span class="ds-lbl">年份</span></div>
@@ -73,7 +81,9 @@
         <div class="track-input-row">
           <label>直接改进度</label><input type="number" v-model.number="trackForm.progress" min="0" :max="maxProgress" @input="markDirty('progress')" />
           <span>/ {{ totalEpisodesHere || '?' }}</span>
-          <label style="margin-left:16px;">评分</label><input type="number" v-model.number="trackForm.score" min="1" max="10" @input="markDirty('score')" />
+          <!-- 「追番评分」: 这一格是我给这部番打的分, 与 hero 里那个上游聚合分不是
+               一回事。改前两处都叫「评分」, 而它们可以差出好几分。 -->
+          <label style="margin-left:16px;">追番评分</label><input type="number" v-model.number="trackForm.score" min="1" max="10" @input="markDirty('score')" />
         </div>
         <button class="d-btn-save" @click="saveTrack">保存</button>
       </div>
@@ -137,7 +147,19 @@
       <!-- Reviews -->
       <section class="d-section">
         <SectionHeader :title="`评论 · ${ratingStats.count}`">
-          <template #extra>均分 <PhStar :size="11" weight="fill" />{{ ratingStats.average }}</template>
+          <!-- 「本站均分」: 这是**本站用户在座各位**打的分, 与 hero 里那个上游聚合分
+               是两套口径(可以差出好几分), 所以名字必须分开。
+               ⚠️ 零人评分时后端给的 average 就是 0.0 —— `ReviewService` 里那句
+               `count == 0 ? 0.0 : (double) sum / count`, 不是缺字段。改前这里没有
+               v-if, 于是渲染成「均分 ★0」, 读起来是"这部番得了 0 分", 而真相是"还
+               没有人打过分"。有分才报分, 没分就明说「暂无评分」。
+               ⚠️ 卡片右上角那个「暂无」保留不动(AnimeCard.vue): 网格里每张卡都有角标
+               位, 空着会让封面左上重右上轻。全站因此有两种零分表达 —— 网格角标「暂无」,
+               其余整项不渲染。 -->
+          <template #extra>
+            <template v-if="ratingStats.count > 0">本站均分 <PhStar :size="11" weight="fill" />{{ ratingStats.average }}</template>
+            <template v-else>暂无评分</template>
+          </template>
         </SectionHeader>
 
         <!-- My Review -->
@@ -1109,11 +1131,10 @@ onMounted(load)
 .d-hero-left{ flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:16px; }
 .d-cover-wrap{ position:relative; }
 .d-cover{ width:220px; border-radius:12px; aspect-ratio:3/4; object-fit:cover; box-shadow:0 16px 64px rgba(0,0,0,.5); border:2px solid rgba(255,255,255,.06); }
-/* 这两个角标压在封面上 → 用 --cover-* 那组, 不跟主题变.
-   一深一浅是有意的: 评分是"读一个数", 排名是"贴一个标", 权重不同。 */
-/* 这两处原本是 800 —— 而正文字体最粗只到 700, 800 是伪粗体合成出来的。
-   14px/12px 属于小字号, 一律用真的 700; 20px 以上才换显示体(见下面 .ds-val)。 */
-.d-cover-score{ position:absolute; bottom:-8px; right:-8px; padding:4px 12px; border-radius:12px; background:var(--cover-scrim); color:var(--cover-star); font-size:14px; font-weight:700; border:1.5px solid rgba(255,255,255,.1); backdrop-filter:blur(8px); }
+/* 剩下的这个角标压在封面上 → 用 --cover-* 那组, 不跟主题变。 */
+/* 这里原本是 800 —— 而正文字体最粗只到 700, 800 是伪粗体合成出来的。
+   12px 属于小字号, 一律用真的 700; 20px 以上才换显示体(见下面 .ds-val)。
+   (原先还有一条 .d-cover-score, 随那个 ★9.1 角标在 c117 一起删掉了。) */
 .d-cover-rank{ position:absolute; top:-8px; left:-8px; padding:4px 10px; border-radius:8px; background:var(--cover-fg); color:var(--cover-ink); font-size:12px; font-weight:700; }
 .d-hero-actions{ width:100%; }
 /* 这个按钮在**头图上**(深色孤岛里), 不是在普通卡片上 —— 所以它不能用

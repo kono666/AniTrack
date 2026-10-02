@@ -110,7 +110,9 @@ describe('详情页的缺数据', () => {
 
   it('字段齐全时五格都在(对照)', async () => {
     const w = await mountWith(FULL, null)
-    expect(labels(w)).toEqual(['评分', '排名', '总集数', '年份', '类型'])
+    // 「评分」→「番组评分」(c117): 这一页有四个分, 其中两个原先都叫「评分」。
+    // 改这个名字时这条断言如期变红 —— 那是好事, 它就是为"标签被改动"准备的哨兵。
+    expect(labels(w)).toEqual(['番组评分', '排名', '总集数', '年份', '类型'])
     expect(w.text()).toContain('#8')
   })
 
