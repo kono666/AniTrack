@@ -128,6 +128,32 @@
 
     <build>
         <plugins>
+            <!-- 注解处理必须是显式的. 从 JDK 23 起 (JDK-8338926), javac 不再扫 classpath
+                 去找注解处理器 —— 不给 -processor / -processorpath 这类显式选项, 一个处理器
+                 也不跑. 本仓在此之前靠的正是那个默认行为: pom 里既没有 annotationProcessorPaths
+                 也没有 proc, 全靠 javac 自己从 classpath 上认出 lombok.
+                 后果很难查: 换成 JDK 23+ 编译, Lombok 整个不生效, 报出来的是满屏
+                 "找不到符号" —— 而 javac 报满 -Xmaxerrs 那 100 条里**一个字都不提 Lombok**,
+                 照着它排查会一头扎进业务代码, 而代码一个字没错.
+                 实测: JDK 25 上 clean compile -> "Compiling 160 source files" 之后 2.5 秒
+                 报满 100 条, 全部是 lombok 生成的 getter / 构造器.
+                 annotationProcessorPaths 会变成 -processorpath: 既是显式请求 (新版 javac
+                 认它才跑), 也不再依赖 classpath 上恰好躺着什么.
+                 顺带一提, 目前 lombok 是唯一的处理器, 所以这个白名单是完整的;
+                 以后再加 MapStruct 之类必须也登记到这里, 否则一样静默不生效. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
