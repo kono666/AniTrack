@@ -127,7 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # 两阶段构建里最慢的是「下 Maven 依赖」那一层. 缓存交给 GitHub Actions 的
       # 缓存服务, 第二次之后的运行能省掉几分钟 —— 否则每次提交都要重下一遍依赖.
