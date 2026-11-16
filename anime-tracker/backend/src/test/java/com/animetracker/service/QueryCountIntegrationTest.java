@@ -1,5 +1,7 @@
 package com.animetracker.service;
 
+import com.animetracker.review.service.ReviewService;
+import com.animetracker.review.service.ReviewReplyService;
 import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.entity.Anime;
 import com.animetracker.entity.User;

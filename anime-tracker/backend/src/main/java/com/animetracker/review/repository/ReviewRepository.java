@@ -1,6 +1,6 @@
-package com.animetracker.repository;
+package com.animetracker.review.repository;
 
-import com.animetracker.entity.Review;
+import com.animetracker.review.domain.Review;
 import com.animetracker.entity.User;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

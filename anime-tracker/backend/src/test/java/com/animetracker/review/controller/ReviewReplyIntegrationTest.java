@@ -1,4 +1,4 @@
-package com.animetracker.controller;
+package com.animetracker.review.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

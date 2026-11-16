@@ -1,7 +1,7 @@
-package com.animetracker.controller;
+package com.animetracker.review.controller;
 
-import com.animetracker.entity.Review;
-import com.animetracker.repository.ReviewRepository;
+import com.animetracker.review.domain.Review;
+import com.animetracker.review.repository.ReviewRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;

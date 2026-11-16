@@ -1,13 +1,13 @@
-package com.animetracker.controller;
+package com.animetracker.review.controller;
 
 import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.ReportRequest;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.entity.User;
-import com.animetracker.service.ReviewLikeService;
-import com.animetracker.service.ReviewReportService;
-import com.animetracker.service.ReviewService;
+import com.animetracker.review.service.ReviewLikeService;
+import com.animetracker.review.service.ReviewReportService;
+import com.animetracker.review.service.ReviewService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;

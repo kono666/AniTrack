@@ -5,7 +5,7 @@ import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.ResetPasswordRequest;
 import com.animetracker.entity.User;
 import com.animetracker.service.AdminService;
-import com.animetracker.service.ReviewReportService;
+import com.animetracker.review.service.ReviewReportService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;

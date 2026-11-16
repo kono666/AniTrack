@@ -1,11 +1,12 @@
-package com.animetracker.service;
+package com.animetracker.review.service;
 
+import com.animetracker.service.IsolatedInsert;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
-import com.animetracker.entity.Review;
+import com.animetracker.review.domain.Review;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.repository.ReviewLikeRepository;
-import com.animetracker.repository.ReviewRepository;
+import com.animetracker.review.repository.ReviewLikeRepository;
+import com.animetracker.review.repository.ReviewRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -86,7 +87,7 @@ public class ReviewService {
      * 被管理员移除的那一条**不能**靠"再发一次"复活(V14)。
      *
      * <p>查重那一步是刻意不过滤删除标记的(理由写在
-     * {@link com.animetracker.repository.ReviewRepository#findByUserAndSubjectId} 上),
+     * {@link com.animetracker.review.repository.ReviewRepository#findByUserAndSubjectId} 上),
      * 于是这里必然撞见一条已移除的旧行, 而它必须被挡住: 放行等于写回 rating/content,
      * 删掉的评论原地复活, 而**管理员的处置被用户一个保存动作撤销了** —— 账本里那条
      * REVIEW_DELETE 还在, 界面上那条评论也还在, 只有"移除"这个动作悄悄失效了。

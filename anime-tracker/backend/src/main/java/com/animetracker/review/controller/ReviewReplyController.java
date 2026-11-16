@@ -1,11 +1,11 @@
-package com.animetracker.controller;
+package com.animetracker.review.controller;
 
 import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.ReplyRequest;
 import com.animetracker.entity.User;
-import com.animetracker.service.ReviewReplyService;
-import com.animetracker.service.ReviewService;
+import com.animetracker.review.service.ReviewReplyService;
+import com.animetracker.review.service.ReviewService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 

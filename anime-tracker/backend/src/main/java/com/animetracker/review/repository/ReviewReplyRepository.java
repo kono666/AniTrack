@@ -1,6 +1,6 @@
-package com.animetracker.repository;
+package com.animetracker.review.repository;
 
-import com.animetracker.entity.ReviewReply;
+import com.animetracker.review.domain.ReviewReply;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -48,7 +48,7 @@ public interface ReviewReplyRepository extends JpaRepository<ReviewReply, Long> 
      * <p>{@code rr.user} 要 fetch: 判"我是不是作者"只需要 id(外键列, 不产生查询), 但
      * 判完还要把这条回复渲染给前端, 那时名字是必须的 —— 分开写就等于同一个查询写两遍.
      *
-     * <p>{@code rr.review} 也 fetch: {@link com.animetracker.service.ReviewReplyService}
+     * <p>{@code rr.review} 也 fetch: {@link com.animetracker.review.service.ReviewReplyService}
      * 判删除权限时要问"这条回复挂的那条短评是不是我写的", 那是 {@code review.user_id},
      * 同样只是外键列. 但它同时要用 {@code review.id} 去减 reply_count —— 也只是外键列.
      * fetch 它是因为**没有环境事务**时(这个 service 刻意不带类级 @Transactional)访问

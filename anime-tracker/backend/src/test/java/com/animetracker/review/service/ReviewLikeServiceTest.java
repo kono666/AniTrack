@@ -1,11 +1,13 @@
-package com.animetracker.service;
+package com.animetracker.review.service;
 
-import com.animetracker.entity.Review;
-import com.animetracker.entity.ReviewLike;
+import com.animetracker.service.NotificationService;
+import com.animetracker.service.IsolatedInsert;
+import com.animetracker.review.domain.Review;
+import com.animetracker.review.domain.ReviewLike;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.repository.ReviewLikeRepository;
-import com.animetracker.repository.ReviewRepository;
+import com.animetracker.review.repository.ReviewLikeRepository;
+import com.animetracker.review.repository.ReviewRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -2,9 +2,9 @@ package com.animetracker.agent.tool;
 
 import com.animetracker.agent.tool.ToolDefinition.Access;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
-import com.animetracker.entity.Review;
+import com.animetracker.review.domain.Review;
 import com.animetracker.entity.User;
-import com.animetracker.service.ReviewService;
+import com.animetracker.review.service.ReviewService;
 import com.animetracker.service.StatsService;
 import org.springframework.stereotype.Component;
 

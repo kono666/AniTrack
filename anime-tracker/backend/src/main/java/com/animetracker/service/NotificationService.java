@@ -1,12 +1,12 @@
 package com.animetracker.service;
 
 import com.animetracker.entity.Notification;
-import com.animetracker.entity.Review;
-import com.animetracker.entity.ReviewReply;
+import com.animetracker.review.domain.Review;
+import com.animetracker.review.domain.ReviewReply;
 import com.animetracker.entity.User;
 import com.animetracker.repository.NotificationRepository;
-import com.animetracker.repository.ReviewReplyRepository;
-import com.animetracker.repository.ReviewRepository;
+import com.animetracker.review.repository.ReviewReplyRepository;
+import com.animetracker.review.repository.ReviewRepository;
 import com.animetracker.repository.UserRepository;
 import com.animetracker.util.PageResults;
 import com.animetracker.util.TextSnippet;

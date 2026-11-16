@@ -1,4 +1,4 @@
-package com.animetracker.repository;
+package com.animetracker.review.repository;
 
 /**
  * 短评列表读路径上的 JPQL 片段 —— 取哪些列、按什么排序只此一份.

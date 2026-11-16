@@ -1,13 +1,15 @@
-package com.animetracker.service;
+package com.animetracker.review.service;
 
-import com.animetracker.entity.ReplyLike;
-import com.animetracker.entity.Review;
-import com.animetracker.entity.ReviewReply;
+import com.animetracker.service.IsolatedInsert;
+import com.animetracker.service.NotificationService;
+import com.animetracker.review.domain.ReplyLike;
+import com.animetracker.review.domain.Review;
+import com.animetracker.review.domain.ReviewReply;
 import com.animetracker.entity.User;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.repository.ReplyLikeRepository;
-import com.animetracker.repository.ReviewReplyRepository;
-import com.animetracker.repository.ReviewRepository;
+import com.animetracker.review.repository.ReplyLikeRepository;
+import com.animetracker.review.repository.ReviewReplyRepository;
+import com.animetracker.review.repository.ReviewRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
