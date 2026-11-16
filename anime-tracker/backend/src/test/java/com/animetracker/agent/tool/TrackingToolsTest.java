@@ -2,10 +2,10 @@ package com.animetracker.agent.tool;
 
 import com.animetracker.agent.llm.ToolCall;
 import com.animetracker.dto.RequestDTO.TrackRequest;
-import com.animetracker.entity.AnimeTracking;
-import com.animetracker.entity.User;
-import com.animetracker.service.StatsService;
-import com.animetracker.service.TrackService;
+import com.animetracker.tracking.domain.AnimeTracking;
+import com.animetracker.user.domain.User;
+import com.animetracker.stats.service.StatsService;
+import com.animetracker.tracking.service.TrackService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,6 +1,6 @@
 package com.animetracker.review.domain;
 
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import jakarta.persistence.*;
 import lombok.*;
 

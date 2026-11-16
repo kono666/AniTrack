@@ -3,7 +3,7 @@ package com.animetracker.review.controller;
 import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.ReplyRequest;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import com.animetracker.review.service.ReviewReplyService;
 import com.animetracker.review.service.ReviewService;
 import jakarta.validation.Valid;

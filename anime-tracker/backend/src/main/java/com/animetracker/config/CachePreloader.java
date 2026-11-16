@@ -1,9 +1,9 @@
 package com.animetracker.config;
 
-import com.animetracker.dto.BangumiDTO.*;
-import com.animetracker.repository.AnimeRepository;
-import com.animetracker.service.AnimeService;
-import com.animetracker.service.BangumiApiClient;
+import com.animetracker.anime.dto.BangumiDTO.*;
+import com.animetracker.anime.repository.AnimeRepository;
+import com.animetracker.anime.service.AnimeService;
+import com.animetracker.anime.service.BangumiApiClient;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

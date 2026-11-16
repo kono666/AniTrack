@@ -1,10 +1,14 @@
 package com.animetracker.service;
 
-import com.animetracker.dto.BangumiDTO.SearchResponse;
-import com.animetracker.dto.BangumiDTO.SubjectDTO;
-import com.animetracker.repository.AnimeRepository;
-import com.animetracker.service.AnimeBackfillService.BackfillResult;
-import com.animetracker.service.AnimeBackfillService.StopReason;
+import com.animetracker.anime.service.AnimeBackfillService;
+import com.animetracker.anime.service.AnimeService;
+import com.animetracker.anime.service.BangumiApiClient;
+import com.animetracker.anime.dto.BangumiDTO;
+import com.animetracker.anime.dto.BangumiDTO.SearchResponse;
+import com.animetracker.anime.dto.BangumiDTO.SubjectDTO;
+import com.animetracker.anime.repository.AnimeRepository;
+import com.animetracker.anime.service.AnimeBackfillService.BackfillResult;
+import com.animetracker.anime.service.AnimeBackfillService.StopReason;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

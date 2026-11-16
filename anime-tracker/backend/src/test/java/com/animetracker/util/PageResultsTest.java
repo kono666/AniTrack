@@ -1,5 +1,7 @@
 package com.animetracker.util;
 
+import com.animetracker.admin.service.AdminService;
+import com.animetracker.anime.service.AnimeService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

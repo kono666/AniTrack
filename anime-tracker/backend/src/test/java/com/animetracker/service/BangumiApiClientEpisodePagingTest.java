@@ -1,5 +1,6 @@
 package com.animetracker.service;
 
+import com.animetracker.anime.service.BangumiApiClient;
 import com.animetracker.config.BangumiApiProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

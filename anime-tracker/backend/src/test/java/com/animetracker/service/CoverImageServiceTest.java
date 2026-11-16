@@ -1,5 +1,7 @@
 package com.animetracker.service;
 
+import com.animetracker.anime.service.CoverImageService;
+import com.animetracker.user.domain.User;
 import com.animetracker.config.BangumiApiProperties;
 import com.animetracker.config.ImageProxyProperties;
 import com.animetracker.config.WebConfig;

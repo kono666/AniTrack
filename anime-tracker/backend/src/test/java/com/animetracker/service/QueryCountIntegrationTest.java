@@ -1,14 +1,18 @@
 package com.animetracker.service;
 
+import com.animetracker.admin.service.AdminService;
+import com.animetracker.anime.service.AnimeService;
+import com.animetracker.stats.service.StatsService;
+import com.animetracker.tracking.service.TrackService;
 import com.animetracker.review.service.ReviewService;
 import com.animetracker.review.service.ReviewReplyService;
 import com.animetracker.agent.tool.ToolRegistry;
-import com.animetracker.entity.Anime;
-import com.animetracker.entity.User;
+import com.animetracker.anime.domain.Anime;
+import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.repository.AnimeRepository;
-import com.animetracker.repository.AnimeTagRepository;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.anime.repository.AnimeRepository;
+import com.animetracker.anime.repository.AnimeTagRepository;
+import com.animetracker.user.repository.UserRepository;
 import com.animetracker.util.SearchPatterns;
 import com.animetracker.util.TagTranslationUtil;
 import jakarta.persistence.EntityManagerFactory;

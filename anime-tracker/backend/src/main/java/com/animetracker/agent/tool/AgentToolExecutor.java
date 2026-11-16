@@ -1,7 +1,7 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.agent.llm.ToolCall;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 
 /**
  * 工具的执行逻辑.

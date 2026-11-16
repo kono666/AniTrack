@@ -35,7 +35,7 @@ import org.springframework.stereotype.Component;
  * <p><b>为什么 C = 7.0 是个写死的先验, 而不是每次去算库里的 AVG(rating).</b>
  * 均分是个会随数据漂移的量 —— 全量回填三万个条目之后它会变, 于是"同一个榜单"在
  * 数据变了之后会莫名其妙地重排; 而且排行是有缓存的(见
- * {@link com.animetracker.service.AnimeService#getRanking}), 均值一变缓存键却不变,
+ * {@link com.animetracker.anime.service.AnimeService#getRanking}), 均值一变缓存键却不变,
  * 缓存里存的就是旧口径的结果. 先验取常数之后, 每一行的得分只由它自己的两个数字
  * 决定: 可复现、可解释、可测. 7.0 落在实测热门均分(7.79)之下, 是个偏保守的
  * "及格线"——冷门条目被拉到这里, 排在真正的好番后面.

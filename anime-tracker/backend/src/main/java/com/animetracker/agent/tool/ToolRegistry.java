@@ -1,7 +1,7 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.agent.llm.ToolSpec;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

@@ -1,10 +1,13 @@
 package com.animetracker.service;
 
-import com.animetracker.entity.SubjectCharacter;
-import com.animetracker.entity.SubjectCharacterActor;
-import com.animetracker.entity.SubjectRelation;
-import com.animetracker.entity.SubjectStaff;
-import com.animetracker.service.SubjectExtrasMapper.CharacterRows;
+import com.animetracker.anime.service.SubjectExtrasMapper;
+import com.animetracker.anime.service.SubjectExtrasService;
+import com.animetracker.anime.service.SubjectExtrasWriter;
+import com.animetracker.anime.domain.SubjectCharacter;
+import com.animetracker.anime.domain.SubjectCharacterActor;
+import com.animetracker.anime.domain.SubjectRelation;
+import com.animetracker.anime.domain.SubjectStaff;
+import com.animetracker.anime.service.SubjectExtrasMapper.CharacterRows;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

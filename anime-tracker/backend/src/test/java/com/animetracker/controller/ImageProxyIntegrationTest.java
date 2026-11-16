@@ -1,5 +1,6 @@
 package com.animetracker.controller;
 
+import com.animetracker.anime.service.CoverImageService;
 import com.animetracker.util.CoverImages;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

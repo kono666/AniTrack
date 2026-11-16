@@ -1,7 +1,8 @@
 package com.animetracker.controller;
 
-import com.animetracker.entity.AdminActionLog;
-import com.animetracker.repository.AdminActionLogRepository;
+import com.animetracker.common.service.IsolatedInsert;
+import com.animetracker.admin.domain.AdminActionLog;
+import com.animetracker.admin.repository.AdminActionLogRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

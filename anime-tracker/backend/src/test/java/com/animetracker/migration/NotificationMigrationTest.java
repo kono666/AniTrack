@@ -1,5 +1,6 @@
 package com.animetracker.migration;
 
+import com.animetracker.notification.domain.Notification;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.DisplayName;

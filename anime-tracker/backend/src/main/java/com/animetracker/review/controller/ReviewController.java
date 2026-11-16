@@ -4,7 +4,7 @@ import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.dto.RequestDTO.ReportRequest;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import com.animetracker.review.service.ReviewLikeService;
 import com.animetracker.review.service.ReviewReportService;
 import com.animetracker.review.service.ReviewService;

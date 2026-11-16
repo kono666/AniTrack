@@ -1,13 +1,15 @@
 package com.animetracker.service;
 
+import com.animetracker.user.service.LoginEventService;
+import com.animetracker.user.service.UserService;
 import com.animetracker.config.JwtUtil;
 import com.animetracker.config.LoginProtectionProperties;
 import com.animetracker.dto.RequestDTO.ChangePasswordRequest;
 import com.animetracker.dto.RequestDTO.LoginRequest;
 import com.animetracker.dto.RequestDTO.RegisterRequest;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

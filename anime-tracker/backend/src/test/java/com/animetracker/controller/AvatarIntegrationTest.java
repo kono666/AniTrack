@@ -1,7 +1,7 @@
 package com.animetracker.controller;
 
 import com.animetracker.config.GlobalExceptionHandler;
-import com.animetracker.service.AvatarService;
+import com.animetracker.user.service.AvatarService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;

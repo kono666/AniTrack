@@ -1,5 +1,8 @@
 package com.animetracker.agent;
 
+import com.animetracker.agent.domain.AgentMessage;
+import com.animetracker.anime.domain.AnimeTag;
+import com.animetracker.anime.domain.Episode;
 import com.animetracker.agent.llm.LlmClient;
 import com.animetracker.agent.llm.LlmMessage;
 import com.animetracker.agent.llm.LlmResponse;
@@ -9,9 +12,9 @@ import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.agent.tool.ToolTransactionRunner;
 import com.animetracker.config.LlmProperties;
 import com.animetracker.review.domain.Review;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import com.animetracker.review.repository.ReviewRepository;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.user.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hibernate.LazyInitializationException;
 import org.junit.jupiter.api.BeforeEach;

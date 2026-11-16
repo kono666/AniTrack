@@ -1,6 +1,6 @@
 package com.animetracker.util;
 
-import com.animetracker.dto.BangumiDTO.InfoboxItem;
+import com.animetracker.anime.dto.BangumiDTO.InfoboxItem;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.LinkedHashSet;

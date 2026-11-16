@@ -1,7 +1,7 @@
 package com.animetracker.config;
 
-import com.animetracker.entity.User;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.user.domain.User;
+import com.animetracker.user.repository.UserRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

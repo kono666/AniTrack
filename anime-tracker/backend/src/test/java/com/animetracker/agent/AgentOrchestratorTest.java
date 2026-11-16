@@ -11,7 +11,7 @@ import com.animetracker.agent.tool.ToolProvider;
 import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.agent.tool.ToolTransactionRunner;
 import com.animetracker.config.LlmProperties;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

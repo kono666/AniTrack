@@ -2,7 +2,7 @@ package com.animetracker.config;
 
 import com.animetracker.dto.ApiResponse;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.service.AvatarService;
+import com.animetracker.user.service.AvatarService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -169,7 +169,7 @@ public class GlobalExceptionHandler {
      *
      * <p>消息里带上限值: 用户唯一能采取的行动就是"换张小的", 不告诉他界限在哪,
      * 他只能反复试。这个数字在 {@code application.yml} 与
-     * {@link com.animetracker.service.AvatarService#MAX_BYTES} 里各写了一份(必须同值,
+     * {@link com.animetracker.user.service.AvatarService#MAX_BYTES} 里各写了一份(必须同值,
      * 理由见那个常量), 所以这里不写死 —— 从异常里读到的客户端声明大小反而是不可信的,
      * 干脆只说规定。
      */

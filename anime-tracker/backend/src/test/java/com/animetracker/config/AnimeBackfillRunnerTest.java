@@ -1,8 +1,8 @@
 package com.animetracker.config;
 
-import com.animetracker.service.AnimeBackfillService;
-import com.animetracker.service.AnimeBackfillService.BackfillResult;
-import com.animetracker.service.AnimeBackfillService.StopReason;
+import com.animetracker.anime.service.AnimeBackfillService;
+import com.animetracker.anime.service.AnimeBackfillService.BackfillResult;
+import com.animetracker.anime.service.AnimeBackfillService.StopReason;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

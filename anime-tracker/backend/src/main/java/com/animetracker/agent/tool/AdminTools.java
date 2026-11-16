@@ -1,8 +1,8 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.agent.tool.ToolDefinition.Access;
-import com.animetracker.entity.User;
-import com.animetracker.service.AdminService;
+import com.animetracker.user.domain.User;
+import com.animetracker.admin.service.AdminService;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
