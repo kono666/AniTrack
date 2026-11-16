@@ -1,5 +1,7 @@
 package com.animetracker.entity;
 
+import com.animetracker.review.domain.Review;
+import com.animetracker.review.domain.ReviewReply;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;

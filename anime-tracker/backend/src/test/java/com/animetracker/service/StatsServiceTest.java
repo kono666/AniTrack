@@ -6,7 +6,7 @@ import com.animetracker.entity.EpisodeWatched;
 import com.animetracker.entity.User;
 import com.animetracker.repository.AnimeRepository;
 import com.animetracker.repository.EpisodeWatchedRepository;
-import com.animetracker.repository.ReviewRepository;
+import com.animetracker.review.repository.ReviewRepository;
 import com.animetracker.repository.TrackingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

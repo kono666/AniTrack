@@ -2,10 +2,10 @@ package com.animetracker.service;
 
 import com.animetracker.entity.AnimeTracking;
 import com.animetracker.entity.LoginEvent;
-import com.animetracker.entity.Review;
+import com.animetracker.review.domain.Review;
 import com.animetracker.entity.User;
 import com.animetracker.repository.LoginEventRepository;
-import com.animetracker.repository.ReviewRepository;
+import com.animetracker.review.repository.ReviewRepository;
 import com.animetracker.repository.TrackingRepository;
 import com.animetracker.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;

@@ -1,5 +1,6 @@
 package com.animetracker.service;
 
+import com.animetracker.review.repository.ReviewRepository;
 import com.animetracker.entity.*;
 import com.animetracker.repository.*;
 import org.springframework.dao.DataIntegrityViolationException;
