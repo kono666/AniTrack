@@ -1,5 +1,6 @@
 package com.animetracker.dto;
 
+import com.animetracker.common.web.TraceId;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.NoArgsConstructor;
 
@@ -22,12 +23,17 @@ public class ApiResponse<T> {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private Integer total;
 
+    /** 本次请求的链路 id, 与响应头 X-Trace-Id 同值; 非 HTTP 线程上为 null */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String traceId;
+
     // ── 构造器 ──────────────────────────────────────────
 
     public ApiResponse(int code, String message, T data) {
         this.code = code;
         this.message = message;
         this.data = data;
+        this.traceId = TraceId.current();
     }
 
     // ── 工厂方法 ────────────────────────────────────────
@@ -77,6 +83,7 @@ public class ApiResponse<T> {
     public Integer getPage() { return page; }
     public Integer getPageSize() { return pageSize; }
     public Integer getTotal() { return total; }
+    public String getTraceId() { return traceId; }
 
     public void setCode(int code) { this.code = code; }
     public void setMessage(String message) { this.message = message; }
@@ -84,4 +91,5 @@ public class ApiResponse<T> {
     public void setPage(Integer page) { this.page = page; }
     public void setPageSize(Integer pageSize) { this.pageSize = pageSize; }
     public void setTotal(Integer total) { this.total = total; }
+    public void setTraceId(String traceId) { this.traceId = traceId; }
 }

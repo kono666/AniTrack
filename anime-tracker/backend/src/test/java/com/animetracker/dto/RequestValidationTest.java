@@ -1,10 +1,10 @@
 package com.animetracker.dto;
 
 import com.animetracker.tracking.service.TrackService;
-import com.animetracker.dto.RequestDTO.LoginRequest;
-import com.animetracker.dto.RequestDTO.RegisterRequest;
-import com.animetracker.dto.RequestDTO.ReviewRequest;
-import com.animetracker.dto.RequestDTO.TrackRequest;
+import com.animetracker.user.dto.LoginRequest;
+import com.animetracker.user.dto.RegisterRequest;
+import com.animetracker.review.dto.ReviewRequest;
+import com.animetracker.tracking.dto.TrackRequest;
 import com.animetracker.util.UsernamePolicy;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 这里用的是真的 Validator, 而不是 mock: 要验证的正是「注解本身有没有生效」,
  * 把 Validator 换成 mock 就等于把被测对象一起 mock 掉了.
  */
-class RequestDTOValidationTest {
+class RequestValidationTest {
 
     private static ValidatorFactory factory;
     private static Validator validator;

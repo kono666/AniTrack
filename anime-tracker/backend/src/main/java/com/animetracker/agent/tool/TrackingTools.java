@@ -1,7 +1,7 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.agent.tool.ToolDefinition.Access;
-import com.animetracker.dto.RequestDTO.TrackRequest;
+import com.animetracker.tracking.dto.TrackRequest;
 import com.animetracker.tracking.domain.AnimeTracking;
 import com.animetracker.user.domain.User;
 import com.animetracker.stats.service.StatsService;

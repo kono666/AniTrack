@@ -1,7 +1,7 @@
 package com.animetracker.agent;
 
 import com.animetracker.agent.llm.LlmMessage;
-import com.animetracker.dto.RequestDTO.HistoryItem;
+import com.animetracker.agent.dto.HistoryItem;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

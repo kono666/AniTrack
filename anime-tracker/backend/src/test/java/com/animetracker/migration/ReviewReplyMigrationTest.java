@@ -158,7 +158,7 @@ class ReviewReplyMigrationTest {
 
         assertThat(string(url, "SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS "
                 + "WHERE TABLE_NAME = 'REVIEW_REPLY' AND COLUMN_NAME = 'CONTENT'"))
-                .as("RequestDTO 上的 @NotBlank 只挡得住走接口的请求, 手工改库、历史遗留行绕得过去")
+                .as("ReplyRequest 上的 @NotBlank 只挡得住走接口的请求, 手工改库、历史遗留行绕得过去")
                 .isEqualTo("NO");
         assertThatThrownBy(() -> execute(url, "INSERT INTO review_reply "
                 + "(review_id, user_id, content, created_at) VALUES ("
