@@ -1,6 +1,6 @@
 package com.animetracker.common.web;
 
-import com.animetracker.dto.ApiResponse;
+import com.animetracker.common.api.ApiResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

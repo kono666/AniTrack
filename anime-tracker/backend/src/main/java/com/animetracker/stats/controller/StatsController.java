@@ -1,7 +1,7 @@
 package com.animetracker.stats.controller;
 
-import com.animetracker.config.CurrentUser;
-import com.animetracker.dto.ApiResponse;
+import com.animetracker.common.config.CurrentUser;
+import com.animetracker.common.api.ApiResponse;
 import com.animetracker.user.domain.User;
 import com.animetracker.stats.service.StatsService;
 import org.springframework.web.bind.annotation.*;

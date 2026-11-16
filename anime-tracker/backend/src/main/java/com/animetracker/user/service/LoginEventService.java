@@ -1,7 +1,7 @@
 package com.animetracker.user.service;
 
 import com.animetracker.common.service.IsolatedInsert;
-import com.animetracker.config.LoginEventProperties;
+import com.animetracker.common.config.LoginEventProperties;
 import com.animetracker.user.domain.LoginEvent;
 import com.animetracker.user.repository.LoginEventRepository;
 import org.slf4j.Logger;

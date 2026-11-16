@@ -1,7 +1,7 @@
 package com.animetracker.tracking.controller;
 
-import com.animetracker.config.CurrentUser;
-import com.animetracker.dto.ApiResponse;
+import com.animetracker.common.config.CurrentUser;
+import com.animetracker.common.api.ApiResponse;
 import com.animetracker.tracking.dto.TrackRequest;
 import com.animetracker.tracking.domain.AnimeTracking;
 import com.animetracker.user.domain.User;

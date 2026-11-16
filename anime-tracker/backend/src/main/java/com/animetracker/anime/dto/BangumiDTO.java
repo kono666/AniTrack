@@ -32,14 +32,14 @@ public class BangumiDTO {
      * infobox 的一项, 形如 {@code {"key":"别名","value":[...]}}.
      *
      * <p>为什么要收这个: 罗马音/英文/其它地区译名全在 key 为「别名」的那一项里
-     * (见 {@link com.animetracker.util.AnimeAliases}), 而搜索此前只匹配日文原名与中文名.
+     * (见 {@link com.animetracker.anime.util.AnimeAliases}), 而搜索此前只匹配日文原名与中文名.
      * 这个字段被 {@code @JsonIgnoreProperties(ignoreUnknown = true)} 静默丢了很久 ——
      * 不是"没数据可用", 是数据送到了门口没接.
      *
      * <p>value 为什么是 {@code JsonNode} 而不是 String 或 List: 它的形状**不固定**,
      * 同一个响应里既有 {@code "话数":"26"}(字符串)又有
      * {@code "别名":[{"v":"EVA"},...]}(对象数组). 形状只在
-     * {@link com.animetracker.util.AnimeAliases} **一处**解释, 所以这里原样接住即可 ——
+     * {@link com.animetracker.anime.util.AnimeAliases} **一处**解释, 所以这里原样接住即可 ——
      * 与"DTO→实体的映射只留一处"是同一个理由: 散在两处就会有一处忘了跟上.
      */
     @Data
@@ -65,7 +65,7 @@ public class BangumiDTO {
      *       全是 {@code /r/} 前缀那种形式(100% vs 0%)。</li>
      * </ul>
      *
-     * <p>"通过率"指能过 {@link com.animetracker.util.CoverImages#canonical} 的
+     * <p>"通过率"指能过 {@link com.animetracker.anime.util.CoverImages#canonical} 的
      * (https + lain.bgm.tv + {@code /pic/} 前缀 + 不带 query)。不通过的不会被丢掉,
      * 它们由 {@code proxied()} 原样返回、前端直连 —— 与存量封面同一条路子。
      */

@@ -1,7 +1,7 @@
 package com.animetracker.anime.service;
 
-import com.animetracker.config.BangumiApiProperties;
-import com.animetracker.config.RankingProperties;
+import com.animetracker.common.config.BangumiApiProperties;
+import com.animetracker.common.config.RankingProperties;
 import com.animetracker.anime.dto.BangumiDTO.*;
 import com.animetracker.anime.domain.Anime;
 import com.animetracker.anime.domain.AnimeTag;
@@ -32,12 +32,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import com.animetracker.util.AnimeAliases;
-import com.animetracker.util.PageResults;
-import com.animetracker.util.AnimeFields;
-import com.animetracker.util.SearchPatterns;
-import com.animetracker.util.SeasonRange;
-import com.animetracker.util.TagTranslationUtil;
+import com.animetracker.anime.util.AnimeAliases;
+import com.animetracker.common.util.PageResults;
+import com.animetracker.anime.util.AnimeFields;
+import com.animetracker.common.util.SearchPatterns;
+import com.animetracker.anime.util.SeasonRange;
+import com.animetracker.anime.util.TagTranslationUtil;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -249,7 +249,7 @@ public class AnimeService {
      *       —— 用户按别名/罗马音搜到的东西，落了库依然搜不出来，界面一片空白。</li>
      * </ol>
      * 第 2 条的另一半在 {@link AnimeRepository#searchByKeywordPattern}（新增 aliases 列）
-     * 与 {@link com.animetracker.util.AnimeAliases}（把 infobox 的别名接住）里修.
+     * 与 {@link com.animetracker.anime.util.AnimeAliases}（把 infobox 的别名接住）里修.
      *
      * <p>为什么判据是「{@code (page+1) * limit} 条」而不是改动前的「{@code limit} 条」：
      * 本地是**累计前缀**，第 N 页的切片偏移只有在前 N 页都缓存过时才成立. 而且 total 是在

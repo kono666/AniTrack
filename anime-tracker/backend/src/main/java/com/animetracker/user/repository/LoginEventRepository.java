@@ -91,7 +91,7 @@ public interface LoginEventRepository extends JpaRepository<LoginEvent, Long> {
      *
      * <p>这张表只增不减，一行一个登录事件，不清就是无限增长 —— 一个没有任何读路径会
      * 回溯到那么久的表，留着只是占地。保留期的取值与理由见
-     * {@link com.animetracker.config.LoginEventProperties}。
+     * {@link com.animetracker.common.config.LoginEventProperties}。
      *
      * <p>走的是 {@code (created_at)} 索引，不是全表扫。
      */

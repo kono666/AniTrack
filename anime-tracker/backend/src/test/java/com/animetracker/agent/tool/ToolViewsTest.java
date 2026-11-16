@@ -1,7 +1,7 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.anime.domain.Anime;
-import com.animetracker.util.CoverImages;
+import com.animetracker.anime.util.CoverImages;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

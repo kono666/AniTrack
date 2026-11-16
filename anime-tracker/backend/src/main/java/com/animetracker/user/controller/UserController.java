@@ -4,11 +4,11 @@ import com.animetracker.user.dto.RegisterRequest;
 import com.animetracker.user.dto.LoginRequest;
 import com.animetracker.user.dto.ChangePasswordRequest;
 import com.animetracker.user.dto.ResetPasswordRequest;
-import com.animetracker.config.AuthRateLimiter;
-import com.animetracker.config.CurrentUser;
-import com.animetracker.dto.ApiResponse;
+import com.animetracker.common.config.AuthRateLimiter;
+import com.animetracker.common.config.CurrentUser;
+import com.animetracker.common.api.ApiResponse;
 import com.animetracker.user.domain.User;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import com.animetracker.user.service.AvatarService;
 import com.animetracker.notification.service.NotificationService;
 import com.animetracker.user.service.UserService;
@@ -99,7 +99,7 @@ public class UserController {
      * 只把数字写在响应体里, HTTP 状态仍是 200: 前端拦截器看的是状态码, 于是这种
      * 「接口层拒绝」在客户端眼里是一次**成功**(拿到的 data 是 null), curl、
      * 监控、以及任何按状态码判断的调用方也都会当成成功. 抛异常则交给
-     * {@link com.animetracker.config.GlobalExceptionHandler}, 状态码与响应体里的 code
+     * {@link com.animetracker.common.exception.GlobalExceptionHandler}, 状态码与响应体里的 code
      * 一致, 响应体的形状一个字都没变.
      *
      * <p>这也是全项目唯一一处这样写的地方(其余 22 处拒绝都走 BusinessException,

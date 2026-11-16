@@ -1,6 +1,6 @@
 package com.animetracker.anime.service;
 
-import com.animetracker.config.BangumiApiProperties;
+import com.animetracker.common.config.BangumiApiProperties;
 import com.animetracker.anime.dto.BangumiDTO.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

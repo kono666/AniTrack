@@ -1,6 +1,6 @@
 package com.animetracker.user.dto;
 
-import com.animetracker.util.PasswordPolicy;
+import com.animetracker.user.util.PasswordPolicy;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 

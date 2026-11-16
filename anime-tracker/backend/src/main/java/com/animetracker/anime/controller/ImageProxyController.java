@@ -2,7 +2,7 @@ package com.animetracker.anime.controller;
 
 import com.animetracker.anime.service.CoverImageService;
 import com.animetracker.anime.service.CoverImageService.CoverImage;
-import com.animetracker.util.CoverImages;
+import com.animetracker.anime.util.CoverImages;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;

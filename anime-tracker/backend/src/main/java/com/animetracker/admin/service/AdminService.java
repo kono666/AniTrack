@@ -7,7 +7,7 @@ import com.animetracker.anime.domain.Anime;
 import com.animetracker.tracking.domain.AnimeTracking;
 import com.animetracker.user.domain.User;
 import com.animetracker.review.domain.Review;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import com.animetracker.admin.repository.AdminActionLogRepository;
 import com.animetracker.anime.repository.AnimeRepository;
 import com.animetracker.tracking.repository.EpisodeWatchedRepository;
@@ -15,10 +15,10 @@ import com.animetracker.user.repository.UserRepository;
 import com.animetracker.review.repository.ReviewReportRepository;
 import com.animetracker.review.repository.ReviewRepository;
 import com.animetracker.tracking.repository.TrackingRepository;
-import com.animetracker.util.CoverImages;
-import com.animetracker.util.PageResults;
-import com.animetracker.util.SearchPatterns;
-import com.animetracker.util.TextSnippet;
+import com.animetracker.anime.util.CoverImages;
+import com.animetracker.common.util.PageResults;
+import com.animetracker.common.util.SearchPatterns;
+import com.animetracker.common.util.TextSnippet;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -430,7 +430,7 @@ public class AdminService {
      * {@code JOIN FETCH r.user}(见 {@code ReviewQueries.PAGE_USER_CREATED_DESC}),
      * 那一句要么多触发一次懒加载、要么直接抛 {@code LazyInitializationException}。
      *
-     * @throws com.animetracker.exception.BusinessException 404, 用户不存在
+     * @throws com.animetracker.common.exception.BusinessException 404, 用户不存在
      */
     public Map<String, Object> getUserDetail(Long userId) {
         User u = userRepository.findById(userId)

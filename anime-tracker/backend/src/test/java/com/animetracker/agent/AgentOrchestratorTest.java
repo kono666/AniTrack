@@ -10,7 +10,7 @@ import com.animetracker.agent.tool.ToolDefinition.Access;
 import com.animetracker.agent.tool.ToolProvider;
 import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.agent.tool.ToolTransactionRunner;
-import com.animetracker.config.LlmProperties;
+import com.animetracker.common.config.LlmProperties;
 import com.animetracker.user.domain.User;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;

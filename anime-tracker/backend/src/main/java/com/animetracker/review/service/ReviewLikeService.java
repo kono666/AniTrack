@@ -5,7 +5,7 @@ import com.animetracker.notification.service.NotificationService;
 import com.animetracker.review.domain.Review;
 import com.animetracker.review.domain.ReviewLike;
 import com.animetracker.user.domain.User;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import com.animetracker.review.repository.ReviewLikeRepository;
 import com.animetracker.review.repository.ReviewRepository;
 import org.springframework.dao.DataIntegrityViolationException;

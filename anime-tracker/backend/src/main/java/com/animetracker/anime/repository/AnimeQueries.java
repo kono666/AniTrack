@@ -44,13 +44,13 @@ final class AnimeQueries {
     // 这里语句是编译期常量、条件值全部是 JDBC 绑定参数, 两个问题各自独立.
 
     /**
-     * 年份: 前缀匹配, 模式串由 {@link com.animetracker.util.SearchPatterns#prefix}
+     * 年份: 前缀匹配, 模式串由 {@link com.animetracker.common.util.SearchPatterns#prefix}
      * 拼好(特殊字符已转义), 传 NULL 表示不限年份.
      *
      * <p>{@code ESCAPE '!'} 必须与模式串同进同出 —— 少了它, 模式串里的转义字符会被
      * 当成普通字符去匹配, 于是 {@code year=20%} 又变回"匹配所有 20 开头的".
      * 与 {@link AnimeRepository#searchByKeywordPattern} 是同一个约定, 完整理由见
-     * {@link com.animetracker.util.SearchPatterns}.
+     * {@link com.animetracker.common.util.SearchPatterns}.
      */
     static final String FILTER_YEAR =
             "(:yearPattern IS NULL OR a.date LIKE :yearPattern ESCAPE '!')";
@@ -60,13 +60,13 @@ final class AnimeQueries {
      *
      * <p><b>为什么是区间而不是等值.</b> {@code anime.season} 存的是真实月份
      * ({@code 2024-10}), 而「2024 年秋季」要的是十月到十二月. 等值谓词压根没法
-     * 表达这个条件 —— 详见 {@link com.animetracker.util.SeasonRange}. 区间在
+     * 表达这个条件 —— 详见 {@link com.animetracker.anime.util.SeasonRange}. 区间在
      * {@code from == to} 时正好退化成原来的等值, 所以 {@code ?season=2024-10}
      * 这条老写法的行为一字未变, 不需要为它分叉.
      *
      * <p><b>比较的是字符串, 而这里恰好是对的.</b> 与 {@link #NOT_FUTURE} 同一条理由:
      * season 的形状是定长补零的 {@code 'yyyy-MM'}(见
-     * {@link com.animetracker.util.AnimeFields#seasonOf} 里的
+     * {@link com.animetracker.anime.util.AnimeFields#seasonOf} 里的
      * {@code String.format("%04d-%02d", ...)}), 字典序与时间序一致.
      * <b>这条前提是上面那个 format 给的, 不是这里能保证的</b>: 谁能往这一列写进一个
      * 不补零的 {@code 2024-9}, 谁就能让它排在 {@code 2024-10} 之后从而漏掉.
@@ -169,7 +169,7 @@ final class AnimeQueries {
      * 哨兵值写法: 哨兵是"选一个比所有真实值都大的数", 而名次的上界由 Bangumi 决定,
      * 不是一个我们能保证的量. 分组写法不依赖任何上界.
      *
-     * <p>{@code <= 0} 也算"没有名次", 与 {@link com.animetracker.util.AnimeFields#rankOf}
+     * <p>{@code <= 0} 也算"没有名次", 与 {@link com.animetracker.anime.util.AnimeFields#rankOf}
      * 把 {@code rank <= 0} 归一成 NULL 是同一个口径: <b>Bangumi 的 0 表示"没有这个值",
      * 不是"值为零"</b>. 那里归一过一次, 这里再兜一次是为了兼容归一之前落库的历史行.
      */
@@ -204,7 +204,7 @@ final class AnimeQueries {
      * 排行榜: 按<b>加权评分</b>倒序, 而不是评分原值.
      *
      * <p>为什么必须加权、m 与 C 为什么取那两个值, 见
-     * {@link com.animetracker.config.RankingProperties} —— 完整推导在那里.
+     * {@link com.animetracker.common.config.RankingProperties} —— 完整推导在那里.
      * 这里只记三件与这条 SQL 本身有关的事.
      *
      * <p><b>一, 没有票的条目排在最后, 而不是被过滤掉.</b> 排序分成两级: 先按
@@ -214,7 +214,7 @@ final class AnimeQueries {
      * —— 而这是排行榜唯一的数据源, 一旦库里多数行都是 NULL, 榜就空了, 接口还照样
      * 返回 200. 分组排序同时保证"没票的不会霸榜"和"榜不会空", 是这两条约束里唯一
      * 都满足的写法. 把 {@code <= 0} 也算成"没有票", 与
-     * {@link com.animetracker.util.AnimeFields#rankOf} 把 {@code rank <= 0} 归一成
+     * {@link com.animetracker.anime.util.AnimeFields#rankOf} 把 {@code rank <= 0} 归一成
      * NULL 是同一个口径: <b>Bangumi 的 0 表示"没有这个值", 不是"值为零"</b>.
      *
      * <p><b>一之补, 那个 {@code CASE} 在第二排序键上又写了一遍, 不是重复.</b>

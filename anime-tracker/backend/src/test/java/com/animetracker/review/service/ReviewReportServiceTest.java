@@ -5,7 +5,7 @@ import com.animetracker.common.service.IsolatedInsert;
 import com.animetracker.review.domain.Review;
 import com.animetracker.review.domain.ReviewReport;
 import com.animetracker.user.domain.User;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import com.animetracker.review.repository.ReviewReportRepository;
 import com.animetracker.review.repository.ReviewRepository;
 import org.junit.jupiter.api.BeforeEach;

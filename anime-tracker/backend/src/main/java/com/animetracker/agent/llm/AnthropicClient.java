@@ -1,6 +1,6 @@
 package com.animetracker.agent.llm;
 
-import com.animetracker.config.LlmProperties;
+import com.animetracker.common.config.LlmProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

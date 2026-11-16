@@ -1,6 +1,6 @@
 package com.animetracker.agent;
 
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
