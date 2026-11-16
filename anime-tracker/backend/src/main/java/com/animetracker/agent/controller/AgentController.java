@@ -20,6 +20,7 @@ import com.animetracker.agent.dto.AgentChatRequest;
 import com.animetracker.user.domain.User;
 import com.animetracker.common.exception.BusinessException;
 import com.animetracker.agent.service.AgentConversationService;
+import com.animetracker.agent.service.AgentRunRecorder;
 import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -74,6 +75,7 @@ public class AgentController {
 
     private final AgentOrchestrator orchestrator;
     private final AgentConversationService conversationService;
+    private final AgentRunRecorder runRecorder;
     private final AgentRateLimiter rateLimiter;
     private final AgentBudgetGuard budget;
     private final ToolRegistry registry;
@@ -106,6 +108,7 @@ public class AgentController {
 
     public AgentController(AgentOrchestrator orchestrator,
                            AgentConversationService conversationService,
+                           AgentRunRecorder runRecorder,
                            AgentRateLimiter rateLimiter,
                            AgentBudgetGuard budget,
                            ToolRegistry registry,
@@ -113,6 +116,7 @@ public class AgentController {
                            LlmProperties props) {
         this.orchestrator = orchestrator;
         this.conversationService = conversationService;
+        this.runRecorder = runRecorder;
         this.rateLimiter = rateLimiter;
         this.budget = budget;
         this.registry = registry;
@@ -203,16 +207,21 @@ public class AgentController {
                 new DeferredResult<>(props.effectiveOverallTimeoutMs());
 
         submit(() -> TraceId.runWith(traceId, () -> {
+            long started = System.currentTimeMillis();
             try {
                 AgentResult result = orchestrator.run(user, persona, history, input,
                         AgentOrchestrator.SILENT);
                 budget.settle(result.getRounds());
 
+                Long conversationId = persist(user, req, persona, input, result);
+                record(user, conversationId, persona, input, result, started, null, traceId);
+
                 Map<String, Object> payload = answerPayload(result);
-                payload.put("conversationId", persist(user, req, persona, input, result));
+                payload.put("conversationId", conversationId);
                 payload.put("dailyRemaining", budget.remaining());
                 out.setResult(ApiResponse.success(payload));
             } catch (Exception e) {
+                record(user, req.getConversationId(), persona, input, null, started, e.toString(), traceId);
                 log.warn("Agent 执行失败: {}", e.toString());
                 out.setErrorResult(e);
             }
@@ -241,6 +250,7 @@ public class AgentController {
         SseEmitter emitter = new SseEmitter(props.effectiveOverallTimeoutMs());
 
         submit(() -> TraceId.runWith(traceId, () -> {
+            long started = System.currentTimeMillis();
             try {
                 AgentResult result = orchestrator.run(user, persona, history, input,
                         new AgentOrchestrator.Listener() {
@@ -270,14 +280,18 @@ public class AgentController {
                             }
                         });
 
-                Map<String, Object> done = answerPayload(result);
-                done.put("conversationId", persist(user, req, persona, input, result));
                 budget.settle(result.getRounds());
+                Long conversationId = persist(user, req, persona, input, result);
+                record(user, conversationId, persona, input, result, started, null, traceId);
+
+                Map<String, Object> done = answerPayload(result);
+                done.put("conversationId", conversationId);
                 done.put("dailyRemaining", budget.remaining());
                 send(emitter, "done", done);
                 emitter.complete();
 
             } catch (Exception e) {
+                record(user, req.getConversationId(), persona, input, null, started, e.toString(), traceId);
                 log.warn("Agent 流式执行失败: {}", e.toString());
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("message", friendly(e));
@@ -377,6 +391,22 @@ public class AgentController {
             // 存不下来是持久化的问题, 不该让用户连这次回答一起丢掉
             log.warn("会话持久化失败(本次回答照常返回): {}", e.getMessage());
             return req.getConversationId();
+        }
+    }
+
+    /**
+     * 写一次 Agent 运行记录（轮数 / token / 工具链 / 耗时）.
+     *
+     * <p>失败只记日志：测量数据的持久化问题不该让用户丢掉这次回答 ——
+     * 与 {@link #persist} 同一条取舍。
+     */
+    private void record(User user, Long conversationId, Persona persona, String input,
+                        AgentResult result, long started, String error, String traceId) {
+        try {
+            runRecorder.record(user == null ? null : user.getId(), conversationId,
+                    persona, input, result, System.currentTimeMillis() - started, error, traceId);
+        } catch (Exception e) {
+            log.warn("Agent 运行记录落库失败(本次回答照常返回): {}", e.getMessage());
         }
     }
 
