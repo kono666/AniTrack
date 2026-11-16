@@ -5,7 +5,7 @@ import com.animetracker.agent.llm.LlmMessage;
 import com.animetracker.agent.domain.AgentConversation;
 import com.animetracker.agent.domain.AgentMessage;
 import com.animetracker.user.domain.User;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import com.animetracker.agent.repository.AgentConversationRepository;
 import com.animetracker.agent.repository.AgentMessageRepository;
 import org.springframework.stereotype.Service;

@@ -6,7 +6,7 @@ import com.animetracker.review.domain.ReplyLike;
 import com.animetracker.review.domain.Review;
 import com.animetracker.review.domain.ReviewReply;
 import com.animetracker.user.domain.User;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import com.animetracker.review.repository.ReplyLikeRepository;
 import com.animetracker.review.repository.ReviewReplyRepository;
 import com.animetracker.review.repository.ReviewRepository;

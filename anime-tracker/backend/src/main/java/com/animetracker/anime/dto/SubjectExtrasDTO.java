@@ -4,7 +4,7 @@ import com.animetracker.anime.domain.SubjectCharacter;
 import com.animetracker.anime.domain.SubjectCharacterActor;
 import com.animetracker.anime.domain.SubjectRelation;
 import com.animetracker.anime.domain.SubjectStaff;
-import com.animetracker.util.CoverImages;
+import com.animetracker.anime.util.CoverImages;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

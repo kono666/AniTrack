@@ -1,6 +1,6 @@
 package com.animetracker.agent;
 
-import com.animetracker.config.SlidingWindowRateLimiter;
+import com.animetracker.common.config.SlidingWindowRateLimiter;
 import org.springframework.stereotype.Component;
 
 /**

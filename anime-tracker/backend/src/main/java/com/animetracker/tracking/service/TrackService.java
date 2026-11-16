@@ -7,7 +7,7 @@ import com.animetracker.tracking.domain.AnimeTracking;
 import com.animetracker.user.domain.User;
 import com.animetracker.anime.repository.AnimeRepository;
 import com.animetracker.tracking.repository.TrackingRepository;
-import com.animetracker.util.CoverImages;
+import com.animetracker.anime.util.CoverImages;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;

@@ -1,6 +1,6 @@
 package com.animetracker.anime.service;
 
-import com.animetracker.config.SubjectExtrasProperties;
+import com.animetracker.common.config.SubjectExtrasProperties;
 import com.animetracker.anime.dto.BangumiDTO.CharacterDTO;
 import com.animetracker.anime.dto.BangumiDTO.PersonDTO;
 import com.animetracker.anime.dto.BangumiDTO.RelatedSubjectDTO;

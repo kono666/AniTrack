@@ -10,7 +10,7 @@ import com.animetracker.agent.llm.ToolCall;
 import com.animetracker.agent.llm.ToolSpec;
 import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.agent.tool.ToolTransactionRunner;
-import com.animetracker.config.LlmProperties;
+import com.animetracker.common.config.LlmProperties;
 import com.animetracker.review.domain.Review;
 import com.animetracker.user.domain.User;
 import com.animetracker.review.repository.ReviewRepository;

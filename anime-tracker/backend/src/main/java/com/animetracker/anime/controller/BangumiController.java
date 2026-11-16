@@ -1,7 +1,7 @@
 package com.animetracker.anime.controller;
 
-import com.animetracker.config.SubjectExtrasRateLimiter;
-import com.animetracker.dto.ApiResponse;
+import com.animetracker.common.config.SubjectExtrasRateLimiter;
+import com.animetracker.common.api.ApiResponse;
 import com.animetracker.anime.dto.BangumiDTO.CalendarDay;
 import com.animetracker.anime.dto.AnimeDTO;
 import com.animetracker.anime.dto.AnimeMapper;
@@ -13,7 +13,7 @@ import com.animetracker.anime.domain.SubjectRelation;
 import com.animetracker.anime.domain.SubjectStaff;
 import com.animetracker.anime.service.AnimeService;
 import com.animetracker.anime.service.SubjectExtrasService;
-import com.animetracker.util.TagTranslationUtil;
+import com.animetracker.anime.util.TagTranslationUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -300,7 +300,7 @@ public class BangumiController {
      * ({@code 2024-Q4} → 10/11/12 月)—— 不展开的话「2024 年秋季」只能筛出十月,
      * 而十一月十二月会静默漏掉. 认不出的值仍然是"筛空", 不是 400: 那是这个参数
      * 一直以来的行为, 改它会打断既有调用方. 详见
-     * {@link com.animetracker.util.SeasonRange}.
+     * {@link com.animetracker.anime.util.SeasonRange}.
      *
      * <p>page / limit 的注解与 search 那边同一套: 少了类级 {@code @Validated}
      * 它们会被静默忽略(见类注释), 越界的 page 则是 (page-1)*limit 溢出/负起点

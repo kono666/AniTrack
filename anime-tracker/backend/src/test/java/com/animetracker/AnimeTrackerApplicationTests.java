@@ -1,6 +1,6 @@
 package com.animetracker;
 
-import com.animetracker.config.AnimeBackfillRunner;
+import com.animetracker.common.config.AnimeBackfillRunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;

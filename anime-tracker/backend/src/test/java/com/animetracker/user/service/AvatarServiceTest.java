@@ -3,7 +3,7 @@ package com.animetracker.user.service;
 import com.animetracker.common.service.IsolatedInsert;
 import com.animetracker.user.domain.User;
 import com.animetracker.user.domain.UserAvatar;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.exception.BusinessException;
 import com.animetracker.user.repository.UserAvatarRepository;
 import com.animetracker.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;

@@ -36,7 +36,7 @@ final class UserQueries {
     /**
      * 关键词: 用户名**或**邮箱的包含匹配, 大小写不敏感.
      *
-     * <p>模式串由 {@link com.animetracker.util.SearchPatterns#contains} 拼好
+     * <p>模式串由 {@link com.animetracker.common.util.SearchPatterns#contains} 拼好
      * ({@code %}、{@code _} 与 {@code !} 都已经转义), 传 NULL 表示不筛.
      *
      * <p>{@code ESCAPE '!'} 必须与模式串同进同出 —— 少了它, {@code "%"} 会从字面量

@@ -1,8 +1,8 @@
 package com.animetracker.anime.dto;
 
 import com.animetracker.anime.domain.Anime;
-import com.animetracker.util.CoverImages;
-import com.animetracker.util.TagTranslationUtil;
+import com.animetracker.anime.util.CoverImages;
+import com.animetracker.anime.util.TagTranslationUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

@@ -1,7 +1,7 @@
 package com.animetracker.agent;
 
-import com.animetracker.config.LlmProperties;
-import com.animetracker.exception.BusinessException;
+import com.animetracker.common.config.LlmProperties;
+import com.animetracker.common.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

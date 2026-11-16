@@ -1,9 +1,9 @@
 package com.animetracker.anime.service;
 
-import com.animetracker.config.BangumiApiProperties;
-import com.animetracker.config.ImageProxyProperties;
-import com.animetracker.exception.BusinessException;
-import com.animetracker.util.CoverImages;
+import com.animetracker.common.config.BangumiApiProperties;
+import com.animetracker.common.config.ImageProxyProperties;
+import com.animetracker.common.exception.BusinessException;
+import com.animetracker.anime.util.CoverImages;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
