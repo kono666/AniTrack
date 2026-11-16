@@ -13,9 +13,10 @@ import com.animetracker.agent.llm.LlmMessage;
 import com.animetracker.agent.tool.ToolDefinition;
 import com.animetracker.agent.tool.ToolRegistry;
 import com.animetracker.config.CurrentUser;
+import com.animetracker.common.web.TraceId;
 import com.animetracker.config.LlmProperties;
 import com.animetracker.dto.ApiResponse;
-import com.animetracker.dto.RequestDTO.AgentChatRequest;
+import com.animetracker.agent.dto.AgentChatRequest;
 import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.agent.service.AgentConversationService;
@@ -193,6 +194,7 @@ public class AgentController {
         budget.acquire();
         String input = normalizeInput(req.getMessage());
         List<LlmMessage> history = loadHistory(user, req);
+        String traceId = TraceId.current();
 
         // 超时兜底: 到点还没跑完就把请求结束掉, 让前端拿到一个明确的答复而不是一直等.
         // 这**不会**中断 worker 上的任务(也中断不了 —— 它阻塞在上游 HTTP 上), 那次调用
@@ -200,7 +202,7 @@ public class AgentController {
         DeferredResult<ApiResponse<Map<String, Object>>> out =
                 new DeferredResult<>(props.effectiveOverallTimeoutMs());
 
-        submit(() -> {
+        submit(() -> TraceId.runWith(traceId, () -> {
             try {
                 AgentResult result = orchestrator.run(user, persona, history, input,
                         AgentOrchestrator.SILENT);
@@ -214,7 +216,7 @@ public class AgentController {
                 log.warn("Agent 执行失败: {}", e.toString());
                 out.setErrorResult(e);
             }
-        });
+        }));
 
         return out;
     }
@@ -231,13 +233,14 @@ public class AgentController {
         budget.acquire();
         String input = normalizeInput(req.getMessage());
         List<LlmMessage> history = loadHistory(user, req);
+        String traceId = TraceId.current();
 
         // 超时要能覆盖最坏的一次执行(轮数 × 单次模型调用), 否则正常但慢的请求会被中途
         // 掐断 —— 前端看到的是「流莫名其妙断了」, 而不是任何一条错误. 口径见
         // LlmProperties.effectiveOverallTimeoutMs()
         SseEmitter emitter = new SseEmitter(props.effectiveOverallTimeoutMs());
 
-        submit(() -> {
+        submit(() -> TraceId.runWith(traceId, () -> {
             try {
                 AgentResult result = orchestrator.run(user, persona, history, input,
                         new AgentOrchestrator.Listener() {
@@ -281,7 +284,7 @@ public class AgentController {
                 send(emitter, "error", data);
                 emitter.complete();
             }
-        });
+        }));
 
         return emitter;
     }

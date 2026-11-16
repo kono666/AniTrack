@@ -1,8 +1,11 @@
 package com.animetracker.user.service;
 
+import com.animetracker.user.dto.RegisterRequest;
+import com.animetracker.user.dto.LoginRequest;
+import com.animetracker.user.dto.ChangePasswordRequest;
+import com.animetracker.user.dto.ResetPasswordRequest;
 import com.animetracker.config.JwtUtil;
 import com.animetracker.config.LoginProtectionProperties;
-import com.animetracker.dto.RequestDTO.*;
 import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.user.repository.UserRepository;

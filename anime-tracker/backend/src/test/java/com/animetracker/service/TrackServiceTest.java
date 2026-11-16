@@ -2,7 +2,7 @@ package com.animetracker.service;
 
 import com.animetracker.common.service.IsolatedInsert;
 import com.animetracker.tracking.service.TrackService;
-import com.animetracker.dto.RequestDTO.TrackRequest;
+import com.animetracker.tracking.dto.TrackRequest;
 import com.animetracker.anime.domain.Anime;
 import com.animetracker.tracking.domain.AnimeTracking;
 import com.animetracker.user.domain.User;

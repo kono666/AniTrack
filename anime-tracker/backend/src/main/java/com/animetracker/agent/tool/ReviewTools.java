@@ -1,7 +1,7 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.agent.tool.ToolDefinition.Access;
-import com.animetracker.dto.RequestDTO.ReviewRequest;
+import com.animetracker.review.dto.ReviewRequest;
 import com.animetracker.review.domain.Review;
 import com.animetracker.user.domain.User;
 import com.animetracker.review.service.ReviewService;

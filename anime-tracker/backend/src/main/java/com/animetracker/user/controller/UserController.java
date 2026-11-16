@@ -1,9 +1,12 @@
 package com.animetracker.user.controller;
 
+import com.animetracker.user.dto.RegisterRequest;
+import com.animetracker.user.dto.LoginRequest;
+import com.animetracker.user.dto.ChangePasswordRequest;
+import com.animetracker.user.dto.ResetPasswordRequest;
 import com.animetracker.config.AuthRateLimiter;
 import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
-import com.animetracker.dto.RequestDTO.*;
 import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.user.service.AvatarService;

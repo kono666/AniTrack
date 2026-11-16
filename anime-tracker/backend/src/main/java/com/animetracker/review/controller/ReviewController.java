@@ -2,8 +2,8 @@ package com.animetracker.review.controller;
 
 import com.animetracker.config.CurrentUser;
 import com.animetracker.dto.ApiResponse;
-import com.animetracker.dto.RequestDTO.ReportRequest;
-import com.animetracker.dto.RequestDTO.ReviewRequest;
+import com.animetracker.review.dto.ReportRequest;
+import com.animetracker.review.dto.ReviewRequest;
 import com.animetracker.user.domain.User;
 import com.animetracker.review.service.ReviewLikeService;
 import com.animetracker.review.service.ReviewReportService;

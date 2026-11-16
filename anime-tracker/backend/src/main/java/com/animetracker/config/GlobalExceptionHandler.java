@@ -50,7 +50,7 @@ public class GlobalExceptionHandler {
      *
      * 只取注解上写的 message, 不再拼接字段名 —— 这些提示语要原样展示给用户,
      * 「password: 密码必须同时包含字母和数字」多出来的英文前缀对用户没有意义.
-     * 之所以能这么做, 是因为所有校验注解都集中在 RequestDTO 里且都写了中文
+     * 之所以能这么做, 是因为各域的请求 DTO 都写了中文校验文案
      * message; 若将来新增注解忘了写 message, 这里就会漏出英文默认文案.
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
