@@ -1,5 +1,6 @@
 package com.animetracker.config;
 
+import com.animetracker.anime.service.CoverImageService;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;

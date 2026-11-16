@@ -1,9 +1,9 @@
 package com.animetracker.review.service;
 
-import com.animetracker.service.IsolatedInsert;
+import com.animetracker.common.service.IsolatedInsert;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.review.domain.Review;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.review.repository.ReviewLikeRepository;
 import com.animetracker.review.repository.ReviewRepository;

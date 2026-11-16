@@ -1,6 +1,7 @@
 package com.animetracker.util;
 
-import com.animetracker.dto.BangumiDTO.InfoboxItem;
+import com.animetracker.anime.dto.BangumiDTO;
+import com.animetracker.anime.dto.BangumiDTO.InfoboxItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

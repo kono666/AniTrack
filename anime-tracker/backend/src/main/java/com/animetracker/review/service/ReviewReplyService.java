@@ -1,11 +1,11 @@
 package com.animetracker.review.service;
 
-import com.animetracker.service.IsolatedInsert;
-import com.animetracker.service.NotificationService;
+import com.animetracker.common.service.IsolatedInsert;
+import com.animetracker.notification.service.NotificationService;
 import com.animetracker.review.domain.ReplyLike;
 import com.animetracker.review.domain.Review;
 import com.animetracker.review.domain.ReviewReply;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
 import com.animetracker.review.repository.ReplyLikeRepository;
 import com.animetracker.review.repository.ReviewReplyRepository;

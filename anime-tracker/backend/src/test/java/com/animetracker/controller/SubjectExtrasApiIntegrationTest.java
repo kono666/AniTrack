@@ -1,13 +1,14 @@
 package com.animetracker.controller;
 
+import com.animetracker.anime.dto.BangumiDTO;
 import com.animetracker.config.SubjectExtrasRateLimiter;
-import com.animetracker.dto.BangumiDTO.ActorDTO;
-import com.animetracker.dto.BangumiDTO.CharacterDTO;
-import com.animetracker.dto.BangumiDTO.ImagesDTO;
-import com.animetracker.dto.BangumiDTO.PersonDTO;
-import com.animetracker.dto.BangumiDTO.RelatedSubjectDTO;
-import com.animetracker.service.BangumiApiClient;
-import com.animetracker.service.BangumiApiClient.SubjectCollectionFetch;
+import com.animetracker.anime.dto.BangumiDTO.ActorDTO;
+import com.animetracker.anime.dto.BangumiDTO.CharacterDTO;
+import com.animetracker.anime.dto.BangumiDTO.ImagesDTO;
+import com.animetracker.anime.dto.BangumiDTO.PersonDTO;
+import com.animetracker.anime.dto.BangumiDTO.RelatedSubjectDTO;
+import com.animetracker.anime.service.BangumiApiClient;
+import com.animetracker.anime.service.BangumiApiClient.SubjectCollectionFetch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,7 +1,7 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.agent.tool.ToolDefinition.Access;
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

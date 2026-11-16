@@ -1,7 +1,7 @@
 package com.animetracker.config;
 
-import com.animetracker.service.AnimeBackfillService;
-import com.animetracker.service.AnimeBackfillService.BackfillResult;
+import com.animetracker.anime.service.AnimeBackfillService;
+import com.animetracker.anime.service.AnimeBackfillService.BackfillResult;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

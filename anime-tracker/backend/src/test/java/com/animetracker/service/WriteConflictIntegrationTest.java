@@ -1,10 +1,12 @@
 package com.animetracker.service;
 
+import com.animetracker.stats.service.StatsService;
+import com.animetracker.tracking.service.TrackService;
 import com.animetracker.review.service.ReviewService;
 import com.animetracker.dto.RequestDTO.ReviewRequest;
 import com.animetracker.dto.RequestDTO.TrackRequest;
-import com.animetracker.entity.User;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.user.domain.User;
+import com.animetracker.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

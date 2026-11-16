@@ -1,7 +1,7 @@
 package com.animetracker.config;
 
-import com.animetracker.entity.User;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.user.domain.User;
+import com.animetracker.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

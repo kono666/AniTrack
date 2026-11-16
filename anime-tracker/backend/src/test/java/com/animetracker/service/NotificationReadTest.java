@@ -1,6 +1,8 @@
 package com.animetracker.service;
 
-import com.animetracker.entity.User;
+import com.animetracker.admin.service.AdminService;
+import com.animetracker.notification.service.NotificationService;
+import com.animetracker.user.domain.User;
 import com.animetracker.util.TextSnippet;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

@@ -1,8 +1,9 @@
 package com.animetracker.service;
 
-import com.animetracker.entity.User;
+import com.animetracker.admin.service.AdminService;
+import com.animetracker.user.domain.User;
 import com.animetracker.exception.BusinessException;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.user.repository.UserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;

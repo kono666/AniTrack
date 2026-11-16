@@ -1,8 +1,9 @@
 package com.animetracker.agent.tool;
 
+import com.animetracker.anime.controller.BangumiController;
 import com.animetracker.agent.llm.ToolCall;
-import com.animetracker.entity.Anime;
-import com.animetracker.service.AnimeService;
+import com.animetracker.anime.domain.Anime;
+import com.animetracker.anime.service.AnimeService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

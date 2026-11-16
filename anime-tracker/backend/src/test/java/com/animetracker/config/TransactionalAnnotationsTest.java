@@ -1,14 +1,15 @@
 package com.animetracker.config;
 
-import com.animetracker.entity.User;
-import com.animetracker.repository.AnimeTagRepository;
-import com.animetracker.repository.EpisodeWatchedRepository;
-import com.animetracker.service.AdminService;
-import com.animetracker.service.IsolatedInsert;
-import com.animetracker.service.SubjectExtrasMapper;
-import com.animetracker.service.SubjectExtrasService;
-import com.animetracker.service.SubjectExtrasWriter;
-import com.animetracker.service.TagMigrationService;
+import com.animetracker.anime.service.AnimeService;
+import com.animetracker.user.domain.User;
+import com.animetracker.anime.repository.AnimeTagRepository;
+import com.animetracker.tracking.repository.EpisodeWatchedRepository;
+import com.animetracker.admin.service.AdminService;
+import com.animetracker.common.service.IsolatedInsert;
+import com.animetracker.anime.service.SubjectExtrasMapper;
+import com.animetracker.anime.service.SubjectExtrasService;
+import com.animetracker.anime.service.SubjectExtrasWriter;
+import com.animetracker.anime.service.TagMigrationService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;

@@ -1,8 +1,10 @@
 package com.animetracker.service;
 
-import com.animetracker.dto.BangumiDTO.SubjectDTO;
-import com.animetracker.entity.Anime;
-import com.animetracker.repository.AnimeRepository;
+import com.animetracker.anime.service.AnimeService;
+import com.animetracker.anime.dto.BangumiDTO;
+import com.animetracker.anime.dto.BangumiDTO.SubjectDTO;
+import com.animetracker.anime.domain.Anime;
+import com.animetracker.anime.repository.AnimeRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

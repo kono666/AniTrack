@@ -38,7 +38,7 @@ public class WebConfig implements WebMvcConfigurer {
     }
 
     /**
-     * 抓 Bangumi 用的 HTTP 客户端(全项目只有 {@link com.animetracker.service.BangumiApiClient} 用它).
+     * 抓 Bangumi 用的 HTTP 客户端(全项目只有 {@link com.animetracker.anime.service.BangumiApiClient} 用它).
      *
      * <p><b>读超时从 120s 收到 20s</b>. 原来那个 120s 不是「留了余量」,
      * 是把上游的故障时长直接搬成了自己的故障时长:

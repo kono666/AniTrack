@@ -1,5 +1,7 @@
 package com.animetracker.service;
 
+import com.animetracker.anime.service.BangumiApiClient;
+import com.animetracker.anime.dto.BangumiDTO;
 import com.animetracker.config.BangumiApiProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -67,11 +69,11 @@ class BangumiApiClientExtrasTest {
                 .andRespond(withSuccess("[{\"id\":3,\"name\":\"原名\",\"name_cn\":\"中文名\","
                         + "\"relation\":\"续集\"}]", MediaType.APPLICATION_JSON));
 
-        BangumiApiClient.SubjectCollectionFetch<com.animetracker.dto.BangumiDTO.CharacterDTO> chars =
+        BangumiApiClient.SubjectCollectionFetch<com.animetracker.anime.dto.BangumiDTO.CharacterDTO> chars =
                 client.getCharacters(SUBJECT);
-        BangumiApiClient.SubjectCollectionFetch<com.animetracker.dto.BangumiDTO.PersonDTO> staff =
+        BangumiApiClient.SubjectCollectionFetch<com.animetracker.anime.dto.BangumiDTO.PersonDTO> staff =
                 client.getPersons(SUBJECT);
-        BangumiApiClient.SubjectCollectionFetch<com.animetracker.dto.BangumiDTO.RelatedSubjectDTO> rels =
+        BangumiApiClient.SubjectCollectionFetch<com.animetracker.anime.dto.BangumiDTO.RelatedSubjectDTO> rels =
                 client.getRelatedSubjects(SUBJECT);
 
         assertThat(chars.complete()).isTrue();
@@ -81,14 +83,14 @@ class BangumiApiClientExtrasTest {
             assertThat(c.getImages().getGrid()).as("grid 是 V17 才补上的那一档")
                     .isEqualTo("https://lain.bgm.tv/pic/crt/g/1.jpg");
             assertThat(c.getActors()).singleElement()
-                    .extracting(com.animetracker.dto.BangumiDTO.ActorDTO::getName)
+                    .extracting(com.animetracker.anime.dto.BangumiDTO.ActorDTO::getName)
                     .isEqualTo("声优");
         });
         assertThat(staff.items()).singleElement()
-                .extracting(com.animetracker.dto.BangumiDTO.PersonDTO::getId).isEqualTo(2);
+                .extracting(com.animetracker.anime.dto.BangumiDTO.PersonDTO::getId).isEqualTo(2);
         // name_cn 靠 @JsonProperty 映射 —— 掉了这一处, 关联条目就只剩日文原名
         assertThat(rels.items()).singleElement()
-                .extracting(com.animetracker.dto.BangumiDTO.RelatedSubjectDTO::getNameCn)
+                .extracting(com.animetracker.anime.dto.BangumiDTO.RelatedSubjectDTO::getNameCn)
                 .isEqualTo("中文名");
         server.verify();
     }

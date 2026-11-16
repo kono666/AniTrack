@@ -1,6 +1,6 @@
 package com.animetracker.config;
 
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import org.springframework.core.MethodParameter;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;

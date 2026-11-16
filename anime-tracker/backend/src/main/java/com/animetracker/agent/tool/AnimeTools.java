@@ -1,9 +1,9 @@
 package com.animetracker.agent.tool;
 
 import com.animetracker.agent.tool.ToolDefinition.Access;
-import com.animetracker.dto.response.EpisodeDTO;
-import com.animetracker.entity.Anime;
-import com.animetracker.service.AnimeService;
+import com.animetracker.anime.dto.EpisodeDTO;
+import com.animetracker.anime.domain.Anime;
+import com.animetracker.anime.service.AnimeService;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;

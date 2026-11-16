@@ -1,6 +1,6 @@
 package com.animetracker.config;
 
-import com.animetracker.service.AnimeService;
+import com.animetracker.anime.service.AnimeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;

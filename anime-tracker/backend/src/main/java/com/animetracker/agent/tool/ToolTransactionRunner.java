@@ -1,6 +1,6 @@
 package com.animetracker.agent.tool;
 
-import com.animetracker.entity.User;
+import com.animetracker.user.domain.User;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Component;

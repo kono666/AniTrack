@@ -1,6 +1,9 @@
 package com.animetracker.dto.response;
 
-import com.animetracker.entity.Anime;
+import com.animetracker.anime.service.CoverImageService;
+import com.animetracker.anime.dto.AnimeDTO;
+import com.animetracker.anime.dto.AnimeMapper;
+import com.animetracker.anime.domain.Anime;
 import com.animetracker.util.CoverImages;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

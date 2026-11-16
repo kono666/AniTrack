@@ -1,8 +1,11 @@
 package com.animetracker.service;
 
-import com.animetracker.dto.BangumiDTO.InfoboxItem;
-import com.animetracker.dto.BangumiDTO.SubjectDTO;
-import com.animetracker.entity.Anime;
+import com.animetracker.anime.service.AnimeService;
+import com.animetracker.anime.service.BangumiApiClient;
+import com.animetracker.anime.dto.BangumiDTO;
+import com.animetracker.anime.dto.BangumiDTO.InfoboxItem;
+import com.animetracker.anime.dto.BangumiDTO.SubjectDTO;
+import com.animetracker.anime.domain.Anime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

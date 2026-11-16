@@ -1,13 +1,15 @@
 package com.animetracker.service;
 
+import com.animetracker.anime.service.AnimeService;
+import com.animetracker.anime.service.BangumiApiClient;
 import com.animetracker.config.BangumiApiProperties;
 import com.animetracker.config.RankingProperties;
-import com.animetracker.entity.Anime;
-import com.animetracker.entity.Tag;
-import com.animetracker.repository.AnimeRepository;
-import com.animetracker.repository.AnimeTagRepository;
-import com.animetracker.repository.EpisodeRepository;
-import com.animetracker.repository.TagRepository;
+import com.animetracker.anime.domain.Anime;
+import com.animetracker.anime.domain.Tag;
+import com.animetracker.anime.repository.AnimeRepository;
+import com.animetracker.anime.repository.AnimeTagRepository;
+import com.animetracker.anime.repository.EpisodeRepository;
+import com.animetracker.anime.repository.TagRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,8 +1,10 @@
 package com.animetracker.service;
 
+import com.animetracker.common.service.IsolatedInsert;
+import com.animetracker.user.service.LoginEventService;
 import com.animetracker.config.LoginEventProperties;
-import com.animetracker.entity.LoginEvent;
-import com.animetracker.repository.LoginEventRepository;
+import com.animetracker.user.domain.LoginEvent;
+import com.animetracker.user.repository.LoginEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

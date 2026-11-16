@@ -1,15 +1,18 @@
 package com.animetracker.service;
 
-import com.animetracker.entity.Anime;
+import com.animetracker.admin.service.AdminService;
+import com.animetracker.common.service.IsolatedInsert;
+import com.animetracker.user.service.LoginEventService;
+import com.animetracker.anime.domain.Anime;
 import com.animetracker.review.domain.Review;
-import com.animetracker.entity.User;
-import com.animetracker.repository.AdminActionLogRepository;
-import com.animetracker.repository.AnimeRepository;
-import com.animetracker.repository.EpisodeWatchedRepository;
+import com.animetracker.user.domain.User;
+import com.animetracker.admin.repository.AdminActionLogRepository;
+import com.animetracker.anime.repository.AnimeRepository;
+import com.animetracker.tracking.repository.EpisodeWatchedRepository;
 import com.animetracker.review.repository.ReviewRepository;
 import com.animetracker.review.repository.ReviewReportRepository;
-import com.animetracker.repository.TrackingRepository;
-import com.animetracker.repository.UserRepository;
+import com.animetracker.tracking.repository.TrackingRepository;
+import com.animetracker.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,5 +1,6 @@
 package com.animetracker.review.controller;
 
+import com.animetracker.common.service.IsolatedInsert;
 import com.animetracker.review.domain.Review;
 import com.animetracker.review.repository.ReviewRepository;
 import com.fasterxml.jackson.databind.JsonNode;

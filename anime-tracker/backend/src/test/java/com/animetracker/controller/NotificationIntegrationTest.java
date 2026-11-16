@@ -1,5 +1,6 @@
 package com.animetracker.controller;
 
+import com.animetracker.notification.repository.NotificationRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.animetracker.util.TextSnippet;
