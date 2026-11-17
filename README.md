@@ -120,7 +120,7 @@ messages = [系统提示词] + 历史 + [本次提问]
 | 层次 | 选型 |
 | --- | --- |
 | 前端 | Vue 3（Composition API）、Vite、Vue Router、Pinia、Axios |
-| 后端 | Spring Boot 3.2、Spring Security + JWT、Spring Data JPA、Bean Validation |
+| 后端 | Spring Boot 3.5、Spring Security + JWT、Spring Data JPA、Bean Validation |
 | AI | 自研 Agent 循环 + 工具调用框架；支持 Anthropic 与 OpenAI 兼容两种协议 |
 | 流式推送 | SSE（`SseEmitter`）+ 前端 `fetch` 流式解析 |
 | 数据库 | H2（开发，文件模式）/ PostgreSQL（生产） |
@@ -159,21 +159,23 @@ AniTrack-作品集/
 │   │   ├── Dockerfile                 # 两阶段构建：Maven 编译 → JRE 运行（见设计要点 15）
 │   │   ├── .dockerignore              # 把本地 H2 库、构建产物挡在构建上下文之外
 │   │   ├── src/main/java/com/animetracker/
-│   │   │   ├── agent/                 # AI Agent：主循环、工具注册表、预算与限流
+│   │   │   ├── anime/                 # 条目、检索、详情、附属数据（controller/service/repository/domain/dto/util）
+│   │   │   ├── tracking/              # 追番状态、观看进度、逐集打卡
+│   │   │   ├── review/                # 短评、回复、点赞、举报
+│   │   │   ├── user/                  # 账号、头像、登录事件
+│   │   │   ├── admin/                 # 管理端、操作账本
+│   │   │   ├── stats/                 # 统计聚合
+│   │   │   ├── notification/          # 站内通知
+│   │   │   ├── agent/                 # AI Agent：主循环、工具、运行记录
 │   │   │   │   ├── llm/               # 大模型客户端（Anthropic / OpenAI 兼容 / Mock）
-│   │   │   │   └── tool/              # 23 个工具的定义与结果视图
-│   │   │   ├── controller/            # 接口层（用户 / 番剧 / 追番 / 评论 / 统计 / 管理 / AI）
-│   │   │   ├── service/               # 业务层
-│   │   │   ├── repository/            # 数据访问层（Spring Data JPA）
-│   │   │   ├── entity/                # 实体（User / Anime / Episode / Review / Tracking ...）
-│   │   │   ├── dto/                   # 传输对象与实体转换
-│   │   │   ├── config/                # 安全、JWT、缓存预热、异常处理、初始化
-│   │   │   └── util/                  # 标签中英转换等工具
+│   │   │   │   ├── tool/              # 23 个工具的定义与结果视图
+│   │   │   │   └── domain/            # agent_run / agent_run_step 等观测实体
+│   │   │   └── common/                # 共享：config / exception / api / util / web
 │   │   ├── src/main/resources/
 │   │   │   ├── application.yml        # 多 profile 配置（dev / postgres）
 │   │   │   ├── db/migration/          # 表结构迁移脚本（h2 / postgres 两套方言，见设计要点 12）
 │   │   │   └── prompts/               # 各人格的系统提示词
-│   │   └── src/test/java/             # 单元与集成测试
+│   │   └── src/test/java/             # 单元与集成测试（按域组织，migration 独立）
 │   ├── frontend/                      # Vue 3 前端
 │   │   └── src/
 │   │       ├── views/                 # 页面（含 admin/ 管理端、Assistant 助手页）
@@ -390,7 +392,7 @@ docker compose start nginx backend
 
 | job | 跑什么 | 它能回答的问题 |
 | --- | --- | --- |
-| `backend` | JDK 17 + `mvn -B test`（1195 个用例） | 代码逻辑还对吗？ |
+| `backend` | JDK 17 + `mvn -B test`（1203 个用例） | 代码逻辑还对吗？ |
 | `frontend` | `npm ci` + `npm test`（659 个用例）+ `npm run build` | 组件还对吗？前端还构建得出来吗？ |
 | `image` | 构建后端与前端镜像 → `docker compose up -d --wait` → 冒烟 | **这东西真的能部署吗？** |
 
@@ -417,7 +419,7 @@ docker compose start nginx backend
 
 镜像扫描**只报告、不拦 CI**（`exit-code: '0'`），这是刻意的，不是漏了。两个原因：
 
-1. 扫出来的东西里有一大块来自 Spring Boot 3.2 这条**已经停更**的线（3.2.12 是这条线最后一个版本），最典型的就是 `spring-boot` 自己的 CVE-2025-22235——它的修复版本写得很直白：3.3.11 / 3.4.5。真拦下来的话，它要求的是「换到 3.4 / 3.5 / 4.x 哪一条」——那是个该单独决定的项目级决定，不该由一次依赖升级顺手定死。（顺带记一笔：3.4.13 + springdoc 2.8.17 实测**当时的全量用例全过**。但要注意那次全绿**只证明了 H2 这一半**，原因见下。）
+1. 当时扫出来的东西里有一大块来自 Spring Boot 3.2 这条**已经停更**的线（3.2.12 是这条线最后一个版本；项目后来已升到 3.5.16），最典型的就是 `spring-boot` 自己的 CVE-2025-22235——它的修复版本写得很直白：3.3.11 / 3.4.5。真拦下来的话，它要求的是「换到 3.4 / 3.5 / 4.x 哪一条」——那是个该单独决定的项目级决定，不该由一次依赖升级顺手定死。（顺带记一笔：3.4.13 + springdoc 2.8.17 实测**当时的全量用例全过**。但要注意那次全绿**只证明了 H2 这一半**，原因见下。）
 2. 漏洞库每天都在变。一个会拦的扫描器意味着：某天有人发了一条 CVE，这个镜像一行代码没动，但所有人开着的 PR 全变红。那种红和「你这次改错了」长得一模一样，于是它会退化成一种需要被忽略的噪音——**那比不扫更糟**。
 
 需要注意的是，`exit-code` 管的是「扫出漏洞」这件事；扫描器**自己**跑挂了（比如拉不到漏洞库）仍然会让那一步失败。这是故意的：那意味着扫描已经不再提供信息，而「以为在扫、其实没扫」是这里唯一真正危险的状态。想改成拦截，把 `exit-code` 写成 `'1'` 即可。
@@ -451,7 +453,7 @@ docker compose start nginx backend
 ## 测试
 
 ```bash
-# 后端：单元测试 + 集成测试（1195 个，120 个测试类）
+# 后端：单元测试 + 集成测试（1203 个，123 个测试类）
 cd anime-tracker/backend
 mvn test
 
@@ -802,7 +804,7 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 
 `anime.season` 存的是**真实月份**（`2024-10`），不是「Q4」。所以「2024 年秋季」这件事在请求里必须落到一个**区间**上：谓词从 `a.season = :season` 改成 `(:seasonFrom IS NULL OR (a.season >= :seasonFrom AND a.season <= :seasonTo))`。用区间而不是 `IN (…11,12,…)` 有两个理由：`from == to` 时它**正好退化成原来的等值**，一个形状同时覆盖「月」与「季」，既有调用方一字不改；而未选中季度时 `IN` 要绑一个 null 集合，在 JPQL 上属实现细节——项目在标签那处（`TAG_GROUP_MATCHES`）吃过这个亏，不再赌第二次。
 
-**`2024-Qn` 的展开刻意放在服务端，不放在前端。** 前端的分类页只是这条接口的**一个**调用方：AI 助手的 `filter_anime` 与直接调 API 的人都不经过它。放前端，这三方就会各自实现一遍「秋季是哪几个月」，而它们分歧的那天没有任何测试会红。展开规则收在 `util/SeasonRange` 这个纯值对象里，`^\d{4}-Q[1-4]$` 之外的值**一律退化成精确等值**——于是 `2024-10` 的行为一字不变，`2024-Q5` 这种手输的值仍旧是「筛空」而不是 400（既有行为，没有借这次改动顺手收紧）。
+**`2024-Qn` 的展开刻意放在服务端，不放在前端。** 前端的分类页只是这条接口的**一个**调用方：AI 助手的 `filter_anime` 与直接调 API 的人都不经过它。放前端，这三方就会各自实现一遍「秋季是哪几个月」，而它们分歧的那天没有任何测试会红。展开规则收在 `anime/util/SeasonRange` 这个纯值对象里，`^\d{4}-Q[1-4]$` 之外的值**一律退化成精确等值**——于是 `2024-10` 的行为一字不变，`2024-Q5` 这种手输的值仍旧是「筛空」而不是 400（既有行为，没有借这次改动顺手收紧）。
 
 **这一列按字符串比大小是成立的，但保证在写入侧。** `AnimeFields.seasonOf` 用 `String.format("%04d-%02d", …)` 保证定宽，于是字典序与时间序一致。这一点写进了 `AnimeQueries` 的注释：哪天有人在别处写进去一个 `2024-9`，比较就会静默错位，而错法是「区间漏掉一个月的尾巴」这种没人会一眼看出来的样子。
 
@@ -814,7 +816,7 @@ Agent 的工具跑在 SSE 的工作线程上，这个线程没有请求上下文
 
 封面图原先一直是浏览器直连 `lain.bgm.tv` 的：一屏几十张图就是几十次跨域请求，快慢由上游决定，而且打开页面等于把访客的 IP、UA、Referer 交给另一个站点。现在图从 `/api/img?url=…` 进来，我们自己取一次、之后从内存回。
 
-**入参是用户给的 URL，服务端替他去取——这就是 SSRF 的教科书形状，所以准入判断只有一处、而且写成白名单。** 白名单在 `util/CoverImages` 这个纯函数里（不碰 IO，可以对着边界值一条条钉死），条件是：scheme 必须 `https`、`getHost()` **精确等于** `lain.bgm.tv`、userinfo 为空、端口只允许缺省或 443、不许 query/fragment、路径以 `/pic/` 开头。三处刻意写死的地方：
+**入参是用户给的 URL，服务端替他去取——这就是 SSRF 的教科书形状，所以准入判断只有一处、而且写成白名单。** 白名单在 `anime/util/CoverImages` 这个纯函数里（不碰 IO，可以对着边界值一条条钉死），条件是：scheme 必须 `https`、`getHost()` **精确等于** `lain.bgm.tv`、userinfo 为空、端口只允许缺省或 443、不许 query/fragment、路径以 `/pic/` 开头。三处刻意写死的地方：
 
 - **主机是精确相等，不是 `endsWith("bgm.tv")`**——后者会放行 `lain.bgm.tv.evil.com`，这是这类白名单最典型的一个错。
 - **路径是一张字符白名单**（只允许字母、数字、`-._~/`），不是几条黑名单。它一次挡住两件事：一是**编码绕过**（`%2e%2e` 是 `..`、`%2f` 是 `/`，而「校验时解析一遍、发请求时再解析一遍」正是这类洞的经典形状），二是 **`&` `=` `+` 这三个会改变 query 语义的字符**——它们都是**合法**路径字符，所以「路径合法」根本挡不住它们，而地址要被拼进 `?url=…`。`2026-10-02` 对 1026 条真实封面实测：文件名只有字母数字下划线点与斜杠，这条规则一条真数据都不误伤。
