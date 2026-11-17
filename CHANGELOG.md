@@ -10,6 +10,30 @@
 
 ---
 
+## [Unreleased] — 2026-11-17 · 按功能分包、traceId、Agent 运行记录
+
+> 这一轮还没有发版，先记在这里；等结构稳定后再决定版本号。
+
+### 变更
+- **按功能分包**：`review` 试点之后，把其余业务代码按域收拢为
+  `anime / tracking / review / user / admin / stats / notification / agent`，
+  每个域内部按 `controller / service / repository / domain / (dto|util)` 分层；
+  共享的 config / exception / util / api 收进 `common/`。旧
+  `controller / service / repository / entity` 目录已清空。
+- **请求链路 traceId**：`X-Trace-Id` 贯穿请求头、MDC 与 `ApiResponse`；
+  Agent 的 worker 线程显式传递，响应结束清理。
+- **请求 DTO 分域**：`RequestDTO` 的 11 个嵌套类拆到各域 `dto`，
+  控制器、服务、Agent 工具与测试改为直接 import。
+- **Agent 运行记录落库**（V18 `agent_run` / `agent_run_step`）：每次对话记
+  轮数、输入/输出 token、总耗时、是否截断、traceId；每个工具调用记工具名、
+  参数、耗时与是否失败。这是毕设「先量再拓展」的观测地基。
+
+### 验证
+- 后端 1203 个用例通过；前端与镜像 compose 冒烟仍绿。
+- PR [#58](https://github.com/kono666/AniTrack/pull/58)。
+
+---
+
 ## [v0.11.0] — 2026-10-02 · M1 收口，以及四件优化
 
 M1 到此收口：六条人工验收全部走完，规划层从「散在我打不开的四个地方」搬进仓库。收口之后
