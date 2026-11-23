@@ -46,6 +46,50 @@ class CoverImagesTest {
     }
 
     /**
+     * 上游日历返回的是 {@code http://} 明文地址。
+     *
+     * <p>白名单只收 https，所以不加处理的 {@code proxied} 会走"原样返回"那一支 ——
+     * 本地看着正常，部署到 https 域名后浏览器按混合内容拦截，整页封面全白。
+     * {@code proxiedUpgradingHttp} 必须先升级 scheme，再交给白名单复核。
+     */
+    @Test
+    @DisplayName("http 明文地址: 先升级成 https 再代理, 解码回来是 https 地址")
+    void plainHttpIsUpgradedBeforeProxying() {
+        String plain = "http://lain.bgm.tv/pic/cover/l/1c/b4/390200_Z9jPp.jpg";
+
+        assertThat(CoverImages.proxied(plain))
+                .as("不升级的话白名单拒收, 原样返回 http 地址 —— 这正是要修的那个问题")
+                .isEqualTo(plain);
+
+        String upgraded = CoverImages.proxiedUpgradingHttp(plain);
+        assertThat(upgraded).startsWith("/api/img?url=");
+
+        String raw = upgraded.substring(upgraded.indexOf("url=") + "url=".length());
+        assertThat(UriUtils.decode(raw, StandardCharsets.UTF_8))
+                .isEqualTo("https://lain.bgm.tv/pic/cover/l/1c/b4/390200_Z9jPp.jpg");
+    }
+
+    @Test
+    @DisplayName("已经是 https 时行为与 proxied 完全一致")
+    void httpsGoesThroughTheSameWay() {
+        assertThat(CoverImages.proxiedUpgradingHttp(OK)).isEqualTo(CoverImages.proxied(OK));
+    }
+
+    @Test
+    @DisplayName("非白名单域名: 即使升级也过不了白名单, 原样返回")
+    void otherHostsStayAsTheyWere() {
+        String other = "http://example.com/pic/cover/l/x.jpg";
+        assertThat(CoverImages.proxiedUpgradingHttp(other)).isEqualTo(other);
+    }
+
+    @Test
+    @DisplayName("null 与空串: 与 proxied 一样原样返回")
+    void nullAndBlankBehaveLikeProxied() {
+        assertThat(CoverImages.proxiedUpgradingHttp(null)).isNull();
+        assertThat(CoverImages.proxiedUpgradingHttp("")).isEmpty();
+    }
+
+    /**
      * <b>往返自洽: 拼出来的 url 参数解码之后必须等于规范地址。</b>
      *
      * <p>这条守的是"用错了编码器"。用 {@code URLEncoder.encode} 而不是

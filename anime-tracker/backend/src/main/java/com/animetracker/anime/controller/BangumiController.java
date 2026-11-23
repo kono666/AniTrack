@@ -2,7 +2,9 @@ package com.animetracker.anime.controller;
 
 import com.animetracker.common.config.SubjectExtrasRateLimiter;
 import com.animetracker.common.api.ApiResponse;
+import com.animetracker.anime.dto.BangumiDTO;
 import com.animetracker.anime.dto.BangumiDTO.CalendarDay;
+import com.animetracker.anime.dto.BangumiDTO.ImagesDTO;
 import com.animetracker.anime.dto.AnimeDTO;
 import com.animetracker.anime.dto.AnimeMapper;
 import com.animetracker.anime.dto.EpisodeDTO;
@@ -13,6 +15,7 @@ import com.animetracker.anime.domain.SubjectRelation;
 import com.animetracker.anime.domain.SubjectStaff;
 import com.animetracker.anime.service.AnimeService;
 import com.animetracker.anime.service.SubjectExtrasService;
+import com.animetracker.anime.util.CoverImages;
 import com.animetracker.anime.util.TagTranslationUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.Max;
@@ -231,9 +234,41 @@ public class BangumiController {
 
     // ══════════ 每日放送 ══════════
 
+    /**
+     * 每日放送（整周七天）.
+     *
+     * <p>日历数据直接来自 Bangumi 上游, 图片地址是 {@code http://lain.bgm.tv/…} 的明文形式。
+     * 站内其它接口的封面都经过 {@code CoverImages.proxied}, 唯独这里原来原样透传 ——
+     * 本地开发看不出问题, 但一旦部署在 https 域名下, 浏览器按混合内容拦截, 整页封面全白。
+     * 所以在出口处统一升级到 https 并换成同源代理地址。
+     *
+     * <p>为什么不改在 {@code AnimeService.getCalendar()}: 那个方法的结果会被缓存,
+     * 而且同一份数据还会被后台入库任务拿去写 {@code anime.cover_url} —— 在那里改会把
+     * 代理地址写进库里。放在这里, 只影响对外响应。
+     */
     @GetMapping("/calendar")
     public ApiResponse<List<CalendarDay>> getCalendar() {
-        return ApiResponse.success(animeService.getCalendar());
+        List<CalendarDay> days = animeService.getCalendar();
+        days.forEach(this::proxyCalendarImages);
+        return ApiResponse.success(days);
+    }
+
+    /** 把日历条目里五个尺寸的图片地址都换成同源代理地址（见方法调用处的注释） */
+    private void proxyCalendarImages(CalendarDay day) {
+        if (day.getItems() == null) {
+            return;
+        }
+        for (BangumiDTO.CalendarItem item : day.getItems()) {
+            ImagesDTO images = item.getImages();
+            if (images == null) {
+                continue;
+            }
+            images.setLarge(CoverImages.proxiedUpgradingHttp(images.getLarge()));
+            images.setCommon(CoverImages.proxiedUpgradingHttp(images.getCommon()));
+            images.setMedium(CoverImages.proxiedUpgradingHttp(images.getMedium()));
+            images.setGrid(CoverImages.proxiedUpgradingHttp(images.getGrid()));
+            images.setSmall(CoverImages.proxiedUpgradingHttp(images.getSmall()));
+        }
     }
 
     // ══════════ 标签 ══════════

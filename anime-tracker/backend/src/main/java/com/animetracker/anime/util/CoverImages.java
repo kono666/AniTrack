@@ -190,6 +190,32 @@ public final class CoverImages {
                 .orElse(raw);
     }
 
+    /**
+     * 与 {@link #proxied} 相同, 但先把 {@code http://} 升级成 {@code https://}.
+     *
+     * <p><b>为什么需要这一条</b>: Bangumi 的日历接口把图片地址以 {@code http://} 明文返回,
+     * 而本类的白名单只收 https（明文取回等于给中间人递内容）。直接调 {@code proxied}
+     * 会走"原样返回"那一支, 页面就继续用直连的 http 图 —— 本地 localhost 看不出问题,
+     * 但部署到 https 域名后浏览器按**混合内容**拦截, 整页封面全白。
+     *
+     * <p>只做 scheme 升级、其余一律照旧交给白名单复核: 合不合法仍由 {@link #canonical}
+     * 说了算; 升级后仍不合法（比如别的域名）的地址依旧原样返回, 与 {@code proxied} 一致。
+     * 对白名单里唯一的 {@code lain.bgm.tv} 而言, https 与 http 返回的是同一张图
+     * （2026-11-21 实测 200）。
+     */
+    public static String proxiedUpgradingHttp(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.trim();
+        if (!value.regionMatches(true, 0, "http://", 0, 7)) {
+            return proxied(value);
+        }
+        String upgraded = "https://" + value.substring(7);
+        // 升级后仍然过不了白名单（不是 lain.bgm.tv）时保持原样 —— 与 proxied 的约定一致
+        return canonical(upgraded).isPresent() ? proxied(upgraded) : raw;
+    }
+
     /** 白名单内返回规范地址, 否则 null */
     public static String upstream(String raw) {
         return canonical(raw).orElse(null);

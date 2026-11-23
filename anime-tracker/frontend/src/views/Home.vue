@@ -1,7 +1,9 @@
 <template>
   <div class="home-page">
-    <!-- Hero Carousel -->
-    <HeroBanner v-if="!error" :items="heroItems" />
+    <!-- Hero Carousel —— 片单是 data/heroShelf.js 里的 12 部静态数据，不依赖接口。
+         也因此**不放在 error 开关里**：下方的列表接口挂了，首屏这一屏照样要能画出来，
+         否则整页只剩一个错误提示，比什么都不显示更难看。 -->
+    <HeroCarousel />
 
     <div class="page-container">
       <!-- 继续看. 只在已登录、且确实有在看的番时渲染 —— 首页是公开页, 访客不该
@@ -81,8 +83,9 @@
           >
             <div class="today-cover">
               <img
-                :src="item.images?.medium || item.images?.common || fallbackImg"
+                :src="item.images?.large || item.images?.common || item.images?.medium || fallbackImg"
                 :alt="item.nameCn"
+                loading="lazy"
                 @error="e => e.target.src = fallbackImg"
               />
             </div>
@@ -191,7 +194,7 @@ import { homeCache, HOME_CACHE_TTL } from '../utils/homeCache'
 // 指令直接引进来用 —— 在 <script setup> 顶层, 这个命名会自动变成可写的 `v-reveal`
 // (改前是 `const { vReveal } = useReveal()`, 而那个包装层只为了往 head 里注入样式)
 import { vReveal } from '../directives/reveal'
-import HeroBanner from '../components/HeroBanner.vue'
+import HeroCarousel from '../components/HeroCarousel.vue'
 import HorizontalScroll from '../components/HorizontalScroll.vue'
 import SectionHeader from '../components/SectionHeader.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'

@@ -37,7 +37,7 @@
           >
             <div class="cal-cover">
               <img
-                :src="item.images?.medium || item.images?.common || fallbackImg"
+                :src="item.images?.large || item.images?.common || item.images?.medium || fallbackImg"
                 :alt="item.nameCn || item.name"
                 loading="lazy"
                 @error="e => e.target.src = fallbackImg"
